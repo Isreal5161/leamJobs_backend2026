@@ -29,6 +29,14 @@ export class InactiveAccountError extends Error {
   }
 }
 
+export class AuthenticationRequiredError extends Error {
+  constructor() {
+    super('Authentication required');
+    this.name = 'AuthenticationRequiredError';
+    this.status = 401;
+  }
+}
+
 export const registerUser = async ({ firstName, lastName, email, password, phone, role }) => {
   const normalizedFirstName = firstName.trim();
   const normalizedLastName = lastName.trim();
@@ -87,4 +95,31 @@ export const loginUser = async ({ email, password }) => {
   );
 
   return { token, user: updatedUser };
+};
+
+export const getCurrentUser = async (userId) => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      phone: true,
+      role: true,
+      isActive: true,
+      isVerified: true,
+      createdAt: true,
+    },
+  });
+
+  if (!user) {
+    throw new AuthenticationRequiredError();
+  }
+
+  if (!user.isActive) {
+    throw new InactiveAccountError();
+  }
+
+  return user;
 };

@@ -1,5 +1,4 @@
-import { registerUser } from '../services/auth.service.js';
-import { loginUser } from '../services/auth.service.js';
+import { getCurrentUser, loginUser, registerUser } from '../services/auth.service.js';
 import { toUserResponse } from '../utils/userResponse.js';
 
 export const register = async (req, res, next) => {
@@ -20,6 +19,15 @@ export const login = async (req, res, next) => {
       token,
       user: toUserResponse(user),
     });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const me = async (req, res, next) => {
+  try {
+    const user = await getCurrentUser(req.user.id);
+    return res.status(200).json(toUserResponse(user));
   } catch (error) {
     return next(error);
   }
