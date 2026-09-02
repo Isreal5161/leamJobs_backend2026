@@ -4,6 +4,7 @@ import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import { env } from './config/env.js';
 import { checkDatabaseHealth } from './config/database.js';
+import authRouter from './routes/auth.routes.js';
 
 const app = express();
 
@@ -61,6 +62,8 @@ app.get('/api/health/db', async (req, res) => {
     });
   }
 });
+
+app.use('/api/auth', authRouter);
 
 // API v1 routes (will be added as features are implemented)
 app.use('/api/v1', (req, res) => {
