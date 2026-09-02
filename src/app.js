@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import { env } from './config/env.js';
+import { checkDatabaseHealth } from './config/database.js';
 
 const app = express();
 
@@ -36,9 +37,29 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
-// Health check route
+// Health check route - basic application health
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Database health check route
+app.get('/api/health/db', async (req, res) => {
+  try {
+    const dbHealth = await checkDatabaseHealth();
+    
+    if (dbHealth.success) {
+      res.json(dbHealth);
+    } else {
+      res.status(503).json(dbHealth);
+    }
+  } catch (error) {
+    console.error('Error checking database health:', error);
+    res.status(503).json({
+      success: false,
+      database: 'disconnected',
+      error: 'Unable to check database health',
+    });
+  }
 });
 
 // API v1 routes (will be added as features are implemented)
@@ -67,5 +88,6 @@ app.use((err, req, res, next) => {
     ...(env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
+
 
 export default app;
