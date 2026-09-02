@@ -29,7 +29,7 @@ export const env = {
   DATABASE_URL: process.env.DATABASE_URL || '',
 
   // JWT
-  JWT_SECRET: process.env.JWT_SECRET || 'change-me-in-production',
+  JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRE: process.env.JWT_EXPIRE || '24h',
 
   // Email
