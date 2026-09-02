@@ -15,8 +15,30 @@ const registrationSchema = z.object({
   role: z.enum(['SEEKER', 'EMPLOYER']).optional().default('SEEKER'),
 }).strict();
 
+const loginSchema = z.object({
+  email: z.string().trim().email('A valid email is required'),
+  password: z.string().min(1, 'Password is required'),
+}).strict();
+
 export const validateRegistration = (req, res, next) => {
   const result = registrationSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
+export const validateLogin = (req, res, next) => {
+  const result = loginSchema.safeParse(req.body);
 
   if (!result.success) {
     return res.status(400).json({

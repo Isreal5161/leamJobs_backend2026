@@ -1,5 +1,7 @@
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database.js';
+import { env } from '../config/env.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -8,6 +10,22 @@ export class DuplicateEmailError extends Error {
     super('An account with this email already exists');
     this.name = 'DuplicateEmailError';
     this.status = 409;
+  }
+}
+
+export class AuthenticationError extends Error {
+  constructor() {
+    super('Invalid email or password');
+    this.name = 'AuthenticationError';
+    this.status = 401;
+  }
+}
+
+export class InactiveAccountError extends Error {
+  constructor() {
+    super('Your account is inactive');
+    this.name = 'InactiveAccountError';
+    this.status = 403;
   }
 }
 
@@ -35,4 +53,38 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
 
     throw error;
   }
+};
+
+export const loginUser = async ({ email, password }) => {
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = await prisma.user.findUnique({
+    where: { email: normalizedEmail },
+  });
+
+  if (!user) {
+    throw new AuthenticationError();
+  }
+
+  const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+
+  if (!passwordMatches) {
+    throw new AuthenticationError();
+  }
+
+  if (!user.isActive) {
+    throw new InactiveAccountError();
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLogin: new Date() },
+  });
+
+  const token = jwt.sign(
+    { id: updatedUser.id, role: updatedUser.role, email: updatedUser.email },
+    env.JWT_SECRET,
+    { expiresIn: env.JWT_EXPIRE },
+  );
+
+  return { token, user: updatedUser };
 };
