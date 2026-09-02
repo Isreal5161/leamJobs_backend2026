@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -24,11 +21,673 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
+  seekerProfile   SeekerProfile?
+  employerProfile EmployerProfile?
+
+  jobs             Job[]         @relation("EmployerJobs")
+  reviewedJobs     Job[]         @relation("JobReviewers")
+  applications     Application[] @relation("SeekerApplications")
+  subscriptions    Subscription[]
+  payments         Payment[]
+
+  employerContracts Contract[] @relation("EmployerContracts")
+  seekerContracts   Contract[] @relation("SeekerContracts")
+
+  wallet           Wallet?
+  payoutAccounts   PayoutAccount[]
+  withdrawals      Withdrawal[] @relation("SeekerWithdrawals")
+  payoutRecipients Payout[]     @relation("PayoutRecipients")
+
+  openedDisputes   Dispute[] @relation("DisputeOpeners")
+  resolvedDisputes Dispute[] @relation("DisputeResolvers")
+
+  auditLogs FinancialAuditLog[] @relation("FinancialAuditActors")
+
   @@index([role])
+}
+
+model SeekerProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  professionalTitle String?
+  bio               String?
+  location          String?
+  skills            String[] @default([])
+  education         Json?
+  experience        Json?
+  resumeUrl         String?
+  resumeObjectKey   String?
+  profilePictureUrl String?
+  profilePictureKey String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([location])
+}
+
+model EmployerProfile {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  companyName       String
+  companyDescription String?
+  website           String?
+  industry          String?
+  companySize       String?
+  location          String?
+  companyLogoUrl    String?
+  companyLogoKey    String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([location])
+  @@index([industry])
+}
+
+model Job {
+  id                  String     @id @default(uuid())
+  employerId          String
+  title               String
+  description         String
+  location            String
+  jobType             JobType
+  skills              String[]   @default([])
+  requirements        Json?
+  status              JobStatus  @default(PENDING)
+  applicationDeadline DateTime?
+  rejectionReason     String?
+  reviewedById        String?
+  reviewedAt          DateTime?
+  closedAt            DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  employer                User                    @relation("EmployerJobs", fields: [employerId], references: [id], onDelete: Restrict)
+  reviewedBy              User?                   @relation("JobReviewers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  applications            Application[]
+  contracts               Contract[]
+  employmentCompensation  EmploymentCompensation?
+  freelanceCompensation   FreelanceCompensation?
+
+  @@index([employerId, createdAt])
+  @@index([status, createdAt])
+  @@index([status, location, createdAt])
+  @@index([status, jobType, createdAt])
+}
+
+model EmploymentCompensation {
+  id           String       @id @default(uuid())
+  jobId        String       @unique
+  salaryMin    Decimal?     @db.Decimal(12, 2)
+  salaryMax    Decimal?     @db.Decimal(12, 2)
+  currency     String       @default("NGN") @db.VarChar(3)
+  salaryPeriod SalaryPeriod @default(MONTHLY)
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Restrict)
+}
+
+model FreelanceCompensation {
+  id            String  @id @default(uuid())
+  jobId         String  @unique
+  projectAmount Decimal @db.Decimal(12, 2)
+  currency      String  @default("NGN") @db.VarChar(3)
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Restrict)
+}
+
+model Application {
+  id                String            @id @default(uuid())
+  seekerId          String
+  jobId             String
+  coverLetter       String?
+  resumeUrl         String?
+  resumeObjectKey   String?
+  resumeVersion     String?
+  resumeSubmittedAt DateTime          @default(now())
+  status            ApplicationStatus @default(APPLIED)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  seeker   User       @relation("SeekerApplications", fields: [seekerId], references: [id], onDelete: Restrict)
+  job      Job        @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  contract Contract?
+
+  @@unique([seekerId, jobId])
+  @@index([seekerId, createdAt])
+  @@index([jobId, createdAt])
+}
+
+model Contract {
+  id                 String         @id @default(uuid())
+  applicationId      String         @unique
+  jobId              String
+  employerId         String
+  seekerId           String
+  type               ContractType
+  status             ContractStatus @default(PENDING)
+  startDate          DateTime?
+  expectedEndDate    DateTime?
+  completedAt        DateTime?
+  endedAt            DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  job         Job         @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  employer    User        @relation("EmployerContracts", fields: [employerId], references: [id], onDelete: Restrict)
+  seeker      User        @relation("SeekerContracts", fields: [seekerId], references: [id], onDelete: Restrict)
+
+  freelanceDetails FreelanceContract?
+  disputes         Dispute[]
+  ledgerEntries    FinancialLedgerEntry[]
+
+  @@index([employerId, status])
+  @@index([seekerId, status])
+  @@index([jobId])
+  @@index([status, createdAt])
+}
+
+model FreelanceContract {
+  id                     String              @id @default(uuid())
+  contractId             String              @unique
+  agreedAmount           Decimal             @db.Decimal(12, 2)
+  currency               String              @db.VarChar(3)
+  expectedCompletionDate DateTime?
+  workStatus             FreelanceWorkStatus @default(PENDING)
+  completionSubmittedAt  DateTime?
+  completionNote         String?
+  employerConfirmedAt    DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  escrow   Escrow?
+
+  @@index([workStatus, expectedCompletionDate])
+}
+
+model Escrow {
+  id                  String       @id @default(uuid())
+  freelanceContractId String       @unique
+  grossAmount         Decimal      @db.Decimal(12, 2)
+  platformFeeAmount   Decimal      @default(0) @db.Decimal(12, 2)
+  seekerNetAmount     Decimal      @db.Decimal(12, 2)
+  currency            String       @db.VarChar(3)
+  fundedAmount        Decimal      @default(0) @db.Decimal(12, 2)
+  releasedAmount      Decimal      @default(0) @db.Decimal(12, 2)
+  refundedAmount      Decimal      @default(0) @db.Decimal(12, 2)
+  status              EscrowStatus @default(UNFUNDED)
+  fundedAt            DateTime?
+  releaseEligibleAt   DateTime?
+  releasedAt          DateTime?
+  cancelledAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  freelanceContract FreelanceContract  @relation(fields: [freelanceContractId], references: [contractId], onDelete: Restrict)
+  payments          Payment[]
+  refunds           Refund[]
+  disputes          Dispute[]
+  ledgerEntries     FinancialLedgerEntry[]
+
+  @@index([status, createdAt])
+  @@index([status, fundedAt])
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  userId    String
+  plan      SubscriptionPlan
+  status    SubscriptionStatus @default(PENDING)
+  startDate DateTime?
+  endDate   DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([userId, status])
+  @@index([status, endDate])
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  userId            String
+  subscriptionId    String?
+  escrowId          String?
+  providerReference String        @unique
+  transactionId     String?       @unique
+  idempotencyKey    String        @unique
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @db.VarChar(3)
+  status            PaymentStatus @default(PENDING)
+  paymentType       PaymentType
+  provider          PaymentProvider
+  metadata          Json?
+  verifiedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  escrow       Escrow?       @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  refunds      Refund[]
+  ledgerEntries FinancialLedgerEntry[]
+
+  @@index([userId, createdAt])
+  @@index([subscriptionId])
+  @@index([escrowId])
+  @@index([status, createdAt])
+}
+
+model Wallet {
+  id                       String   @id @default(uuid())
+  userId                   String   @unique
+  currency                 String   @default("NGN") @db.VarChar(3)
+  availableBalance         Decimal  @default(0) @db.Decimal(12, 2)
+  pendingWithdrawalBalance Decimal  @default(0) @db.Decimal(12, 2)
+  version                  Int      @default(0)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  ledgerEntries FinancialLedgerEntry[]
+  withdrawals   Withdrawal[]
+}
+
+model FinancialLedgerEntry {
+  id             String           @id @default(uuid())
+  entryType      LedgerEntryType
+  amount         Decimal          @db.Decimal(12, 2)
+  currency       String           @db.VarChar(3)
+  balanceAfter   Decimal?         @db.Decimal(12, 2)
+  idempotencyKey String           @unique
+  description    String?
+  walletId       String?
+  contractId     String?
+  escrowId       String?
+  paymentId      String?
+  withdrawalId   String?
+  payoutId       String?
+  refundId       String?
+  createdAt      DateTime         @default(now())
+
+  wallet     Wallet?     @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  contract   Contract?   @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  escrow     Escrow?     @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  payment    Payment?    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
+  payout     Payout?     @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  refund     Refund?     @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  @@index([walletId, createdAt])
+  @@index([contractId, createdAt])
+  @@index([escrowId, createdAt])
+  @@index([withdrawalId])
+  @@index([entryType, createdAt])
+}
+
+model PayoutAccount {
+  id                     String          @id @default(uuid())
+  userId                 String
+  provider               PaymentProvider
+  bankCode               String
+  encryptedAccountNumber String
+  accountNumberLast4     String
+  accountName            String
+  isDefault              Boolean         @default(false)
+  verifiedAt             DateTime?
+  disabledAt             DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  withdrawals Withdrawal[]
+
+  @@index([userId, isDefault])
+}
+
+model Withdrawal {
+  id                String           @id @default(uuid())
+  walletId          String
+  seekerId          String
+  payoutAccountId   String
+  amount            Decimal          @db.Decimal(12, 2)
+  currency          String           @db.VarChar(3)
+  status            WithdrawalStatus @default(PENDING)
+  idempotencyKey    String           @unique
+  provider          PaymentProvider?
+  providerReference String?          @unique
+  requestedAt       DateTime         @default(now())
+  processingAt      DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+  failureReason     String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  wallet        Wallet       @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  seeker        User         @relation("SeekerWithdrawals", fields: [seekerId], references: [id], onDelete: Restrict)
+  payoutAccount PayoutAccount @relation(fields: [payoutAccountId], references: [id], onDelete: Restrict)
+  payout        Payout?
+  ledgerEntries FinancialLedgerEntry[]
+
+  @@index([seekerId, createdAt])
+  @@index([walletId, status])
+  @@index([status, createdAt])
+}
+
+model Payout {
+  id                String        @id @default(uuid())
+  withdrawalId      String        @unique
+  recipientUserId   String
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @db.VarChar(3)
+  provider          PaymentProvider
+  providerReference String?       @unique
+  status            PayoutStatus  @default(PENDING)
+  requestedAt       DateTime      @default(now())
+  processedAt       DateTime?
+  failedAt          DateTime?
+  failureReason     String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  withdrawal   Withdrawal @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
+  recipient    User       @relation("PayoutRecipients", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  attempts     PayoutAttempt[]
+  ledgerEntries FinancialLedgerEntry[]
+
+  @@index([recipientUserId, createdAt])
+  @@index([status, createdAt])
+}
+
+model PayoutAttempt {
+  id                String             @id @default(uuid())
+  payoutId          String
+  attemptNumber     Int
+  providerReference String?            @unique
+  status            PayoutAttemptStatus @default(PENDING)
+  failureReason     String?
+  createdAt         DateTime           @default(now())
+  processedAt       DateTime?
+
+  payout Payout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+
+  @@unique([payoutId, attemptNumber])
+  @@index([payoutId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Refund {
+  id                String        @id @default(uuid())
+  escrowId          String
+  paymentId         String?
+  amount            Decimal       @db.Decimal(12, 2)
+  currency          String        @db.VarChar(3)
+  provider          PaymentProvider
+  providerReference String?       @unique
+  status            RefundStatus  @default(PENDING)
+  reason            String?
+  requestedAt       DateTime      @default(now())
+  processedAt       DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  escrow       Escrow                 @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  payment      Payment?               @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  ledgerEntries FinancialLedgerEntry[]
+}
+
+model Dispute {
+  id             String        @id @default(uuid())
+  contractId     String
+  escrowId       String
+  openedByUserId String
+  resolvedById   String?
+  status         DisputeStatus @default(OPEN)
+  reason         String
+  resolutionNote String?
+  openedAt       DateTime      @default(now())
+  resolvedAt     DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  escrow     Escrow   @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  openedBy   User     @relation("DisputeOpeners", fields: [openedByUserId], references: [id], onDelete: Restrict)
+  resolvedBy User?    @relation("DisputeResolvers", fields: [resolvedById], references: [id], onDelete: SetNull)
+}
+
+model FinancialAuditLog {
+  id          String               @id @default(uuid())
+  actorUserId String?
+  entityType  FinancialEntityType
+  entityId    String
+  action      FinancialAction
+  fromStatus  String?
+  toStatus    String?
+  amount      Decimal?             @db.Decimal(12, 2)
+  currency    String?              @db.VarChar(3)
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime             @default(now())
+
+  actor User? @relation("FinancialAuditActors", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model ProviderWebhookEvent {
+  id              String          @id @default(uuid())
+  provider        PaymentProvider
+  providerEventId String
+  eventType       String?
+  payloadHash     String?
+  processedAt     DateTime?
+  createdAt       DateTime        @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([provider, createdAt])
 }
 
 enum Role {
   SEEKER
   EMPLOYER
   ADMIN
+}
+
+enum JobType {
+  NORMAL_EMPLOYMENT
+  FREELANCE_PROJECT
+}
+
+enum SalaryPeriod {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum JobStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CLOSED
+}
+
+enum ApplicationStatus {
+  APPLIED
+  REVIEWING
+  SHORTLISTED
+  INTERVIEW
+  REJECTED
+  ACCEPTED
+  WITHDRAWN
+}
+
+enum ContractType {
+  NORMAL_EMPLOYMENT
+  FREELANCE_PROJECT
+}
+
+enum ContractStatus {
+  PENDING
+  ACTIVE
+  IN_PROGRESS
+  COMPLETED
+  ENDED
+  DISPUTED
+  CANCELLED
+}
+
+enum FreelanceWorkStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETION_SUBMITTED
+  COMPLETED
+  DISPUTED
+  RELEASE_ELIGIBLE
+  RELEASED
+  REFUNDED
+  CANCELLED
+}
+
+enum EscrowStatus {
+  UNFUNDED
+  FUNDING
+  FUNDED
+  RELEASE_ELIGIBLE
+  DISPUTED
+  REFUND_PENDING
+  RELEASED
+  REFUNDED
+  CANCELLED
+}
+
+enum SubscriptionPlan {
+  BASIC
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentType {
+  SUBSCRIPTION
+  CONTRACT_FUNDING
+  OTHER
+}
+
+enum PaymentProvider {
+  FLUTTERWAVE
+  OTHER
+}
+
+enum LedgerEntryType {
+  EMPLOYER_PAYMENT
+  ESCROW_FUNDED
+  PLATFORM_FEE
+  FUNDS_RELEASED
+  WALLET_CREDIT
+  WITHDRAWAL_RESERVED
+  WITHDRAWAL_SUCCESSFUL
+  WITHDRAWAL_FAILED_REVERSAL
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+}
+
+enum PayoutAttemptStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED_FOR_EMPLOYER
+  RESOLVED_FOR_SEEKER
+  PARTIALLY_RESOLVED
+  CLOSED
+}
+
+enum FinancialEntityType {
+  PAYMENT
+  CONTRACT
+  ESCROW
+  WALLET
+  WITHDRAWAL
+  PAYOUT
+  REFUND
+  DISPUTE
+}
+
+enum FinancialAction {
+  CREATED
+  VERIFIED
+  FUNDED
+  WORK_STARTED
+  COMPLETION_SUBMITTED
+  COMPLETION_CONFIRMED
+  RELEASE_REQUESTED
+  RELEASED
+  WITHDRAWAL_REQUESTED
+  WITHDRAWAL_RESERVED
+  TRANSFER_STARTED
+  TRANSFER_SUCCESSFUL
+  TRANSFER_FAILED
+  REFUND_REQUESTED
+  REFUNDED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+  CANCELLED
+  FAILED
 }
