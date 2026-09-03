@@ -89,9 +89,14 @@ export const loginUser = async ({ email, password }) => {
   });
 
   const token = jwt.sign(
-    { id: updatedUser.id, role: updatedUser.role, email: updatedUser.email },
+    { sub: updatedUser.id, role: updatedUser.role },
     env.JWT_SECRET,
-    { expiresIn: env.JWT_EXPIRE },
+    {
+      algorithm: 'HS256',
+      expiresIn: env.JWT_EXPIRE,
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+    },
   );
 
   return { token, user: updatedUser };

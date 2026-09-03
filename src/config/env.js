@@ -7,6 +7,8 @@ const requiredEnvVars = [
   'NODE_ENV',
   'DATABASE_URL',
   'JWT_SECRET',
+  'JWT_ISSUER',
+  'JWT_AUDIENCE',
 ];
 
 // Check for missing required variables
@@ -31,6 +33,8 @@ export const env = {
   // JWT
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRE: process.env.JWT_EXPIRE || '24h',
+  JWT_ISSUER: process.env.JWT_ISSUER || 'leamjobs-development',
+  JWT_AUDIENCE: process.env.JWT_AUDIENCE || 'leamjobs-api',
 
   // Email
   SMTP_HOST: process.env.SMTP_HOST || '',

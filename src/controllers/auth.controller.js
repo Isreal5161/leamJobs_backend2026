@@ -26,7 +26,7 @@ export const login = async (req, res, next) => {
 
 export const me = async (req, res, next) => {
   try {
-    const user = await getCurrentUser(req.user.id);
+    const user = await getCurrentUser(req.user.sub);
     return res.status(200).json(toUserResponse(user));
   } catch (error) {
     return next(error);
