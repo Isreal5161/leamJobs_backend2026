@@ -24,6 +24,8 @@ const jobSelect = {
   description: true,
   location: true,
   jobType: true,
+  skills: true,
+  requirements: true,
   createdAt: true,
   applicationDeadline: true,
   employer: { select: { employerProfile: { select: companySelect } } },
@@ -89,10 +91,44 @@ export const mapSeekerJob = (job) => ({
   description: job.description,
   location: job.location,
   jobType: job.jobType,
+  skills: job.skills ?? [],
+  requirements: job.requirements ?? null,
+  applicationDeadline: job.applicationDeadline ?? null,
   company: mapCompany(job.employer),
   compensation: mapCompensation(job),
   createdAt: job.createdAt,
 });
+
+const buildJobWhere = ({ search, location, jobType, skills }) => ({
+  status: 'APPROVED',
+  ...(search ? {
+    OR: [
+      { title: { contains: search, mode: 'insensitive' } },
+      { description: { contains: search, mode: 'insensitive' } },
+      { location: { contains: search, mode: 'insensitive' } },
+    ],
+  } : {}),
+  ...(location ? { location: { contains: location, mode: 'insensitive' } } : {}),
+  ...(jobType ? { jobType } : {}),
+  ...(skills?.length ? { skills: { hasSome: skills } } : {}),
+});
+
+export const listApprovedJobs = async ({ search, location, jobType, skills, limit, cursor }) => {
+  const jobs = await prisma.job.findMany({
+    where: buildJobWhere({ search, location, jobType, skills }),
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    select: jobSelect,
+  });
+
+  const hasNextPage = jobs.length > limit;
+  const page = hasNextPage ? jobs.slice(0, limit) : jobs;
+  return {
+    jobs: page.map(mapSeekerJob),
+    nextCursor: hasNextPage ? page[page.length - 1].id : null,
+  };
+};
 
 export const findApprovedJob = async (jobId, seekerId) => {
   const job = await prisma.job.findFirst({

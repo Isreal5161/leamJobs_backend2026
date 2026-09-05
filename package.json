@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "jest --runInBand",
+    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
@@ -33,6 +33,7 @@
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.3.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^9.1.0",
     "pg": "^8.23.0",

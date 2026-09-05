@@ -1,4 +1,13 @@
-import { findApprovedJob } from '../services/seekerJobs.service.js';
+import { findApprovedJob, listApprovedJobs } from '../services/seekerJobs.service.js';
+
+export const listJobs = async (req, res, next) => {
+  try {
+    const data = await listApprovedJobs(req.validatedQuery);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 export const getJob = async (req, res, next) => {
   try {
