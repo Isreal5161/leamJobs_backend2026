@@ -8,9 +8,11 @@ import {
 	deleteResume,
 	getProfilePicture,
 	getResume,
+	importResume,
 	uploadProfilePicture,
 	uploadResume,
 } from '../controllers/seekerProfileFiles.controller.js';
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
 import { validateCreateApplication } from '../validators/seekerApplications.validation.js';
@@ -41,6 +43,21 @@ import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommen
 
 const seekerRouter = Router();
 
+const resumeImportLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000,
+	max: 5,
+	standardHeaders: true,
+	legacyHeaders: false,
+	keyGenerator: (req) => req.user?.sub || ipKeyGenerator(req.ip),
+	handler: (req, res) => res.status(429).json({
+		success: false,
+		error: {
+			code: 'RESUME_IMPORT_RATE_LIMITED',
+			message: 'Too many CV import attempts. Please try again later.',
+		},
+	}),
+});
+
 seekerRouter.get('/profile', authenticate, requireRole('SEEKER'), getProfile);
 seekerRouter.patch('/profile', authenticate, requireRole('SEEKER'), validateSeekerProfileUpdate, updateProfile);
 seekerRouter.patch('/profile/cv', authenticate, requireRole('SEEKER'), validateSeekerCVUpdate, updateCVProfile);
@@ -48,6 +65,7 @@ seekerRouter.post('/profile/picture', authenticate, requireRole('SEEKER'), singl
 seekerRouter.delete('/profile/picture', authenticate, requireRole('SEEKER'), deleteProfilePicture);
 seekerRouter.get('/profile/picture', authenticate, requireRole('SEEKER'), getProfilePicture);
 seekerRouter.post('/profile/resume', authenticate, requireRole('SEEKER'), singleUpload('file'), uploadResume);
+seekerRouter.post('/profile/resume/import', authenticate, requireRole('SEEKER'), resumeImportLimiter, importResume);
 seekerRouter.delete('/profile/resume', authenticate, requireRole('SEEKER'), deleteResume);
 seekerRouter.get('/profile/resume', authenticate, requireRole('SEEKER'), getResume);
 seekerRouter.get('/dashboard', authenticate, requireRole('SEEKER'), dashboard);

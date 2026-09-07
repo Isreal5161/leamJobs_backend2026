@@ -5,6 +5,7 @@ import {
   updateSeekerProfilePictureForUser,
   updateSeekerResumeForUser,
 } from '../services/seekerProfile.service.js';
+import { importSeekerResumeForUser } from '../services/cvImport.service.js';
 import { validateUploadedImage, validateUploadedResume } from '../utils/fileValidation.js';
 
 const sendFile = async (res, result, category) => {
@@ -86,6 +87,15 @@ export const deleteResume = async (req, res, next) => {
 export const getResume = async (req, res, next) => {
   try {
     return sendFile(res, await readSeekerFileForUser(req.user.sub, 'resumeObjectKey'), 'resume');
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const importResume = async (req, res, next) => {
+  try {
+    const data = await importSeekerResumeForUser(req.user.sub);
+    return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);
   }

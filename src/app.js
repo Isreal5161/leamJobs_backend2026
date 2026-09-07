@@ -88,8 +88,9 @@ app.use((err, req, res, next) => {
   const message = err.message || 'Internal Server Error';
 
   res.status(status).json({
-    message,
-    status,
+    ...(err.publicCode
+      ? { success: false, error: { code: err.publicCode, message } }
+      : { message, status }),
     ...(env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
