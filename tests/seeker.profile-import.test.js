@@ -2,6 +2,7 @@ import { jest } from '@jest/globals';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 import JSZip from 'jszip';
+import PDFDocument from 'pdfkit';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
@@ -34,26 +35,16 @@ const createToken = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: sub
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 
-const createPdf = (textLines) => {
-  const stream = `BT\n/F1 12 Tf\n72 260 Td\n${textLines.map((line) => `(${line.replace(/[()\\]/g, '\\$&')}) Tj\n0 -18 Td`).join('')}ET`;
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
-    `<< /Length ${Buffer.byteLength(stream) + 1} >>\nstream\n${stream}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-  ];
-  let output = '%PDF-1.4\n';
-  const offsets = [0];
-  objects.forEach((object, index) => {
-    offsets.push(Buffer.byteLength(output));
-    output += `${index + 1} 0 obj\n${object}\nendobj\n`;
+const createPdf = async (textLines) => {
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+
+  return new Promise((resolve) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    textLines.forEach((line) => doc.text(line));
+    doc.end();
   });
-  const xrefOffset = Buffer.byteLength(output);
-  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  output += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
-  output += `trailer\n<< /Root 1 0 R /Size ${objects.length + 1} >>\nstartxref\n${xrefOffset}\n%%EOF`;
-  return Buffer.from(output);
 };
 
 const createDocx = async () => {
@@ -63,10 +54,10 @@ const createDocx = async () => {
   return zip.generateAsync({ type: 'nodebuffer' });
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ resumeObjectKey: 'seekers/user/resume/current.pdf' });
-  mockStorage.readObject.mockResolvedValue(createPdf([
+  mockStorage.readObject.mockResolvedValue(await createPdf([
     'John Doe',
     'Software Engineer',
     'john@example.com',
@@ -99,7 +90,7 @@ describe('seeker resume import endpoint', () => {
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
-      .set('Authorization', `Bearer ${createToken()}`);
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111121')}`);
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({
@@ -112,7 +103,7 @@ describe('seeker resume import endpoint', () => {
   test('extracts candidate data from a stored PDF without writing profile data', async () => {
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
-      .set('Authorization', `Bearer ${createToken()}`);
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111122')}`);
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -130,7 +121,7 @@ describe('seeker resume import endpoint', () => {
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
-      .set('Authorization', `Bearer ${createToken()}`);
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111123')}`);
 
     expect(response.status).toBe(422);
     expect(response.body.success).toBe(false);
@@ -143,7 +134,7 @@ describe('seeker resume import endpoint', () => {
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
-      .set('Authorization', `Bearer ${createToken()}`);
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111124')}`);
 
     expect(response.status).toBe(200);
     expect(response.body.data.source.format).toBe('docx');
@@ -158,12 +149,147 @@ describe('seeker resume import endpoint', () => {
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
-      .set('Authorization', `Bearer ${createToken()}`);
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111125')}`);
 
     expect(response.status).toBe(422);
     expect(response.body.error.code).toBe('DOC_IMPORT_UNSUPPORTED');
     expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
     expect(mockPrisma.seekerProfile.update).not.toHaveBeenCalled();
+  });
+
+  test('extracts an Aparna-style CV while excluding template vendor content', async () => {
+    mockPrisma.seekerProfile.findUnique.mockResolvedValueOnce({ resumeObjectKey: 'seekers/user/resume/aparna.pdf' });
+    mockStorage.readObject.mockResolvedValueOnce(await createPdf([
+      'Aparna Khatri',
+      'Senior Graphic Design Specialist',
+      'Profile:',
+      'Senior Graphic Design Specialist with 6+ years of experience managing design processes, from conceptualization to delivery.',
+      'Education:',
+      'Bachelor Of Fine Arts In Graphic Design',
+      'Rochester Technology, New York, NY',
+      'May 2015',
+      'GPA: 3.7/4.0',
+      'Key Skills:',
+      'InDesign',
+      'Illustrator',
+      'Photoshop',
+      'Figma',
+      'Blender',
+      'Sketchbook',
+      'Professional Experience:',
+      'Senior Graphic Design Specialist',
+      'Experion, New York, NY',
+      'Sep 2019 - Present',
+      'Led design strategy and delivered high-impact campaigns.',
+      'Graphic Design Specialist',
+      'Stepping Stone Advertising, New York, NY',
+      'Jun 2017 - Aug 2019',
+      'Created concept art and supported brand execution.',
+      'Junior Graphic Designer',
+      'Redfin Technologies, New Rochelle, NY',
+      'Jun 2015 - May 2019',
+      'Produced marketing and digital visuals for campaigns.',
+      'Contact:',
+      '+1 (555) 123-4567',
+      'Chicago, Illinois',
+      'aparna@example.com',
+      'https://www.linkedin.com/in/aparna-khatri',
+      'https://www.aparna-portfolio.com',
+      'Dear Job Seeker',
+      'Resume Builder',
+      'How to Write a Resume',
+      'Cover Letter Generator',
+      'Fonts',
+      'Lexend',
+      'Inter',
+      'installation instructions',
+    ]));
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111133')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.cv.fullName).toBe('Aparna Khatri');
+    expect(response.body.data.cv.professionalTitle).toBe('Senior Graphic Design Specialist');
+    expect(response.body.data.cv.bio).toContain('Senior Graphic Design Specialist');
+    expect(response.body.data.cv.skills).toEqual(expect.arrayContaining(['InDesign', 'Illustrator', 'Photoshop', 'Figma', 'Blender', 'Sketchbook']));
+    expect(response.body.data.cv.experience).toHaveLength(3);
+    expect(response.body.data.cv.education[0].degree).toMatch(/Bachelor|Fine Arts|Graphic Design/i);
+    expect(response.body.data.cv.education[0].school).toContain('Rochester');
+    expect(response.body.data.cv.linkedinUrl).toContain('linkedin.com/in/aparna-khatri');
+    expect(response.body.data.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/template|vendor|marketing|resume/i)]));
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('keeps deterministic extraction working when AI is unavailable or fails', async () => {
+    const originalValue = process.env.CV_IMPORT_AI_ENABLED;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.CV_IMPORT_AI_ENABLED = 'true';
+    delete process.env.OPENAI_API_KEY;
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111144')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.cv.fullName).toBe('John Doe');
+
+    if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
+    else process.env.CV_IMPORT_AI_ENABLED = originalValue;
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+  });
+
+  test('falls back to deterministic parsing when AI provider errors', async () => {
+    const originalValue = process.env.CV_IMPORT_AI_ENABLED;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.CV_IMPORT_AI_ENABLED = 'true';
+    process.env.OPENAI_API_KEY = 'test-api-key';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: { message: 'Bad gateway' } }),
+    });
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111145')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.cv.fullName).toBe('John Doe');
+    expect(response.body.data.warnings.join(' ')).toMatch(/AI|fallback|deterministic/i);
+
+    if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
+    else process.env.CV_IMPORT_AI_ENABLED = originalValue;
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+    delete global.fetch;
+  });
+
+  test('falls back to deterministic parsing when AI provider times out', async () => {
+    const originalValue = process.env.CV_IMPORT_AI_ENABLED;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.CV_IMPORT_AI_ENABLED = 'true';
+    process.env.OPENAI_API_KEY = 'test-api-key';
+    global.fetch = jest.fn(() => new Promise((_, reject) => {
+      setTimeout(() => reject(Object.assign(new Error('timeout'), { name: 'AbortError' })), 0);
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111146')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.cv.fullName).toBe('John Doe');
+
+    if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
+    else process.env.CV_IMPORT_AI_ENABLED = originalValue;
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+    delete global.fetch;
   });
 
   test('does not accept a client-supplied object key', async () => {
