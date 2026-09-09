@@ -5,6 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import { env } from './config/env.js';
 import { checkDatabaseHealth } from './config/database.js';
 import authRouter from './routes/auth.routes.js';
+import employerRouter from './routes/employer.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
 
 const app = express();
@@ -65,6 +66,7 @@ app.get('/api/health/db', async (req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api/employer', employerRouter);
 app.use('/api/seeker', seekerRouter);
 
 // API v1 routes (will be added as features are implemented)
