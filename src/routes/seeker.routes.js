@@ -36,7 +36,8 @@ import {
 } from '../controllers/seekerPayments.controller.js';
 import { validateSeekerPaymentPagination } from '../validators/seekerPayments.validation.js';
 import { validateSeekerWithdrawal } from '../validators/seekerWithdrawal.validation.js';
-import { listSeekerPayoutAccounts } from '../controllers/seekerPayoutAccount.controller.js';
+import { listSeekerPayoutAccounts, createPayoutAccount, updatePayoutAccount } from '../controllers/seekerPayoutAccount.controller.js';
+import { validateCreatePayoutAccount, validateUpdatePayoutAccount } from '../validators/seekerPayoutAccount.validation.js';
 import { validateSeekerJobsQuery } from '../validators/seekerJobs.validation.js';
 import { listSeekerRecommendations } from '../controllers/seekerRecommendations.controller.js';
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
@@ -86,5 +87,7 @@ seekerRouter.get('/payments/transactions', authenticate, requireRole('SEEKER'), 
 seekerRouter.get('/payments/withdrawals', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listWithdrawals);
 seekerRouter.post('/payments/withdrawals', authenticate, requireRole('SEEKER'), validateSeekerWithdrawal, createWithdrawal);
 seekerRouter.get('/payout-accounts', authenticate, requireRole('SEEKER'), listSeekerPayoutAccounts);
+seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
+seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
 
 export default seekerRouter;

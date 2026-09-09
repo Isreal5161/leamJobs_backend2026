@@ -389,7 +389,11 @@ model PayoutAccount {
   id                     String          @id @default(uuid())
   userId                 String
   provider               PaymentProvider
-  bankCode               String
+  payoutMethod           PayoutMethod
+  country                String
+  currency               String          @db.VarChar(3)
+  bankCode               String?
+  bankName               String?
   encryptedAccountNumber String
   accountNumberLast4     String
   accountName            String
@@ -403,6 +407,7 @@ model PayoutAccount {
   withdrawals Withdrawal[]
 
   @@index([userId, isDefault])
+  @@index([userId, disabledAt])
 }
 
 model Withdrawal {
@@ -655,6 +660,13 @@ enum PaymentType {
 
 enum PaymentProvider {
   FLUTTERWAVE
+  OTHER
+}
+
+// BANK_ACCOUNT is the only method with real transfer support today (Nigeria via Flutterwave).
+// OTHER captures international details ahead of a confirmed payment-provider integration.
+enum PayoutMethod {
+  BANK_ACCOUNT
   OTHER
 }
 

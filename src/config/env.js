@@ -36,6 +36,11 @@ export const env = {
   JWT_ISSUER: process.env.JWT_ISSUER || 'leamjobs-development',
   JWT_AUDIENCE: process.env.JWT_AUDIENCE || 'leamjobs-api',
 
+  // Payout accounts (seeker payout details are encrypted at rest with this key; required before
+  // payout account create/update will succeed - not added to requiredEnvVars to avoid blocking
+  // startup for unrelated deployments until this feature is rolled out)
+  PAYOUT_ENCRYPTION_KEY: process.env.PAYOUT_ENCRYPTION_KEY || '',
+
   // Email
   SMTP_HOST: process.env.SMTP_HOST || '',
   SMTP_PORT: parseInt(process.env.SMTP_PORT || '587', 10),
