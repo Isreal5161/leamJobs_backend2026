@@ -116,7 +116,7 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
 
       if (!wallet) throw new WalletNotFoundError();
 
-      const existing = await findExistingByIdempotencyKey(transaction, seekerId, amount, currency, payload.payoutAccountId);
+      const existing = await findExistingByIdempotencyKey(transaction, seekerId, amount, currency, payload.payoutAccountId, payload.idempotencyKey);
       if (existing) return existing;
 
       if (wallet.currency !== currency) throw new WithdrawalValidationError('Withdrawal currency does not match wallet currency');
