@@ -14,16 +14,20 @@ import {
 	listApplications,
 	updateApplicationStatus,
 } from '../controllers/employerApplications.controller.js';
+import { getProfile, updateProfile } from '../controllers/employerProfile.controller.js';
 import { closeJob, createJob, getJob, listJobs, updateJob } from '../controllers/employerJobs.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
 import { validateCreateEmployerJob, validateUpdateEmployerJob } from '../validators/employerJobs.validation.js';
 import { validateMessagePagination, validateSendMessage } from '../validators/messaging.validation.js';
+import { validateEmployerProfileUpdate } from '../validators/employerProfile.validation.js';
 
 const employerRouter = Router();
 
 employerRouter.get('/me', authenticate, requireRole('EMPLOYER'), getEmployerMe);
+employerRouter.get('/profile', authenticate, requireRole('EMPLOYER'), getProfile);
+employerRouter.patch('/profile', authenticate, requireRole('EMPLOYER'), validateEmployerProfileUpdate, updateProfile);
 employerRouter.get('/dashboard', authenticate, requireRole('EMPLOYER'), dashboard);
 employerRouter.get('/jobs', authenticate, requireRole('EMPLOYER'), listJobs);
 employerRouter.post('/jobs', authenticate, requireRole('EMPLOYER'), validateCreateEmployerJob, createJob);
