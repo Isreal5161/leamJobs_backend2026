@@ -24,6 +24,14 @@ export class ApplicationJobClosedError extends Error {
   }
 }
 
+export class ApplicationResumeMissingError extends Error {
+  constructor() {
+    super('Please upload a CV before submitting your application.');
+    this.name = 'ApplicationResumeMissingError';
+    this.status = 400;
+  }
+}
+
 const applicationSelect = {
   id: true,
   jobId: true,
@@ -106,7 +114,7 @@ export const getSeekerApplications = async (seekerId) => {
   };
 };
 
-export const createSeekerApplication = async (seekerId, { jobId, coverLetter, resumeUrl }) => {
+export const createSeekerApplication = async (seekerId, { jobId, coverLetter }) => {
   const job = await findApplicationJob(jobId);
 
   const existingApplication = await prisma.application.findUnique({
@@ -118,13 +126,28 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, re
     throw new ApplicationDuplicateError();
   }
 
+  const seekerProfile = await prisma.seekerProfile.findUnique({
+    where: { userId: seekerId },
+    select: {
+      resumeUrl: true,
+      resumeObjectKey: true,
+    },
+  });
+
+  if (!seekerProfile?.resumeObjectKey) {
+    throw new ApplicationResumeMissingError();
+  }
+
   try {
     const application = await prisma.application.create({
       data: {
         seekerId,
         jobId,
         coverLetter,
-        resumeUrl,
+        resumeUrl: seekerProfile.resumeUrl,
+        resumeObjectKey: seekerProfile.resumeObjectKey,
+        resumeVersion: seekerProfile.resumeObjectKey,
+        resumeSubmittedAt: new Date(),
       },
       select: applicationSelect,
     });

@@ -9,6 +9,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
   user: { findUnique: jest.fn() },
+  seekerProfile: { findUnique: jest.fn() },
   application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
   job: { findFirst: jest.fn() },
 };
@@ -82,6 +83,10 @@ const createApplication = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.seekerProfile.findUnique.mockResolvedValue({
+    resumeUrl: 'https://files.example/resume.pdf',
+    resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+  });
 });
 
 describe('seeker job and application endpoints', () => {
@@ -190,7 +195,7 @@ describe('seeker job and application endpoints', () => {
     expect(mockPrisma.application.create).not.toHaveBeenCalled();
   });
 
-  test('creates a valid application and ignores no client-controlled ownership fields', async () => {
+  test('creates a valid application using the authenticated seeker profile CV snapshot and ignores client-controlled ownership fields', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
     mockPrisma.application.findUnique.mockResolvedValue(null);
     mockPrisma.application.create.mockResolvedValue(createApplication());
@@ -198,7 +203,7 @@ describe('seeker job and application endpoints', () => {
     const response = await request(app)
       .post('/api/seeker/applications')
       .set('Authorization', `Bearer ${createToken()}`)
-      .send({ jobId, coverLetter: 'I would love to contribute.', resumeUrl: 'https://files.example/resume.pdf' });
+      .send({ jobId, coverLetter: 'I would love to contribute.' });
 
     expect(response.status).toBe(201);
     expect(response.body).toMatchObject({
@@ -211,6 +216,9 @@ describe('seeker job and application endpoints', () => {
         jobId,
         coverLetter: 'I would love to contribute.',
         resumeUrl: 'https://files.example/resume.pdf',
+        resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+        resumeVersion: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+        resumeSubmittedAt: expect.any(Date),
       },
     }));
   });
