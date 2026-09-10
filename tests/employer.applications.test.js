@@ -1,12 +1,15 @@
 import { jest } from '@jest/globals';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
-import { deleteObject, uploadObject } from '../src/services/storage/storage.service.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.R2_ENDPOINT = 'https://test.r2.cloudflarestorage.com';
+process.env.R2_BUCKET_NAME = 'test-bucket';
+process.env.R2_ACCESS_KEY_ID = 'test-key-id';
+process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
   application: {
@@ -26,12 +29,35 @@ const mockPrisma = {
   $transaction: jest.fn(),
 };
 
+// Mock S3Client for R2
+let mockSend;
+jest.unstable_mockModule('@aws-sdk/client-s3', () => {
+  mockSend = jest.fn();
+  return {
+    S3Client: jest.fn(() => ({
+      send: mockSend,
+    })),
+    PutObjectCommand: jest.fn((input) => input),
+    GetObjectCommand: jest.fn((input) => {
+      // For GetObjectCommand, we'll resolve with the pdf-content as a stream
+      return {
+        ...input,
+        __isGetObjectCommand: true,
+      };
+    }),
+    DeleteObjectCommand: jest.fn((input) => input),
+  };
+});
+
 jest.unstable_mockModule('../src/config/database.js', () => ({
   prisma: mockPrisma,
   checkDatabaseHealth: jest.fn(),
 }));
 
 const { default: app } = await import('../src/app.js');
+
+// Now import storage functions
+const { uploadObject, deleteObject } = await import('../src/services/storage/storage.service.js');
 
 const employerA = '11111111-1111-4111-8111-111111111111';
 const employerB = '22222222-2222-4222-8222-222222222222';
@@ -101,6 +127,20 @@ beforeEach(() => {
   mockPrisma.conversation.create.mockResolvedValue(conversation());
   mockPrisma.message.count.mockResolvedValue(0);
   mockPrisma.message.updateMany.mockResolvedValue({ count: 0 });
+
+  // Reset S3 mock
+  mockSend.mockReset();
+  mockSend.mockImplementation((command) => {
+    if (command.__isGetObjectCommand) {
+      // Return a stream-like body for GetObjectCommand
+      return Promise.resolve({
+        Body: (async function* () {
+          yield Buffer.from('pdf-content');
+        })(),
+      });
+    }
+    return Promise.resolve({});
+  });
 });
 
 describe('Employer Applications authorization and privacy', () => {

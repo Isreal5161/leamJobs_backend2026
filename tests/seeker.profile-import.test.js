@@ -8,6 +8,10 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.R2_ENDPOINT = 'https://test.r2.cloudflarestorage.com';
+process.env.R2_BUCKET_NAME = 'test-bucket';
+process.env.R2_ACCESS_KEY_ID = 'test-key-id';
+process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
   seekerProfile: {
@@ -17,15 +21,21 @@ const mockPrisma = {
   },
 };
 
-const mockStorage = {
-  createObjectKey: jest.fn(),
-  uploadObject: jest.fn(),
-  deleteObject: jest.fn(),
-  readObject: jest.fn(),
-};
+// Mock the S3Client
+let mockSend;
+jest.unstable_mockModule('@aws-sdk/client-s3', () => {
+  mockSend = jest.fn();
+  return {
+    S3Client: jest.fn(() => ({
+      send: mockSend,
+    })),
+    PutObjectCommand: jest.fn((input) => input),
+    GetObjectCommand: jest.fn((input) => input),
+    DeleteObjectCommand: jest.fn((input) => input),
+  };
+});
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
-jest.unstable_mockModule('../src/services/storage/storage.service.js', () => mockStorage);
 
 const { default: app } = await import('../src/app.js');
 
@@ -57,7 +67,7 @@ const createDocx = async () => {
 beforeEach(async () => {
   jest.clearAllMocks();
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ resumeObjectKey: 'seekers/user/resume/current.pdf' });
-  mockStorage.readObject.mockResolvedValue(await createPdf([
+  const pdfBuffer = await createPdf([
     'John Doe',
     'Software Engineer',
     'john@example.com',
@@ -70,7 +80,8 @@ beforeEach(async () => {
     'Built platform features.',
     'Skills',
     'JavaScript, Node.js, PostgreSQL',
-  ]));
+  ]);
+  mockSend.mockResolvedValue({ Body: (async function* () { yield pdfBuffer; })() });
 });
 
 describe('seeker resume import endpoint', () => {
@@ -82,7 +93,7 @@ describe('seeker resume import endpoint', () => {
       .post('/api/seeker/profile/resume/import')
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`);
     expect(employer.status).toBe(403);
-    expect(mockStorage.readObject).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   test('returns a controlled error when no resume exists', async () => {
@@ -97,7 +108,7 @@ describe('seeker resume import endpoint', () => {
       success: false,
       error: { code: 'RESUME_NOT_FOUND', message: 'Upload a CV before importing it.' },
     });
-    expect(mockStorage.readObject).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   test('extracts candidate data from a stored PDF without writing profile data', async () => {
@@ -111,13 +122,13 @@ describe('seeker resume import endpoint', () => {
     expect(response.body.data.source.format).toBe('pdf');
     expect(response.body.data.cv.fullName).toBe('John Doe');
     expect(response.body.data.cv.skills).toEqual(expect.arrayContaining(['JavaScript', 'Node.js', 'PostgreSQL']));
-    expect(mockStorage.readObject).toHaveBeenCalled();
+    expect(mockSend).toHaveBeenCalled();
     expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
     expect(mockPrisma.seekerProfile.update).not.toHaveBeenCalled();
   });
 
   test('fails safely for malformed PDF data', async () => {
-    mockStorage.readObject.mockResolvedValueOnce(Buffer.from('%PDF-1.7 malformed document'));
+    mockSend.mockResolvedValueOnce({ Body: (async function* () { yield Buffer.from('%PDF-1.7 malformed document'); })() });
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
@@ -130,7 +141,8 @@ describe('seeker resume import endpoint', () => {
 
   test('extracts text from a valid DOCX document', async () => {
     mockPrisma.seekerProfile.findUnique.mockResolvedValueOnce({ resumeObjectKey: 'seekers/user/resume/current.docx' });
-    mockStorage.readObject.mockResolvedValueOnce(await createDocx());
+    const docxBuffer = await createDocx();
+    mockSend.mockResolvedValueOnce({ Body: (async function* () { yield docxBuffer; })() });
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
@@ -145,7 +157,7 @@ describe('seeker resume import endpoint', () => {
 
   test('rejects legacy DOC import without changing upload support', async () => {
     mockPrisma.seekerProfile.findUnique.mockResolvedValueOnce({ resumeObjectKey: 'seekers/user/resume/current.doc' });
-    mockStorage.readObject.mockResolvedValueOnce(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0x00]));
+    mockSend.mockResolvedValueOnce({ Body: (async function* () { yield Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0x00]); })() });
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')
@@ -159,7 +171,7 @@ describe('seeker resume import endpoint', () => {
 
   test('extracts an Aparna-style CV while excluding template vendor content', async () => {
     mockPrisma.seekerProfile.findUnique.mockResolvedValueOnce({ resumeObjectKey: 'seekers/user/resume/aparna.pdf' });
-    mockStorage.readObject.mockResolvedValueOnce(await createPdf([
+    const aParnaBuffer = await createPdf([
       'Aparna Khatri',
       'Senior Graphic Design Specialist',
       'Profile:',
@@ -203,7 +215,8 @@ describe('seeker resume import endpoint', () => {
       'Lexend',
       'Inter',
       'installation instructions',
-    ]));
+    ]);
+    mockSend.mockResolvedValueOnce({ Body: (async function* () { yield aParnaBuffer; })() });
 
     const response = await request(app)
       .post('/api/seeker/profile/resume/import')

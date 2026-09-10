@@ -4,6 +4,7 @@ import cors from 'cors';
 import { rateLimit } from 'express-rate-limit';
 import { env } from './config/env.js';
 import { checkDatabaseHealth } from './config/database.js';
+import adminRouter from './routes/admin.routes.js';
 import authRouter from './routes/auth.routes.js';
 import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
@@ -66,6 +67,7 @@ app.get('/api/health/db', async (req, res) => {
   }
 });
 
+app.use('/api/admin', adminRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/employer', employerRouter);
 app.use('/api/jobs', publicJobsRouter);

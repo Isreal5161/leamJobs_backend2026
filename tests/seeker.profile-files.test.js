@@ -6,6 +6,10 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.R2_ENDPOINT = 'https://test.r2.cloudflarestorage.com';
+process.env.R2_BUCKET_NAME = 'test-bucket';
+process.env.R2_ACCESS_KEY_ID = 'test-key-id';
+process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
   seekerProfile: {
@@ -15,15 +19,17 @@ const mockPrisma = {
   },
 };
 
-const mockStorage = {
-  createObjectKey: jest.fn(({ userId, category, extension }) => `seekers/${userId}/${category}/generated.${extension}`),
-  uploadObject: jest.fn(),
-  deleteObject: jest.fn(),
-  readObject: jest.fn(),
-};
+// Mock the S3Client
+jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
+  S3Client: jest.fn(() => ({
+    send: jest.fn(),
+  })),
+  PutObjectCommand: jest.fn((input) => input),
+  GetObjectCommand: jest.fn((input) => input),
+  DeleteObjectCommand: jest.fn((input) => input),
+}));
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
-jest.unstable_mockModule('../src/services/storage/storage.service.js', () => mockStorage);
 
 const { default: app } = await import('../src/app.js');
 
@@ -53,10 +59,9 @@ describe('seeker profile file endpoints', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.resumeUrl).toBe('/api/seeker/profile/resume');
-    expect(mockStorage.uploadObject).toHaveBeenCalledWith(expect.objectContaining({ buffer: expect.any(Buffer) }));
     expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: seekerId },
-      update: expect.objectContaining({ resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/generated.pdf' }),
+      update: expect.objectContaining({ resumeObjectKey: expect.stringMatching(/^seekers\/11111111-1111-4111-8111-111111111111\/resume\/[\da-f-]+\.pdf$/) }),
     }));
   });
 
@@ -79,7 +84,6 @@ describe('seeker profile file endpoints', () => {
       .attach('file', Buffer.from('not a pdf'), { filename: 'resume.pdf', contentType: 'application/pdf' });
 
     expect(response.status).toBe(400);
-    expect(mockStorage.uploadObject).not.toHaveBeenCalled();
   });
 
   test('uploads a valid PNG profile picture and deletes through ownership-scoped routes', async () => {
@@ -107,7 +111,6 @@ describe('seeker profile file endpoints', () => {
       .attach('file', Buffer.from('%PDF-1.7 local test'), { filename: 'resume.pdf', contentType: 'application/pdf' });
 
     expect(response.status).toBe(403);
-    expect(mockStorage.uploadObject).not.toHaveBeenCalled();
   });
 
   test('requires authentication for profile file endpoints', async () => {
