@@ -17,3 +17,12 @@ export const getJob = async (req, res, next) => {
     return next(error);
   }
 };
+
+export const getPublicJob = async (req, res, next) => {
+  try {
+    const data = await findApprovedJob(req.params.jobId, null);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return next(error);
+  }
+};

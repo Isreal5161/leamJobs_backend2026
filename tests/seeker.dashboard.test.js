@@ -286,4 +286,16 @@ describe('GET /api/seeker/dashboard', () => {
 
     expect(response.body.data.approvedJobs[0].company).toBeNull();
   });
+
+  test('preserves legacy object-shaped requirements in the dashboard response', async () => {
+    const requirements = { education: "Bachelor's degree", experience: '2 years' };
+    configureDashboardData({ jobs: [createJob({ requirements })] });
+
+    const response = await request(app)
+      .get('/api/seeker/dashboard')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.approvedJobs[0].requirements).toEqual(requirements);
+  });
 });

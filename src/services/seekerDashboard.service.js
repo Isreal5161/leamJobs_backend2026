@@ -95,7 +95,9 @@ const mapCompany = (employer) => {
 const decimalToString = (value) => (value === null || value === undefined ? value : value.toString());
 
 const mapCompensation = (job) => {
-  if (job.jobType === 'NORMAL_EMPLOYMENT') {
+  const engagementType = job.engagementType ?? (job.jobType === 'FREELANCE_PROJECT' ? 'FREELANCE' : 'MONTHLY');
+
+  if (engagementType === 'MONTHLY') {
     const compensation = job.employmentCompensation;
 
     if (!compensation) return null;
@@ -106,6 +108,21 @@ const mapCompensation = (job) => {
       salaryMax: decimalToString(compensation.salaryMax),
       currency: compensation.currency,
       salaryPeriod: compensation.salaryPeriod,
+    };
+  }
+
+  if (engagementType === 'CONTRACT') {
+    const compensation = job.contractCompensation;
+    if (!compensation) return null;
+    return {
+      type: 'CONTRACT',
+      engagementType,
+      amount: decimalToString(compensation.amount),
+      salaryMin: decimalToString(compensation.amount),
+      salaryMax: null,
+      salaryPeriod: compensation.duration ?? 'contract',
+      currency: compensation.currency,
+      duration: compensation.duration,
     };
   }
 
@@ -137,7 +154,14 @@ const mapApprovedJob = (job) => ({
   title: job.title,
   description: job.description,
   location: job.location,
+  department: job.department,
+  workArrangement: job.workArrangement,
+  engagementType: job.engagementType ?? (job.jobType === 'FREELANCE_PROJECT' ? 'FREELANCE' : 'MONTHLY'),
   jobType: job.jobType,
+  skills: job.skills ?? [],
+  requirements: job.requirements ?? null,
+  responsibilities: job.responsibilities ?? [],
+  benefits: job.benefits ?? [],
   company: mapCompany(job.employer),
   compensation: mapCompensation(job),
   createdAt: job.createdAt,
@@ -190,7 +214,14 @@ export const getSeekerDashboard = async (seekerId) => {
         title: true,
         description: true,
         location: true,
+        department: true,
+        workArrangement: true,
+        engagementType: true,
         jobType: true,
+        skills: true,
+        requirements: true,
+        responsibilities: true,
+        benefits: true,
         createdAt: true,
         employer: { select: { employerProfile: { select: companySelect } } },
         employmentCompensation: {
@@ -198,6 +229,9 @@ export const getSeekerDashboard = async (seekerId) => {
         },
         freelanceCompensation: {
           select: { projectAmount: true, currency: true },
+        },
+        contractCompensation: {
+          select: { amount: true, currency: true, duration: true },
         },
       },
     }),
