@@ -84,7 +84,7 @@ const mapApplicant = (seeker) => {
     lastName: seeker.lastName,
     fullName: `${seeker.firstName} ${seeker.lastName}`.trim(),
     professionalTitle: profile?.professionalTitle ?? null,
-    profilePictureUrl: null,
+    profilePictureUrl: profile?.profilePictureUrl ?? null,
     location: profile?.location ?? null,
     country: profile?.country ?? null,
     state: profile?.state ?? null,

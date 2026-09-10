@@ -19,6 +19,8 @@ const mockPrisma = {
   },
 };
 
+const mockDeleteObject = jest.fn();
+
 // Mock the S3Client
 jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn(() => ({
@@ -27,6 +29,13 @@ jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
   PutObjectCommand: jest.fn((input) => input),
   GetObjectCommand: jest.fn((input) => input),
   DeleteObjectCommand: jest.fn((input) => input),
+}));
+
+jest.unstable_mockModule('../src/services/storage/storage.service.js', () => ({
+  createObjectKey: ({ userId, category, extension }) => `seekers/${userId}/${category}/stub-${Date.now()}.${extension}`,
+  uploadObject: jest.fn(async ({ objectKey, buffer }) => ({ objectKey, buffer })),
+  readObject: jest.fn(async () => Buffer.from('pdf-content')),
+  deleteObject: mockDeleteObject,
 }));
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
@@ -61,7 +70,26 @@ describe('seeker profile file endpoints', () => {
     expect(response.body.data.resumeUrl).toBe('/api/seeker/profile/resume');
     expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { userId: seekerId },
-      update: expect.objectContaining({ resumeObjectKey: expect.stringMatching(/^seekers\/11111111-1111-4111-8111-111111111111\/resume\/[\da-f-]+\.pdf$/) }),
+      update: expect.objectContaining({ resumeObjectKey: expect.stringMatching(/^seekers\/11111111-1111-4111-8111-111111111111\/resume\/.+\.pdf$/) }),
+    }));
+  });
+
+  test('preserves the existing resume object when a seeker replaces their profile CV', async () => {
+    const existingResumeObjectKey = 'seekers/11111111-1111-4111-8111-111111111111/resume/old.pdf';
+    mockDeleteObject.mockClear();
+    mockPrisma.seekerProfile.findUnique.mockResolvedValueOnce({ profilePictureKey: null, resumeObjectKey: existingResumeObjectKey });
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .attach('file', Buffer.from('%PDF-1.7 local test'), { filename: 'resume.pdf', contentType: 'application/pdf' });
+
+    expect(response.status).toBe(200);
+    expect(mockDeleteObject).not.toHaveBeenCalled();
+    expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({
+        resumeObjectKey: expect.stringMatching(/^seekers\/11111111-1111-4111-8111-111111111111\/resume\/.+\.pdf$/),
+      }),
     }));
   });
 

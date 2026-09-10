@@ -329,7 +329,7 @@ const fileProfileSelect = {
   resumeObjectKey: true,
 };
 
-const updateStoredFile = async ({ userId, category, extension, file, urlField, keyField }) => {
+const updateStoredFile = async ({ userId, category, extension, file, urlField, keyField, deleteExistingObject = true }) => {
   const current = await prisma.seekerProfile.findUnique({
     where: { userId },
     select: fileProfileSelect,
@@ -346,7 +346,10 @@ const updateStoredFile = async ({ userId, category, extension, file, urlField, k
       select: fileProfileSelect,
     });
 
-    await deleteObject(current?.[keyField]);
+    if (deleteExistingObject) {
+      await deleteObject(current?.[keyField]);
+    }
+
     return profile;
   } catch (error) {
     await deleteObject(objectKey);
@@ -372,6 +375,7 @@ export const updateSeekerResumeForUser = (userId, file, extension) =>
     file,
     urlField: 'resumeUrl',
     keyField: 'resumeObjectKey',
+    deleteExistingObject: false,
   });
 
 const deleteStoredFile = async ({ userId, urlField, keyField }) => {

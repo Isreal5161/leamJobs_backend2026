@@ -63,7 +63,7 @@ const mapSeeker = (seeker) => ({
   firstName: seeker.firstName,
   lastName: seeker.lastName,
   professionalTitle: seeker.seekerProfile?.professionalTitle ?? null,
-  profilePictureUrl: null,
+  profilePictureUrl: seeker.seekerProfile?.profilePictureUrl ?? null,
   location: seeker.seekerProfile?.location ?? null,
 });
 

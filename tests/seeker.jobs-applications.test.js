@@ -223,6 +223,35 @@ describe('seeker job and application endpoints', () => {
     }));
   });
 
+  test('uses the updated profile CV snapshot for a new application after a CV replacement', async () => {
+    const cvB = {
+      resumeUrl: 'https://files.example/resume-b.pdf',
+      resumeObjectKey: `seekers/${seekerId}/resume/cv-b.pdf`,
+    };
+    mockPrisma.seekerProfile.findUnique.mockResolvedValue(cvB);
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      resumeUrl: cvB.resumeUrl,
+      resumeObjectKey: cvB.resumeObjectKey,
+      resumeVersion: cvB.resumeObjectKey,
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.' });
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.application.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        resumeUrl: cvB.resumeUrl,
+        resumeObjectKey: cvB.resumeObjectKey,
+        resumeVersion: cvB.resumeObjectKey,
+      }),
+    }));
+  });
+
   test('returns 404 for nonexistent, unapproved, or expired application jobs', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(null);
 

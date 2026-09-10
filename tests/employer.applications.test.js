@@ -194,7 +194,7 @@ describe('Employer Applications authorization and privacy', () => {
     expect(response.body.data.application).not.toHaveProperty('email');
     expect(response.body.data.application).not.toHaveProperty('phone');
     expect(response.body.data.application).not.toHaveProperty('resumeObjectKey');
-    expect(response.body.data.application.applicant.profilePictureUrl).toBeNull();
+    expect(response.body.data.application.applicant.profilePictureUrl).toBe('/api/seeker/profile/picture');
   });
 });
 
@@ -330,7 +330,7 @@ describe('Employer application conversations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.conversations).toHaveLength(1);
-    expect(response.body.data.conversations[0].seeker.profilePictureUrl).toBeNull();
+    expect(response.body.data.conversations[0].seeker.profilePictureUrl).toBe('/api/seeker/profile/picture');
     expect(mockPrisma.conversation.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { employerId: employerA } }));
   });
 
