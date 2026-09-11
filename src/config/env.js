@@ -51,6 +51,12 @@ export const env = {
   // Frontend URLs
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
   FRONTEND_URL_PROD: process.env.FRONTEND_URL_PROD || '',
+
+  // Flutterwave contract funding (kept server-side; never expose these to clients)
+  FLUTTERWAVE_SECRET_KEY: process.env.FLW_SECRET_KEY || process.env.FLUTTERWAVE_SECRET_KEY || '',
+  FLUTTERWAVE_SECRET_HASH: process.env.FLW_SECRET_HASH || process.env.FLUTTERWAVE_SECRET_HASH || '',
+  FLUTTERWAVE_BASE_URL: process.env.FLUTTERWAVE_BASE_URL || 'https://api.flutterwave.com/v3',
+  FLUTTERWAVE_REDIRECT_URL: process.env.FLUTTERWAVE_REDIRECT_URL || '',
 };
 
 // Validate environment

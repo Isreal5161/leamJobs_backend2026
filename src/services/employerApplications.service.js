@@ -1,5 +1,7 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { readObject } from './storage/storage.service.js';
+import { getActivePlatformFeePercentage } from './platformFee.service.js';
 
 const applicationStatuses = ['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'REJECTED', 'ACCEPTED', 'WITHDRAWN'];
 
@@ -19,10 +21,20 @@ export class EmployerApplicationResumeUnavailableError extends Error {
   }
 }
 
+export class FreelanceContractCreationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'FreelanceContractCreationError';
+    this.status = 422;
+  }
+}
+
 const applicantSelect = {
   id: true,
   firstName: true,
   lastName: true,
+  email: true,
+  phone: true,
   seekerProfile: {
     select: {
       professionalTitle: true,
@@ -39,6 +51,8 @@ const applicantSelect = {
       languages: true,
       projects: true,
       linkedinUrl: true,
+      resumeObjectKey: true,
+      cvTemplate: true,
     },
   },
 };
@@ -49,6 +63,7 @@ const listSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
+  contract: { select: { id: true } },
   seeker: { select: applicantSelect },
   job: { select: { id: true, title: true, employerId: true } },
 };
@@ -64,6 +79,7 @@ const detailSelect = {
   resumeSubmittedAt: true,
   createdAt: true,
   updatedAt: true,
+  contract: { select: { id: true } },
   seeker: { select: applicantSelect },
   job: { select: { id: true, title: true, employerId: true } },
 };
@@ -82,6 +98,8 @@ const mapApplicant = (seeker) => {
     id: seeker.id,
     firstName: seeker.firstName,
     lastName: seeker.lastName,
+    email: seeker.email,
+    phone: seeker.phone ?? null,
     fullName: `${seeker.firstName} ${seeker.lastName}`.trim(),
     professionalTitle: profile?.professionalTitle ?? null,
     profilePictureUrl: profile?.profilePictureUrl ?? null,
@@ -97,6 +115,7 @@ const mapApplicant = (seeker) => {
     languages: profile?.languages ?? null,
     projects: profile?.projects ?? null,
     linkedinUrl: profile?.linkedinUrl ?? null,
+    cvTemplate: profile?.cvTemplate ?? null,
   };
 };
 
@@ -110,6 +129,7 @@ const mapApplicationListItem = (application) => {
     status: application.status,
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,
+    contractId: application.contract?.id ?? null,
   };
 };
 
@@ -120,11 +140,22 @@ const mapApplicationDetail = (application) => ({
   coverLetter: application.coverLetter,
   createdAt: application.createdAt,
   updatedAt: application.updatedAt,
-  resume: {
-    available: Boolean(application.resumeObjectKey),
+  contractId: application.contract?.id ?? null,
+  resume: (() => {
+    const source = application.resumeObjectKey
+      ? 'application'
+      : application.seeker.seekerProfile?.resumeObjectKey
+        ? 'profile'
+        : application.seeker.seekerProfile?.cvTemplate
+          ? 'template'
+          : null;
+    return {
+    available: Boolean(source),
+    source,
     submittedAt: application.resumeSubmittedAt,
     version: application.resumeVersion,
-  },
+    };
+  })(),
   job: {
     id: application.job.id,
     title: application.job.title,
@@ -164,27 +195,126 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
   const application = await findOwnedApplication(employerId, jobId, applicationId, { id: true });
   if (!application) throw new EmployerApplicationNotFoundError();
 
-  const updated = await prisma.application.update({
-    where: { id: application.id },
-    data: { status },
-    select: detailSelect,
-  });
+  if (status !== 'ACCEPTED') {
+    const updated = await prisma.application.update({
+      where: { id: application.id },
+      data: { status },
+      select: detailSelect,
+    });
+    return mapApplicationDetail(updated);
+  }
 
-  return mapApplicationDetail(updated);
+  return prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Application"
+      WHERE "id" = ${applicationId}
+      FOR UPDATE
+    `;
+
+    const application = await transaction.application.findFirst({
+      where: ownedApplicationWhere(employerId, jobId, applicationId),
+      select: {
+        id: true,
+        jobId: true,
+        seekerId: true,
+        status: true,
+        contract: { select: { id: true } },
+        seeker: { select: { id: true } },
+        job: {
+          select: {
+            id: true,
+            employerId: true,
+            jobType: true,
+            engagementType: true,
+            freelanceCompensation: { select: { projectAmount: true, currency: true } },
+          },
+        },
+      },
+    });
+
+    if (!application) throw new EmployerApplicationNotFoundError();
+
+    if (application.job.jobType !== 'FREELANCE_PROJECT' || application.job.engagementType !== 'FREELANCE') {
+      const updated = await transaction.application.update({
+        where: { id: application.id },
+        data: { status: 'ACCEPTED' },
+        select: detailSelect,
+      });
+      return mapApplicationDetail(updated);
+    }
+
+    if (!application.job.freelanceCompensation) {
+      throw new FreelanceContractCreationError('Freelance compensation is unavailable for this job');
+    }
+
+    if (application.contract) {
+      const existing = await transaction.application.findFirst({
+        where: { id: application.id },
+        select: detailSelect,
+      });
+      return mapApplicationDetail(existing);
+    }
+
+    const agreedAmount = new Prisma.Decimal(application.job.freelanceCompensation.projectAmount);
+    const currency = application.job.freelanceCompensation.currency;
+    const platformFeePercentage = await getActivePlatformFeePercentage(transaction);
+    const platformFeeAmount = agreedAmount.mul(platformFeePercentage).dividedBy(100).toDecimalPlaces(2);
+    const seekerNetAmount = agreedAmount.minus(platformFeeAmount).toDecimalPlaces(2);
+
+    await transaction.contract.create({
+      data: {
+        applicationId: application.id,
+        jobId: application.job.id,
+        employerId: application.job.employerId,
+        seekerId: application.seeker.id,
+        type: 'FREELANCE_PROJECT',
+        status: 'PENDING',
+        freelanceDetails: {
+          create: {
+            agreedAmount,
+            currency,
+            platformFeePercentage,
+            platformFeeAmount,
+            seekerNetAmount,
+            employerConfirmedAt: null,
+            seekerConfirmedAt: null,
+            workStatus: 'PENDING',
+          },
+        },
+      },
+    });
+
+    const updated = await transaction.application.update({
+      where: { id: application.id },
+      data: { status: 'ACCEPTED' },
+      select: detailSelect,
+    });
+
+    return mapApplicationDetail(updated);
+  }).catch(async (error) => {
+    if (error?.code !== 'P2002') throw error;
+
+    const existing = await findOwnedApplication(employerId, jobId, applicationId, detailSelect);
+    if (!existing?.contract) throw error;
+    return mapApplicationDetail(existing);
+  });
 };
 
 export const getEmployerApplicationResume = async (employerId, jobId, applicationId) => {
   const application = await findOwnedApplication(employerId, jobId, applicationId, {
     id: true,
     resumeObjectKey: true,
+    seeker: { select: { seekerProfile: { select: { resumeObjectKey: true } } } },
   });
 
-  if (!application || !application.resumeObjectKey) {
+  const objectKey = application?.resumeObjectKey ?? application?.seeker?.seekerProfile?.resumeObjectKey;
+  if (!application || !objectKey) {
     throw new EmployerApplicationResumeUnavailableError();
   }
 
   return {
-    buffer: await readObject(application.resumeObjectKey),
-    objectKey: application.resumeObjectKey,
+    buffer: await readObject(objectKey),
+    objectKey,
   };
 };

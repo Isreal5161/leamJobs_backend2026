@@ -1,5 +1,6 @@
 import { prisma } from '../config/database.js';
 import { AuthenticationRequiredError } from './auth.service.js';
+import { createObjectKey, deleteObject, readObject, uploadObject } from './storage/storage.service.js';
 
 const profileSelect = {
   id: true,
@@ -10,6 +11,7 @@ const profileSelect = {
   companySize: true,
   location: true,
   companyLogoUrl: true,
+  companyLogoKey: true,
 };
 
 const userSelect = {
@@ -71,4 +73,60 @@ export const updateEmployerProfile = async (employerId, payload) => {
   });
 
   return mapResponse(user, profile);
+};
+
+export const updateEmployerCompanyLogoForUser = async (employerId, file, extension) => {
+  const current = await prisma.employerProfile.findUnique({
+    where: { userId: employerId },
+    select: { companyLogoKey: true },
+  });
+  if (!current) {
+    const error = new Error('Create a company profile before uploading a logo');
+    error.status = 400;
+    throw error;
+  }
+
+  const objectKey = createObjectKey({ userId: employerId, namespace: 'employers', category: 'company-logo', extension });
+  await uploadObject({ objectKey, buffer: file.buffer });
+
+  try {
+    const profile = await prisma.employerProfile.update({
+      where: { userId: employerId },
+      data: {
+        companyLogoUrl: '/api/employer/profile/logo',
+        companyLogoKey: objectKey,
+        updatedAt: new Date(),
+      },
+      select: profileSelect,
+    });
+    await deleteObject(current.companyLogoKey);
+    return mapProfile(profile);
+  } catch (error) {
+    await deleteObject(objectKey);
+    throw error;
+  }
+};
+
+export const deleteEmployerCompanyLogoForUser = async (employerId) => {
+  const profile = await prisma.employerProfile.findUnique({
+    where: { userId: employerId },
+    select: { companyLogoKey: true },
+  });
+  if (!profile?.companyLogoKey) return { companyLogoUrl: null };
+
+  await prisma.employerProfile.update({
+    where: { userId: employerId },
+    data: { companyLogoUrl: null, companyLogoKey: null, updatedAt: new Date() },
+  });
+  await deleteObject(profile.companyLogoKey);
+  return { companyLogoUrl: null };
+};
+
+export const readEmployerCompanyLogoForUser = async (employerId) => {
+  const profile = await prisma.employerProfile.findUnique({
+    where: { userId: employerId },
+    select: { companyLogoKey: true },
+  });
+  if (!profile?.companyLogoKey) return null;
+  return { buffer: await readObject(profile.companyLogoKey), objectKey: profile.companyLogoKey };
 };

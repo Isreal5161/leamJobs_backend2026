@@ -41,6 +41,8 @@ import { validateCreatePayoutAccount, validateUpdatePayoutAccount } from '../val
 import { validateSeekerJobsQuery } from '../validators/seekerJobs.validation.js';
 import { listSeekerRecommendations } from '../controllers/seekerRecommendations.controller.js';
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
+import { confirmSeekerContract, getSeekerContract, submitCompletion } from '../controllers/contract.controller.js';
+import { validateCompletionSubmission } from '../validators/contract.validation.js';
 
 const seekerRouter = Router();
 
@@ -89,5 +91,8 @@ seekerRouter.post('/payments/withdrawals', authenticate, requireRole('SEEKER'), 
 seekerRouter.get('/payout-accounts', authenticate, requireRole('SEEKER'), listSeekerPayoutAccounts);
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
+seekerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('SEEKER'), confirmSeekerContract);
+seekerRouter.get('/contracts/:contractId', authenticate, requireRole('SEEKER'), getSeekerContract);
+seekerRouter.post('/contracts/:contractId/submit-completion', authenticate, requireRole('SEEKER'), validateCompletionSubmission, submitCompletion);
 
 export default seekerRouter;

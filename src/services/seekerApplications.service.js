@@ -38,6 +38,7 @@ const applicationSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
+  contract: { select: { id: true } },
   job: {
     select: {
       id: true,
@@ -74,6 +75,7 @@ const mapApplication = (application) => ({
   status: application.status,
   appliedAt: application.createdAt,
   updatedAt: application.updatedAt,
+  contractId: application.contract?.id ?? null,
 });
 
 const findApplicationJob = async (jobId) => {

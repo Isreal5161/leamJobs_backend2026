@@ -17,7 +17,7 @@ const bucketName = process.env.R2_BUCKET_NAME || 'leamjobs-private-files';
 
 /**
  * Validate object key for path traversal attacks and invalid patterns.
- * Object keys must follow the format: seekers/{userId}/{category}/{uuid}.{ext}
+ * Object keys must follow the format: {namespace}/{userId}/{category}/{uuid}.{ext}
  */
 const validateObjectKey = (objectKey) => {
   if (!objectKey || typeof objectKey !== 'string') {
@@ -33,13 +33,13 @@ const validateObjectKey = (objectKey) => {
 };
 
 /**
- * Create a secure object key following the pattern: seekers/{userId}/{category}/{uuid}.{ext}
+ * Create a secure object key following the pattern: {namespace}/{userId}/{category}/{uuid}.{ext}
  */
-export const createObjectKey = ({ userId, category, extension }) => {
-  if (!userId || !category || !extension) {
+export const createObjectKey = ({ userId, category, extension, namespace = 'seekers' }) => {
+  if (!userId || !category || !extension || !/^[a-z0-9-]+$/.test(namespace)) {
     throw new Error('Missing required fields for object key creation');
   }
-  return `seekers/${userId}/${category}/${randomUUID()}.${extension}`;
+  return `${namespace}/${userId}/${category}/${randomUUID()}.${extension}`;
 };
 
 /**

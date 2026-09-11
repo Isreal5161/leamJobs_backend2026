@@ -9,6 +9,7 @@ import authRouter from './routes/auth.routes.js';
 import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
+import { flutterwaveWebhook } from './controllers/contract.controller.js';
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/employer', employerRouter);
 app.use('/api/jobs', publicJobsRouter);
 app.use('/api/seeker', seekerRouter);
+app.post('/api/payments/flutterwave/webhook', flutterwaveWebhook);
 
 // API v1 routes (will be added as features are implemented)
 app.use('/api/v1', (req, res) => {
