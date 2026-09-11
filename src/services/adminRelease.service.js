@@ -91,7 +91,7 @@ const mapReleaseCandidate = (contract) => ({
 export const listReleaseEligibleContracts = async () => {
   const contracts = await prisma.contract.findMany({
     where: {
-      type: 'FREELANCE_PROJECT',
+      type: { in: ['FREELANCE_PROJECT', 'CONTRACT_PROJECT'] },
       freelanceDetails: { escrow: { status: 'RELEASE_ELIGIBLE' } },
     },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -144,8 +144,8 @@ export const releaseContractFunds = async (contractId) => {
       return { alreadyReleased: true, escrow: releaseResult(escrow) };
     }
 
-    if (contract.type !== 'FREELANCE_PROJECT') {
-      throw new AdminReleaseConflictError('Only freelance contracts can be released');
+    if (!['FREELANCE_PROJECT', 'CONTRACT_PROJECT'].includes(contract.type)) {
+      throw new AdminReleaseConflictError('Only protected paid-work contracts can be released');
     }
     if (!['ACTIVE', 'IN_PROGRESS'].includes(contract.status)) {
       throw new AdminReleaseConflictError('The contract is not in a releasable state');

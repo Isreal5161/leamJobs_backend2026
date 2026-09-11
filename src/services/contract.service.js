@@ -9,6 +9,8 @@ export const contractSelect = {
   seekerId: true,
   type: true,
   status: true,
+  startDate: true,
+  expectedEndDate: true,
   job: { select: { id: true, title: true } },
   employer: { select: { id: true, firstName: true, lastName: true } },
   seeker: { select: { id: true, firstName: true, lastName: true } },
@@ -19,6 +21,8 @@ export const contractSelect = {
       id: true,
       agreedAmount: true,
       currency: true,
+      duration: true,
+      startMode: true,
       platformFeePercentage: true,
       platformFeeAmount: true,
       seekerNetAmount: true,
@@ -93,6 +97,8 @@ export const mapContract = (contract) => ({
   seekerId: contract.seekerId,
   type: contract.type,
   status: contract.status,
+  startDate: contract.startDate,
+  expectedEndDate: contract.expectedEndDate,
   job: contract.job,
   employer: contract.employer,
   seeker: contract.seeker,
@@ -102,6 +108,8 @@ export const mapContract = (contract) => ({
     id: contract.freelanceDetails.id,
     agreedAmount: decimalToString(contract.freelanceDetails.agreedAmount),
     currency: contract.freelanceDetails.currency,
+    duration: contract.freelanceDetails.duration,
+    startMode: contract.freelanceDetails.startMode,
     platformFeePercentage: decimalToString(contract.freelanceDetails.platformFeePercentage),
     platformFeeAmount: decimalToString(contract.freelanceDetails.platformFeeAmount),
     seekerNetAmount: decimalToString(contract.freelanceDetails.seekerNetAmount),
@@ -170,6 +178,9 @@ export const confirmContract = async ({ contractId, userId, role }) => {
     if (contract.status === 'ACTIVE') return mapContract(contract);
     if (contract.status !== 'PENDING') {
       throw new ContractConfirmationError('This contract cannot be confirmed in its current state');
+    }
+    if (contract.type === 'CONTRACT_PROJECT') {
+      throw new ContractConfirmationError('Contract Jobs are activated after verified payment');
     }
     if (!contract.freelanceDetails) {
       throw new ContractConfirmationError('Freelance contract details are unavailable');

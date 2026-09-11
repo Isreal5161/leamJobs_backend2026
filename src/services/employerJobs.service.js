@@ -35,7 +35,7 @@ const jobSelect = {
     select: { salaryMin: true, salaryMax: true, currency: true, salaryPeriod: true },
   },
   contractCompensation: {
-    select: { amount: true, currency: true, duration: true },
+    select: { amount: true, currency: true, duration: true, startMode: true, scheduledStartDate: true, expectedCompletionDate: true },
   },
   freelanceCompensation: {
     select: { projectAmount: true, currency: true },
@@ -82,6 +82,9 @@ const mapCompensation = (job) => {
       amount: decimalToString(job.contractCompensation.amount),
       currency: job.contractCompensation.currency,
       duration: job.contractCompensation.duration,
+      startMode: job.contractCompensation.startMode,
+      scheduledStartDate: job.contractCompensation.scheduledStartDate,
+      expectedCompletionDate: job.contractCompensation.expectedCompletionDate,
     } : null;
   }
 
@@ -133,12 +136,16 @@ const compensationData = (payload) => {
   }
 
   if (payload.engagementType === 'CONTRACT') {
+    const contract = payload.contractCompensation;
     return {
       contractCompensation: {
         create: {
-          amount: payload.contractCompensation.amount,
-          currency: payload.contractCompensation.currency,
-          duration: payload.contractCompensation.duration,
+          amount: contract.amount,
+          currency: contract.currency,
+          duration: contract.duration,
+          ...(contract.startMode ? { startMode: contract.startMode } : {}),
+          ...(contract.scheduledStartDate !== undefined ? { scheduledStartDate: contract.scheduledStartDate } : {}),
+          ...(contract.expectedCompletionDate !== undefined ? { expectedCompletionDate: contract.expectedCompletionDate } : {}),
         },
       },
     };

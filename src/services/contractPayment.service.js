@@ -54,6 +54,8 @@ const lockPaymentContract = async (transaction, contractId) => {
     where: { id: contractId },
     select: {
       id: true,
+      applicationId: true,
+      type: true,
       status: true,
       employerId: true,
       employer: { select: { email: true } },
@@ -81,7 +83,11 @@ const lockPaymentContract = async (transaction, contractId) => {
 
 const assertPaymentContract = (contract, employerId) => {
   if (!contract || contract.employerId !== employerId) throw new ContractNotFoundError();
-  if (contract.status !== 'ACTIVE') throw new ContractPaymentError('Only active contracts can be funded');
+  if (contract.type === 'CONTRACT_PROJECT') {
+    if (contract.status !== 'PENDING') throw new ContractPaymentError('This Contract Job is not awaiting payment');
+  } else if (contract.status !== 'ACTIVE') {
+    throw new ContractPaymentError('Only active contracts can be funded');
+  }
   if (!contract.freelanceDetails?.escrow) throw new ContractPaymentError('The contract escrow is unavailable', 422);
   if (!['UNFUNDED', 'FUNDING'].includes(contract.freelanceDetails.escrow.status)) {
     throw new ContractPaymentError('This contract escrow is already funded');
@@ -243,6 +249,21 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       where: { id: escrow.id },
       data: { status: 'FUNDED', fundedAmount: new Prisma.Decimal(escrow.grossAmount), fundedAt: new Date() },
     });
+    const finalizedContract = await transaction.contract.findUnique({
+      where: { id: resolvedContractId },
+      select: { type: true, applicationId: true, status: true },
+    });
+    if (finalizedContract?.type === 'CONTRACT_PROJECT') {
+      if (finalizedContract.status !== 'PENDING') {
+        throw new ContractPaymentError('Contract Job is already finalized');
+      }
+      await transaction.contract.update({ where: { id: resolvedContractId }, data: { status: 'ACTIVE' } });
+      const accepted = await transaction.application.updateMany({
+        where: { id: finalizedContract.applicationId, status: 'PAYMENT_PENDING' },
+        data: { status: 'ACCEPTED' },
+      });
+      if (accepted.count !== 1) throw new ContractPaymentError('Contract Job application is not awaiting payment');
+    }
     return { payment: paymentResponse(updatedPayment), contract: await getContractForPayment(resolvedContractId, employerId, transaction) };
   });
 };

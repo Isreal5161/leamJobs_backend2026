@@ -12,6 +12,7 @@ import {
 	getApplication,
 	getApplicationResume,
 	listApplications,
+	selectContractApplication,
 	updateApplicationStatus,
 } from '../controllers/employerApplications.controller.js';
 import { deleteLogo, getLogo, getProfile, updateProfile, uploadLogo } from '../controllers/employerProfile.controller.js';
@@ -54,6 +55,7 @@ employerRouter.patch('/jobs/:jobId/close', authenticate, requireRole('EMPLOYER')
 employerRouter.get('/jobs/:jobId/applications', authenticate, requireRole('EMPLOYER'), listApplications);
 employerRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requireRole('EMPLOYER'), getApplication);
 employerRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('EMPLOYER'), validateEmployerApplicationStatus, updateApplicationStatus);
+employerRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('EMPLOYER'), selectContractApplication);
 employerRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('EMPLOYER'), getApplicationResume);
 employerRouter.post('/jobs/:jobId/applications/:applicationId/conversation', authenticate, requireRole('EMPLOYER'), createApplicationConversation);
 employerRouter.get('/conversations', authenticate, requireRole('EMPLOYER'), listConversations);

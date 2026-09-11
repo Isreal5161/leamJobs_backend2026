@@ -27,7 +27,7 @@ const jobSelect = {
     select: { salaryMin: true, salaryMax: true, currency: true, salaryPeriod: true },
   },
   contractCompensation: {
-    select: { amount: true, currency: true, duration: true },
+    select: { amount: true, currency: true, duration: true, startMode: true, scheduledStartDate: true, expectedCompletionDate: true },
   },
   freelanceCompensation: {
     select: { projectAmount: true, currency: true },
@@ -74,6 +74,9 @@ const mapCompensation = (job) => {
       amount: decimalToString(job.contractCompensation.amount),
       currency: job.contractCompensation.currency,
       duration: job.contractCompensation.duration,
+      startMode: job.contractCompensation.startMode,
+      scheduledStartDate: job.contractCompensation.scheduledStartDate,
+      expectedCompletionDate: job.contractCompensation.expectedCompletionDate,
     } : null;
   }
 

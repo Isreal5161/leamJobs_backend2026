@@ -9,6 +9,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
   wallet: { findUnique: jest.fn() },
+  escrow: { aggregate: jest.fn() },
   financialLedgerEntry: { aggregate: jest.fn(), findMany: jest.fn() },
   withdrawal: { findMany: jest.fn() },
 };
@@ -33,6 +34,7 @@ const money = (value) => ({ toString: () => value });
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.wallet.findUnique.mockResolvedValue({ id: walletId, currency: 'NGN', availableBalance: money('1000.00'), pendingWithdrawalBalance: money('250.00') });
+  mockPrisma.escrow.aggregate.mockResolvedValue({ _sum: { seekerNetAmount: money('300000.00') } });
   mockPrisma.financialLedgerEntry.aggregate.mockResolvedValue({ _sum: { amount: money('1250.00') } });
   mockPrisma.financialLedgerEntry.findMany.mockResolvedValue([]);
   mockPrisma.withdrawal.findMany.mockResolvedValue([]);
@@ -49,6 +51,7 @@ describe('seeker read-only payment endpoints', () => {
       currency: 'NGN',
       availableBalance: '1000.00',
       pendingWithdrawalBalance: '250.00',
+      pendingEarnings: '300000.00',
       totalEarnings: '1250.00',
       totalWithdrawn: '1250.00',
     });
@@ -67,7 +70,7 @@ describe('seeker read-only payment endpoints', () => {
     const payments = await request(app).get('/api/seeker/payments').set('Authorization', `Bearer ${token()}`);
 
     expect(summary.status).toBe(200);
-    expect(summary.body.data).toEqual({ currency: null, availableBalance: '0.00', pendingWithdrawalBalance: '0.00', totalEarnings: '0.00', totalWithdrawn: '0.00' });
+    expect(summary.body.data).toEqual({ currency: null, availableBalance: '0.00', pendingWithdrawalBalance: '0.00', pendingEarnings: '0.00', totalEarnings: '0.00', totalWithdrawn: '0.00' });
     expect(payments.body.data).toEqual({ items: [], nextCursor: null });
   });
 

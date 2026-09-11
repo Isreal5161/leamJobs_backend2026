@@ -2,6 +2,7 @@ import {
   getEmployerApplication,
   getEmployerApplicationResume,
   listEmployerApplications,
+  selectContractJobApplication,
   updateEmployerApplicationStatus,
 } from '../services/employerApplications.service.js';
 import { getOrCreateEmployerConversationForApplication } from '../services/conversation.service.js';
@@ -28,6 +29,15 @@ export const updateApplicationStatus = async (req, res, next) => {
   try {
     const application = await updateEmployerApplicationStatus(req.user.sub, req.params.jobId, req.params.applicationId, req.body.status);
     return res.status(200).json({ success: true, data: { application } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const selectContractApplication = async (req, res, next) => {
+  try {
+    const selection = await selectContractJobApplication(req.user.sub, req.params.jobId, req.params.applicationId);
+    return res.status(200).json({ success: true, data: { selection } });
   } catch (error) {
     return next(error);
   }

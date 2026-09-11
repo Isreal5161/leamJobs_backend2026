@@ -29,6 +29,14 @@ export class FreelanceContractCreationError extends Error {
   }
 }
 
+export class ContractJobSelectionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ContractJobSelectionError';
+    this.status = 409;
+  }
+}
+
 const applicantSelect = {
   id: true,
   firstName: true,
@@ -227,6 +235,8 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
             employerId: true,
             jobType: true,
             engagementType: true,
+            status: true,
+            contractCompensation: { select: { amount: true, currency: true, duration: true, startMode: true, scheduledStartDate: true, expectedCompletionDate: true } },
             freelanceCompensation: { select: { projectAmount: true, currency: true } },
           },
         },
@@ -234,6 +244,10 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
     });
 
     if (!application) throw new EmployerApplicationNotFoundError();
+
+    if (application.job.engagementType === 'CONTRACT') {
+      throw new ContractJobSelectionError('Use the Contract Job selection and payment flow for contract applications');
+    }
 
     if (application.job.jobType !== 'FREELANCE_PROJECT' || application.job.engagementType !== 'FREELANCE') {
       const updated = await transaction.application.update({
@@ -298,6 +312,117 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
     const existing = await findOwnedApplication(employerId, jobId, applicationId, detailSelect);
     if (!existing?.contract) throw error;
     return mapApplicationDetail(existing);
+  });
+};
+
+export const selectContractJobApplication = async (employerId, jobId, applicationId) => {
+  return prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Job"
+      WHERE "id" = ${jobId}
+      FOR UPDATE
+    `;
+
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Application"
+      WHERE "id" = ${applicationId}
+      FOR UPDATE
+    `;
+
+    const application = await transaction.application.findFirst({
+      where: ownedApplicationWhere(employerId, jobId, applicationId),
+      select: {
+        id: true,
+        seekerId: true,
+        status: true,
+        contract: { select: { id: true } },
+        job: {
+          select: {
+            id: true,
+            employerId: true,
+            status: true,
+            jobType: true,
+            engagementType: true,
+            contractCompensation: { select: { amount: true, currency: true, duration: true, startMode: true, scheduledStartDate: true, expectedCompletionDate: true } },
+          },
+        },
+      },
+    });
+
+    if (!application) throw new EmployerApplicationNotFoundError();
+    if (application.job.status !== 'APPROVED') throw new ContractJobSelectionError('The job must be approved before selecting an applicant');
+    if (application.job.jobType !== 'NORMAL_EMPLOYMENT' || application.job.engagementType !== 'CONTRACT') {
+      throw new ContractJobSelectionError('This selection flow is only for Contract Jobs');
+    }
+    if (!application.job.contractCompensation) throw new ContractJobSelectionError('Contract compensation is unavailable for this job');
+    const existingContract = await transaction.contract.findFirst({
+      where: { jobId: application.job.id, type: 'CONTRACT_PROJECT' },
+      select: { id: true, applicationId: true },
+    });
+    if (existingContract && existingContract.applicationId !== application.id) {
+      throw new ContractJobSelectionError('Another candidate has already been selected for this job.');
+    }
+    if (application.contract) throw new ContractJobSelectionError('This application already has an engagement');
+    if (!['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'PAYMENT_PENDING'].includes(application.status)) {
+      throw new ContractJobSelectionError('This application is not eligible for selection');
+    }
+
+    const compensation = application.job.contractCompensation;
+    const agreedAmount = new Prisma.Decimal(compensation.amount);
+    const platformFeePercentage = await getActivePlatformFeePercentage(transaction);
+    const platformFeeAmount = agreedAmount.mul(platformFeePercentage).dividedBy(100).toDecimalPlaces(2);
+    const seekerNetAmount = agreedAmount.minus(platformFeeAmount).toDecimalPlaces(2);
+    const selectedAt = new Date();
+    const contract = await transaction.contract.create({
+      data: {
+        applicationId: application.id,
+        jobId: application.job.id,
+        employerId: application.job.employerId,
+        seekerId: application.seekerId,
+        type: 'CONTRACT_PROJECT',
+        status: 'PENDING',
+        startDate: compensation.startMode === 'IMMEDIATE' ? selectedAt : compensation.scheduledStartDate,
+        expectedEndDate: compensation.expectedCompletionDate,
+        freelanceDetails: {
+          create: {
+            agreedAmount,
+            currency: compensation.currency,
+            duration: compensation.duration,
+            startMode: compensation.startMode,
+            platformFeePercentage,
+            platformFeeAmount,
+            seekerNetAmount,
+            expectedCompletionDate: compensation.expectedCompletionDate,
+            workStatus: 'PENDING',
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    await transaction.escrow.create({
+      data: {
+        freelanceContractId: contract.id,
+        grossAmount: agreedAmount,
+        platformFeeAmount,
+        seekerNetAmount,
+        currency: compensation.currency,
+        status: 'UNFUNDED',
+      },
+      select: { id: true, status: true },
+    });
+
+    await transaction.application.update({
+      where: { id: application.id },
+      data: { status: 'PAYMENT_PENDING' },
+    });
+
+    return { contractId: contract.id, applicationId: application.id, status: 'PAYMENT_PENDING' };
+  }).catch(async (error) => {
+    if (error?.code !== 'P2002') throw error;
+    throw new ContractJobSelectionError('This application has already been selected');
   });
 };
 

@@ -41,7 +41,7 @@ const jobSelect = {
     select: { projectAmount: true, currency: true },
   },
   contractCompensation: {
-    select: { amount: true, currency: true, duration: true },
+    select: { amount: true, currency: true, duration: true, startMode: true, scheduledStartDate: true, expectedCompletionDate: true },
   },
 };
 
@@ -95,6 +95,9 @@ const mapCompensation = (job) => {
       salaryPeriod: compensation.duration ?? 'contract',
       currency: compensation.currency,
       duration: compensation.duration,
+      startMode: compensation.startMode,
+      scheduledStartDate: compensation.scheduledStartDate,
+      expectedCompletionDate: compensation.expectedCompletionDate,
     };
   }
 

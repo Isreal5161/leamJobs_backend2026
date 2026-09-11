@@ -27,6 +27,18 @@ const sumLedger = async (walletId, entryType) => {
   return decimalToString(result._sum.amount);
 };
 
+const sumPendingEarnings = async (seekerId, currency) => {
+  const result = await prisma.escrow.aggregate({
+    where: {
+      currency,
+      status: { in: ['FUNDED', 'RELEASE_ELIGIBLE'] },
+      freelanceContract: { contract: { seekerId } },
+    },
+    _sum: { seekerNetAmount: true },
+  });
+  return decimalToString(result._sum.seekerNetAmount);
+};
+
 export const getSeekerPaymentSummary = async (seekerId) => {
   const wallet = await walletForSeeker(seekerId);
   if (!wallet) {
@@ -34,12 +46,14 @@ export const getSeekerPaymentSummary = async (seekerId) => {
       currency: null,
       availableBalance: '0.00',
       pendingWithdrawalBalance: '0.00',
+      pendingEarnings: '0.00',
       totalEarnings: '0.00',
       totalWithdrawn: '0.00',
     };
   }
 
-  const [totalEarnings, totalWithdrawn] = await Promise.all([
+  const [pendingEarnings, totalEarnings, totalWithdrawn] = await Promise.all([
+    sumPendingEarnings(seekerId, wallet.currency),
     sumLedger(wallet.id, EARNINGS_ENTRY_TYPE),
     sumLedger(wallet.id, WITHDRAWAL_ENTRY_TYPE),
   ]);
@@ -48,6 +62,7 @@ export const getSeekerPaymentSummary = async (seekerId) => {
     currency: wallet.currency,
     availableBalance: decimalToString(wallet.availableBalance),
     pendingWithdrawalBalance: decimalToString(wallet.pendingWithdrawalBalance),
+    pendingEarnings,
     totalEarnings,
     totalWithdrawn,
   };

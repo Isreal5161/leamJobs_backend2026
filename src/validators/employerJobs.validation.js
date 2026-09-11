@@ -29,6 +29,9 @@ const jobSchema = z.object({
     amount: amountSchema,
     currency: currencySchema.default('NGN'),
     duration: z.string().trim().min(1, 'Contract duration is required').max(100, 'Contract duration must be 100 characters or fewer'),
+    startMode: z.enum(['IMMEDIATE', 'SCHEDULED']).optional(),
+    scheduledStartDate: z.coerce.date().nullable().optional(),
+    expectedCompletionDate: z.coerce.date().nullable().optional(),
   }).nullable().optional(),
   freelanceCompensation: z.object({
     projectAmount: amountSchema,
@@ -59,6 +62,21 @@ const jobSchema = z.object({
 
   if (data.engagementType === 'CONTRACT' && !data.contractCompensation) {
     context.addIssue({ code: 'custom', path: ['contractCompensation'], message: 'Contract compensation is required' });
+  }
+
+  if (data.engagementType === 'CONTRACT' && data.contractCompensation) {
+    const compensation = data.contractCompensation;
+    const startMode = compensation.startMode ?? 'IMMEDIATE';
+    if (startMode === 'SCHEDULED' && !compensation.scheduledStartDate) {
+      context.addIssue({ code: 'custom', path: ['contractCompensation', 'scheduledStartDate'], message: 'Scheduled start date is required' });
+    }
+    if (startMode === 'IMMEDIATE' && compensation.scheduledStartDate) {
+      context.addIssue({ code: 'custom', path: ['contractCompensation', 'scheduledStartDate'], message: 'Immediate contracts cannot have a scheduled start date' });
+    }
+    if (compensation.scheduledStartDate && compensation.expectedCompletionDate
+      && compensation.expectedCompletionDate <= compensation.scheduledStartDate) {
+      context.addIssue({ code: 'custom', path: ['contractCompensation', 'expectedCompletionDate'], message: 'Expected completion must be after scheduled start' });
+    }
   }
 
   if (data.engagementType === 'CONTRACT' && (data.monthlyCompensation || data.freelanceCompensation)) {
