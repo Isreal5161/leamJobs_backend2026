@@ -20,8 +20,8 @@ const trend = async (table, from, to, granularity) => {
   const rows = await prisma.$queryRaw(Prisma.sql`
     WITH buckets AS (
       SELECT generate_series(
-        date_trunc(${granularity}, ${from}::timestamptz, 'UTC'),
-        date_trunc(${granularity}, (${to}::timestamptz - interval '1 microsecond'), 'UTC'),
+        date_trunc(${granularity}, ${from}::timestamptz),
+        date_trunc(${granularity}, (${to}::timestamptz - interval '1 microsecond')),
         CASE ${granularity}
           WHEN 'day' THEN interval '1 day'
           WHEN 'week' THEN interval '1 week'
@@ -29,7 +29,7 @@ const trend = async (table, from, to, granularity) => {
         END
       ) AS bucket
     ), counts AS (
-      SELECT date_trunc(${granularity}, "createdAt" AT TIME ZONE 'UTC', 'UTC') AS bucket, COUNT(*)::int AS count
+      SELECT date_trunc(${granularity}, "createdAt" AT TIME ZONE 'UTC') AS bucket, COUNT(*)::int AS count
       FROM ${Prisma.raw(`"${table}"`)}
       WHERE "createdAt" >= (${from}::timestamptz AT TIME ZONE 'UTC')
         AND "createdAt" < (${to}::timestamptz AT TIME ZONE 'UTC')

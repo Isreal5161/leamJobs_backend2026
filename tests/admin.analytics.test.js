@@ -120,6 +120,7 @@ test('trend SQL uses explicit UTC casts and reporting-range bucket clamping', as
   const sqlText = mockPrisma.$queryRaw.mock.calls
     .map(([query]) => query.strings.join(' '))
     .join(' ');
+  expect(sqlText).not.toMatch(/date_trunc\s*\([^)]*,\s*[^)]*,\s*'UTC'\s*\)/i);
   expect(sqlText).toContain('::timestamptz');
   expect(sqlText).toContain("AT TIME ZONE 'UTC'");
   expect(sqlText).toContain('GREATEST(buckets.bucket');
