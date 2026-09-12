@@ -10,6 +10,7 @@ import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
 import { flutterwaveWebhook } from './controllers/contract.controller.js';
+import { readSiteContent } from './controllers/siteContent.controller.js';
 
 const app = express();
 
@@ -69,6 +70,7 @@ app.get('/api/health/db', async (req, res) => {
 });
 
 app.use('/api/admin', adminRouter);
+app.get('/api/content', readSiteContent);
 app.use('/api/auth', authRouter);
 app.use('/api/employer', employerRouter);
 app.use('/api/jobs', publicJobsRouter);

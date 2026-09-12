@@ -12,6 +12,7 @@
     "dev": "nodemon src/server.js",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
     "admin:bootstrap": "node src/scripts/bootstrap-admin.js",
+    "content:seed": "node src/scripts/seed-site-content.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
