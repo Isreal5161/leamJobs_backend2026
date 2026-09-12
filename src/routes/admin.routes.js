@@ -13,7 +13,7 @@ import { requireRole } from '../middleware/authorization.middleware.js';
 import { listReleaseCandidates, releaseContract } from '../controllers/adminRelease.controller.js';
 import { listUsers } from '../controllers/adminUsers.controller.js';
 import { validateAdminUsersQuery } from '../validators/adminUsers.validation.js';
-import { getCompanyLogo, listCompanies } from '../controllers/adminCompanies.controller.js';
+import { getCompanyLogo, getLeamJobsEmployer, listCompanies } from '../controllers/adminCompanies.controller.js';
 import { validateAdminCompaniesQuery } from '../validators/adminCompanies.validation.js';
 import { listSeekers } from '../controllers/adminSeekers.controller.js';
 import { validateAdminSeekersQuery } from '../validators/adminSeekers.validation.js';
@@ -25,6 +25,7 @@ import { validateAdminAnalyticsQuery } from '../validators/adminAnalytics.valida
 const adminRouter = Router();
 
 adminRouter.get('/companies', authenticate, requireRole('ADMIN'), validateAdminCompaniesQuery, listCompanies);
+adminRouter.get('/companies/leamjobs', authenticate, requireRole('ADMIN'), getLeamJobsEmployer);
 adminRouter.get('/companies/:userId/logo', authenticate, requireRole('ADMIN'), getCompanyLogo);
 adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);

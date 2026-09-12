@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import { getLeamJobsEmployerIdentity } from './leamjobsEmployer.service.js';
 
 const jobSelect = {
   id: true,
@@ -194,6 +195,22 @@ const jobData = (employerId, payload) => ({
   applicationDeadline: payload.applicationDeadline || null,
 });
 
+const resolveRequestedEmployerId = async (employerId) => {
+  if (!employerId || typeof employerId !== 'string') {
+    return null;
+  }
+
+  const normalized = employerId.trim();
+  const sentinelValues = new Set(['', 'leamjobs', 'LEAMJOBS', '__LEAMJOBS__', 'leamjobs-employer', 'LEAMJOBS-EMPLOYER']);
+
+  if (sentinelValues.has(normalized)) {
+    const leamJobsEmployer = await getLeamJobsEmployerIdentity();
+    return leamJobsEmployer.userId;
+  }
+
+  return normalized;
+};
+
 const loadEmployerForAdminJob = async (employerId) => prisma.user.findUnique({
   where: { id: employerId },
   select: {
@@ -240,7 +257,13 @@ export const getAdminJob = async (jobId) => {
 };
 
 export const createAdminJob = async (adminId, employerId, payload) => {
-  const employer = await loadEmployerForAdminJob(employerId);
+  const resolvedEmployerId = await resolveRequestedEmployerId(employerId);
+
+  if (!resolvedEmployerId) {
+    throw new AdminInvalidEmployerError();
+  }
+
+  const employer = await loadEmployerForAdminJob(resolvedEmployerId);
 
   if (!employer || employer.role !== 'EMPLOYER' || !employer.employerProfile) {
     throw new AdminInvalidEmployerError();
@@ -248,7 +271,7 @@ export const createAdminJob = async (adminId, employerId, payload) => {
 
   const created = await prisma.job.create({
     data: {
-      ...jobData(employerId, payload),
+      ...jobData(resolvedEmployerId, payload),
       status: 'APPROVED',
       reviewedById: adminId,
       reviewedAt: new Date(),

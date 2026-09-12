@@ -10,6 +10,11 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const mockPrisma = {
   user: {
     findUnique: jest.fn(),
+    create: jest.fn(),
+  },
+  employerProfile: {
+    upsert: jest.fn(),
+    findUnique: jest.fn(),
   },
   job: {
     findMany: jest.fn(),
@@ -36,6 +41,7 @@ jest.unstable_mockModule('../src/config/database.js', () => ({
 }));
 
 const { default: app } = await import('../src/app.js');
+const { ensureLeamJobsEmployerIdentity } = await import('../src/services/leamjobsEmployer.service.js');
 
 const employerA = '11111111-1111-4111-8111-111111111111';
 const adminId = '99999999-9999-4999-8999-999999999999';
@@ -78,6 +84,8 @@ const jobRecord = (overrides = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.user.findUnique.mockResolvedValue(null);
+  mockPrisma.user.create.mockResolvedValue(null);
+  mockPrisma.employerProfile.upsert.mockResolvedValue(null);
   mockPrisma.job.findMany.mockResolvedValue([]);
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.job.findUnique.mockResolvedValue(null);
@@ -217,6 +225,99 @@ describe('Admin job creation and editing', () => {
     expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: employerA },
     }));
+  });
+
+  test('creates a canonical LeamJobs employer identity when the admin posts as LeamJobs', async () => {
+    const leamJobsEmployerId = 'leamjobs-employer-id';
+    mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+      if (where?.email === 'hiring@leamjobs.com') {
+        return null;
+      }
+      if (where?.id === leamJobsEmployerId) {
+        return { id: leamJobsEmployerId, role: 'EMPLOYER', employerProfile: { id: 'leamjobs-profile' } };
+      }
+      if (where?.id === employerA) {
+        return { id: employerA, role: 'EMPLOYER', employerProfile: { id: 'profile-1' } };
+      }
+      return null;
+    });
+    mockPrisma.user.create.mockResolvedValue({ id: leamJobsEmployerId, email: 'hiring@leamjobs.com', role: 'EMPLOYER', firstName: 'LeamJobs', lastName: 'Company' });
+    mockPrisma.employerProfile.upsert.mockResolvedValue({ id: 'leamjobs-profile', userId: leamJobsEmployerId, companyName: 'LeamJobs' });
+    mockPrisma.job.create.mockImplementation(async ({ data }) => ({
+      id: jobA,
+      employerId: leamJobsEmployerId,
+      title: data.title,
+      description: data.description,
+      location: data.location,
+      engagementType: data.engagementType,
+      jobType: data.jobType,
+      skills: data.skills,
+      requirements: data.requirements,
+      responsibilities: data.responsibilities,
+      benefits: data.benefits,
+      status: data.status,
+      reviewedById: data.reviewedById,
+      reviewedAt: data.reviewedAt,
+      employer: { employerProfile: { companyName: 'LeamJobs' } },
+      employmentCompensation: data.employmentCompensation.create,
+      contractCompensation: null,
+      freelanceCompensation: null,
+      _count: { applications: 0 },
+    }));
+
+    const response = await request(app)
+      .post('/api/admin/jobs')
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+      .send({
+        title: 'LeamJobs Growth Designer',
+        description: 'Help shape the next generation of hiring experiences.',
+        location: 'Remote',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Design leadership'],
+        responsibilities: ['Build product experiences'],
+        skills: ['Design'],
+        benefits: ['Flexible working'],
+        monthlyCompensation: { salaryMin: 250000, salaryMax: 450000, currency: 'NGN' },
+        employerId: leamJobsEmployerId,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.employerId).toBe(leamJobsEmployerId);
+    expect(response.body.data.job.company.name).toBe('LeamJobs');
+    expect(response.body.data.job.status).toBe('APPROVED');
+  });
+
+  test('reuses the canonical LeamJobs employer identity without creating duplicates', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'leamjobs-employer-id',
+      role: 'EMPLOYER',
+      employerProfile: { id: 'leamjobs-profile', companyName: 'LeamJobs' },
+    });
+
+    const result = await ensureLeamJobsEmployerIdentity();
+
+    expect(result.created).toBe(false);
+    expect(result.companyName).toBe('LeamJobs');
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  test('recovers cleanly when a concurrent create hits the unique email constraint', async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'leamjobs-employer-id',
+        role: 'EMPLOYER',
+        employerProfile: { id: 'leamjobs-profile', companyName: 'LeamJobs' },
+      });
+
+    mockPrisma.user.create.mockRejectedValueOnce({ code: 'P2002', message: 'Unique constraint failed on email' });
+
+    const result = await ensureLeamJobsEmployerIdentity();
+
+    expect(result.created).toBe(false);
+    expect(result.companyName).toBe('LeamJobs');
+    expect(mockPrisma.user.create).toHaveBeenCalledTimes(1);
   });
 
   test('updates an approved admin job without creating a duplicate row', async () => {
