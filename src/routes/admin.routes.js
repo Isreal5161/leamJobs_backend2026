@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import {
   approveJob,
+  createJob,
   decideJob,
   getJob,
   listJobs,
   rejectJob,
+  updateJob,
 } from '../controllers/adminJobs.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
@@ -28,8 +30,10 @@ adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsers
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
 adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
+adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
 adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), listJobs);
 adminRouter.get('/jobs/:jobId', authenticate, requireRole('ADMIN'), getJob);
+adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob);
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
 adminRouter.patch('/jobs/:jobId/decision', authenticate, requireRole('ADMIN'), decideJob);

@@ -1,10 +1,13 @@
 import {
   approveAdminJob,
   approveOrRejectJob,
+  createAdminJob,
   getAdminJob,
   listAdminJobs,
   rejectAdminJob,
+  updateAdminJob,
 } from '../services/adminJobs.service.js';
+import { jobSchema } from '../validators/employerJobs.validation.js';
 
 const ADMIN_JOB_STATUSES = new Set(['PENDING', 'APPROVED', 'REJECTED', 'CLOSED']);
 const ADMIN_DECISION_STATUSES = new Set(['APPROVED', 'REJECTED']);
@@ -61,9 +64,52 @@ export const listJobs = async (req, res, next) => {
   }
 };
 
+export const createJob = async (req, res, next) => {
+  try {
+    const { employerId, ...jobPayload } = req.body ?? {};
+
+    if (!employerId || typeof employerId !== 'string' || employerId.trim() === '') {
+      return res.status(400).json({ message: 'employerId is required' });
+    }
+
+    const result = jobSchema.safeParse(jobPayload);
+
+    if (!result.success) {
+      return res.status(400).json({
+        message: 'Validation failed',
+        errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+      });
+    }
+
+    const job = await createAdminJob(req.user.sub, employerId.trim(), result.data);
+    return res.status(201).json({ success: true, data: { job } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const getJob = async (req, res, next) => {
   try {
     const job = await getAdminJob(req.params.jobId);
+    return res.status(200).json({ success: true, data: { job } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const updateJob = async (req, res, next) => {
+  try {
+    const { employerId, reviewedById, status, createdBy, ...jobPayload } = req.body ?? {};
+    const result = jobSchema.safeParse(jobPayload);
+
+    if (!result.success) {
+      return res.status(400).json({
+        message: 'Validation failed',
+        errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+      });
+    }
+
+    const job = await updateAdminJob(req.user.sub, req.params.jobId, result.data);
     return res.status(200).json({ success: true, data: { job } });
   } catch (error) {
     return next(error);

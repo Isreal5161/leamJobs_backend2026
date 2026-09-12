@@ -8,15 +8,26 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: {
+    findUnique: jest.fn(),
+  },
   job: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
+    create: jest.fn(),
+  },
+  application: {
+    count: jest.fn(),
+  },
+  contract: {
+    count: jest.fn(),
   },
   employmentCompensation: { deleteMany: jest.fn() },
   contractCompensation: { deleteMany: jest.fn() },
   freelanceCompensation: { deleteMany: jest.fn() },
+  $transaction: jest.fn(),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -66,10 +77,192 @@ const jobRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue(null);
   mockPrisma.job.findMany.mockResolvedValue([]);
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.job.findUnique.mockResolvedValue(null);
   mockPrisma.job.update.mockResolvedValue(null);
+  mockPrisma.job.create.mockResolvedValue(null);
+  mockPrisma.application.count.mockResolvedValue(0);
+  mockPrisma.contract.count.mockResolvedValue(0);
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback({
+    employmentCompensation: mockPrisma.employmentCompensation,
+    contractCompensation: mockPrisma.contractCompensation,
+    freelanceCompensation: mockPrisma.freelanceCompensation,
+    job: { update: mockPrisma.job.update },
+  }));
+});
+
+describe('Admin job creation and editing', () => {
+  test('rejects unauthenticated POST /api/admin/jobs', async () => {
+    const response = await request(app)
+      .post('/api/admin/jobs')
+      .send({
+        title: 'Ops Manager',
+        description: 'Run the business.',
+        location: 'Lagos',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Leadership'],
+        responsibilities: ['Coordinate teams'],
+        skills: ['Operations'],
+        benefits: ['Bonus'],
+        monthlyCompensation: { salaryMin: 200000, salaryMax: 300000, currency: 'NGN' },
+        employerId: employerA,
+      });
+
+    expect(response.status).toBe(401);
+  });
+
+  test('rejects non-admin POST /api/admin/jobs', async () => {
+    const response = await request(app)
+      .post('/api/admin/jobs')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send({
+        title: 'Ops Manager',
+        description: 'Run the business.',
+        location: 'Lagos',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Leadership'],
+        responsibilities: ['Coordinate teams'],
+        skills: ['Operations'],
+        benefits: ['Bonus'],
+        monthlyCompensation: { salaryMin: 200000, salaryMax: 300000, currency: 'NGN' },
+        employerId: employerA,
+      });
+
+    expect(response.status).toBe(403);
+  });
+
+  test('rejects an invalid employer assignment when creating an admin job', async () => {
+    const response = await request(app)
+      .post('/api/admin/jobs')
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+      .send({
+        title: 'Ops Manager',
+        description: 'Run the business.',
+        location: 'Lagos',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Leadership'],
+        responsibilities: ['Coordinate teams'],
+        skills: ['Operations'],
+        benefits: ['Bonus'],
+        monthlyCompensation: { salaryMin: 200000, salaryMax: 300000, currency: 'NGN' },
+        employerId: 'not-a-real-employer',
+      });
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.job.create).not.toHaveBeenCalled();
+  });
+
+  test('creates an approved admin-owned job for a valid employer', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: employerA,
+      role: 'EMPLOYER',
+      employerProfile: { id: 'profile-1' },
+    });
+    mockPrisma.job.create.mockImplementation(async ({ data }) => ({
+      id: jobA,
+      employerId: employerA,
+      title: data.title,
+      description: data.description,
+      location: data.location,
+      department: data.department,
+      workArrangement: data.workArrangement,
+      engagementType: data.engagementType,
+      jobType: data.jobType,
+      skills: data.skills,
+      requirements: data.requirements,
+      responsibilities: data.responsibilities,
+      benefits: data.benefits,
+      status: data.status,
+      applicationDeadline: data.applicationDeadline,
+      rejectionReason: null,
+      reviewedById: data.reviewedById,
+      reviewedAt: data.reviewedAt,
+      closedAt: null,
+      createdAt: new Date('2026-09-10T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-10T00:00:00.000Z'),
+      employer: { employerProfile: { companyName: 'Employer A', companyDescription: 'Real company', website: 'https://example.com', industry: 'Technology', location: 'Lagos', companyLogoUrl: null } },
+      employmentCompensation: data.employmentCompensation.create,
+      contractCompensation: null,
+      freelanceCompensation: null,
+      _count: { applications: 0 },
+    }));
+
+    const response = await request(app)
+      .post('/api/admin/jobs')
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+      .send({
+        title: 'Ops Manager',
+        description: 'Run the business.',
+        location: 'Lagos',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Leadership'],
+        responsibilities: ['Coordinate teams'],
+        skills: ['Operations'],
+        benefits: ['Bonus'],
+        monthlyCompensation: { salaryMin: 200000, salaryMax: 300000, currency: 'NGN' },
+        employerId: employerA,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.job.status).toBe('APPROVED');
+    expect(response.body.data.job.employerId).toBe(employerA);
+    expect(response.body.data.job.reviewedById).toBe(adminId);
+    expect(response.body.data.job.reviewedAt).toBeTruthy();
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: employerA },
+    }));
+  });
+
+  test('updates an approved admin job without creating a duplicate row', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: employerA,
+      role: 'EMPLOYER',
+      employerProfile: { id: 'profile-1' },
+    });
+    mockPrisma.job.findFirst.mockResolvedValue(jobRecord({ id: jobA, status: 'APPROVED', reviewedById: adminId, reviewedAt: new Date('2026-09-11T00:00:00.000Z') }));
+    mockPrisma.job.update.mockResolvedValue(jobRecord({
+      id: jobA,
+      title: 'Updated Ops Manager',
+      status: 'APPROVED',
+      reviewedById: adminId,
+      reviewedAt: new Date('2026-09-12T00:00:00.000Z'),
+    }));
+
+    const response = await request(app)
+      .patch(`/api/admin/jobs/${jobA}`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+      .send({
+        title: 'Updated Ops Manager',
+        description: 'Run the business with better focus.',
+        location: 'Abuja',
+        department: 'Operations',
+        workArrangement: 'HYBRID',
+        engagementType: 'MONTHLY',
+        jobType: 'NORMAL_EMPLOYMENT',
+        requirements: ['Leadership'],
+        responsibilities: ['Coordinate teams'],
+        skills: ['Operations'],
+        benefits: ['Bonus'],
+        monthlyCompensation: { salaryMin: 250000, salaryMax: 350000, currency: 'NGN' },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.job.id).toBe(jobA);
+    expect(response.body.data.job.status).toBe('APPROVED');
+    expect(mockPrisma.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: jobA },
+      data: expect.objectContaining({
+        status: 'APPROVED',
+        reviewedById: adminId,
+      }),
+    }));
+  });
 });
 
 describe('Admin job approval routes', () => {

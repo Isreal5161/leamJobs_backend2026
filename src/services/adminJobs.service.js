@@ -130,6 +130,79 @@ export class AdminInvalidTransitionError extends Error {
   }
 }
 
+export class AdminInvalidEmployerError extends Error {
+  constructor() {
+    super('Employer does not exist or is not eligible to own jobs');
+    this.name = 'AdminInvalidEmployerError';
+    this.status = 400;
+  }
+}
+
+const compensationData = (payload) => {
+  if (payload.engagementType === 'MONTHLY') {
+    return {
+      employmentCompensation: {
+        create: {
+          salaryMin: payload.monthlyCompensation.salaryMin ?? null,
+          salaryMax: payload.monthlyCompensation.salaryMax ?? null,
+          currency: payload.monthlyCompensation.currency,
+          salaryPeriod: 'MONTHLY',
+        },
+      },
+    };
+  }
+
+  if (payload.engagementType === 'CONTRACT') {
+    const contract = payload.contractCompensation;
+    return {
+      contractCompensation: {
+        create: {
+          amount: contract.amount,
+          currency: contract.currency,
+          duration: contract.duration,
+          ...(contract.startMode ? { startMode: contract.startMode } : {}),
+          ...(contract.scheduledStartDate !== undefined ? { scheduledStartDate: contract.scheduledStartDate } : {}),
+          ...(contract.expectedCompletionDate !== undefined ? { expectedCompletionDate: contract.expectedCompletionDate } : {}),
+        },
+      },
+    };
+  }
+
+  return {
+    freelanceCompensation: {
+      create: {
+        projectAmount: payload.freelanceCompensation.projectAmount,
+        currency: payload.freelanceCompensation.currency,
+      },
+    },
+  };
+};
+
+const jobData = (employerId, payload) => ({
+  employerId,
+  title: payload.title,
+  description: payload.description,
+  location: payload.location,
+  department: payload.department || null,
+  workArrangement: payload.workArrangement || null,
+  engagementType: payload.engagementType,
+  jobType: payload.jobType,
+  skills: payload.skills,
+  requirements: payload.requirements,
+  responsibilities: payload.responsibilities,
+  benefits: payload.benefits,
+  applicationDeadline: payload.applicationDeadline || null,
+});
+
+const loadEmployerForAdminJob = async (employerId) => prisma.user.findUnique({
+  where: { id: employerId },
+  select: {
+    id: true,
+    role: true,
+    employerProfile: { select: { id: true } },
+  },
+});
+
 const loadJobForAdmin = async (jobId) => {
   const job = await prisma.job.findFirst({
     where: { id: jobId },
@@ -164,6 +237,59 @@ export const listAdminJobs = async ({ status } = {}) => {
 export const getAdminJob = async (jobId) => {
   const existing = await loadJobForAdmin(jobId);
   return mapAdminJob(existing);
+};
+
+export const createAdminJob = async (adminId, employerId, payload) => {
+  const employer = await loadEmployerForAdminJob(employerId);
+
+  if (!employer || employer.role !== 'EMPLOYER' || !employer.employerProfile) {
+    throw new AdminInvalidEmployerError();
+  }
+
+  const created = await prisma.job.create({
+    data: {
+      ...jobData(employerId, payload),
+      status: 'APPROVED',
+      reviewedById: adminId,
+      reviewedAt: new Date(),
+      rejectionReason: null,
+      ...compensationData(payload),
+    },
+    select: jobSelect,
+  });
+
+  return mapAdminJob(created);
+};
+
+export const updateAdminJob = async (adminId, jobId, payload) => {
+  const existing = await loadJobForAdmin(jobId);
+
+  const employer = await loadEmployerForAdminJob(existing.employerId);
+  if (!employer || employer.role !== 'EMPLOYER' || !employer.employerProfile) {
+    throw new AdminInvalidEmployerError();
+  }
+
+  const updated = await prisma.$transaction(async (transaction) => {
+    await transaction.employmentCompensation.deleteMany({ where: { jobId } });
+    await transaction.contractCompensation.deleteMany({ where: { jobId } });
+    await transaction.freelanceCompensation.deleteMany({ where: { jobId } });
+
+    return transaction.job.update({
+      where: { id: jobId },
+      data: {
+        ...jobData(existing.employerId, payload),
+        status: 'APPROVED',
+        reviewedById: adminId,
+        reviewedAt: new Date(),
+        rejectionReason: null,
+        closedAt: null,
+        ...compensationData(payload),
+      },
+      select: jobSelect,
+    });
+  });
+
+  return mapAdminJob(updated);
 };
 
 export const approveAdminJob = async (adminId, jobId) => {

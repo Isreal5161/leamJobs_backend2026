@@ -7,7 +7,7 @@ const listSchema = (label, max = 30) => z.array(
 const amountSchema = z.coerce.number().finite().positive('Amount must be greater than zero').max(999999999999, 'Amount is too large');
 const currencySchema = z.string().trim().regex(/^[A-Za-z]{3}$/, 'Currency must be a 3-letter code').transform((value) => value.toUpperCase());
 
-const jobSchema = z.object({
+export const jobSchema = z.object({
   title: z.string().trim().min(1, 'Job title is required').max(160, 'Job title must be 160 characters or fewer'),
   description: z.string().trim().min(1, 'Job overview is required').max(10000, 'Job overview must be 10000 characters or fewer'),
   location: z.string().trim().min(1, 'Location is required').max(160, 'Location must be 160 characters or fewer'),
