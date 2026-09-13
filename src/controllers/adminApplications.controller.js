@@ -17,8 +17,8 @@ export const listAdminApplicationController = async (req, res, next) => {
 
 export const getAdminApplicationController = async (req, res, next) => {
   try {
-    const application = await getAdminApplication(req.params.jobId, req.params.applicationId);
-    return res.status(200).json({ success: true, data: { application } });
+    const result = await getAdminApplication(req.params.jobId, req.params.applicationId);
+    return res.status(200).json({ success: true, data: { application: result.application, adminCanManageApplicants: result.adminCanManageApplicants } });
   } catch (error) {
     return next(error);
   }

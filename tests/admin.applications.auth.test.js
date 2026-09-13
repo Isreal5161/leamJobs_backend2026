@@ -231,22 +231,30 @@ describe('Admin applicant authorization', () => {
     expect(response.body.data.application.applicant.email).toBe('ada@example.com');
   });
 
-  test('ADMIN cannot list applicants for an unrelated employer job', async () => {
+  test('ADMIN can list applicants for an unrelated employer job', async () => {
     mockPrisma.job.findUnique.mockResolvedValue(otherEmployerJob());
+    mockPrisma.application.findMany.mockResolvedValue([{ ...listApplicationsPayload[0], jobId: otherJobId, job: { ...listApplicationsPayload[0].job, id: otherJobId, title: 'Other Employer Role', employerId: otherEmployerId } }]);
     const response = await request(app)
       .get(`/api/admin/jobs/${otherJobId}/applications`)
       .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.adminCanManageApplicants).toBe(false);
+    expect(response.body.data.applications).toHaveLength(1);
   });
 
-  test('ADMIN cannot view an applicant for an unrelated employer job', async () => {
+  test('ADMIN can view an applicant for an unrelated employer job', async () => {
     mockPrisma.job.findUnique.mockResolvedValue(otherEmployerJob());
+    mockPrisma.application.findFirst.mockResolvedValue({ ...detailApplication, jobId: otherJobId, job: { ...detailApplication.job, id: otherJobId, title: 'Other Employer Role', employerId: otherEmployerId }, applicationId: applicationId });
     const response = await request(app)
       .get(`/api/admin/jobs/${otherJobId}/applications/${applicationId}`)
       .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.adminCanManageApplicants).toBe(false);
+    expect(response.body.data.application.jobId).toBe(otherJobId);
   });
 
   test('ADMIN cannot access an application belonging to another job', async () => {
@@ -267,6 +275,18 @@ describe('Admin applicant authorization', () => {
       .send({});
 
     expect(response.status).toBe(403);
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+  });
+
+  test('ADMIN status mutation against an unrelated employer job returns 403 without changing the application', async () => {
+    mockPrisma.job.findUnique.mockResolvedValue(otherEmployerJob());
+    const response = await request(app)
+      .patch(`/api/admin/jobs/${otherJobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+      .send({ status: 'SHORTLISTED' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.application.update).not.toHaveBeenCalled();
   });
 
   test('ADMIN can select an eligible candidate for a canonical LeamJobs contract job', async () => {

@@ -20,7 +20,7 @@ const createNotFoundError = (message = 'Job not found') => {
   return error;
 };
 
-export const assertAdminCanAccessLeamJobsJob = async (jobId) => {
+export const assertAdminCanReadJobApplicants = async (jobId) => {
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: { id: true, employerId: true },
@@ -31,35 +31,46 @@ export const assertAdminCanAccessLeamJobsJob = async (jobId) => {
   }
 
   const canonicalEmployer = await getLeamJobsEmployerIdentity();
+  return {
+    job,
+    employerId: job.employerId,
+    adminCanManageApplicants: job.employerId === canonicalEmployer.userId,
+  };
+};
 
-  if (job.employerId !== canonicalEmployer.userId) {
+export const assertAdminCanMutateLeamJobsApplicants = async (jobId) => {
+  const { job, employerId, adminCanManageApplicants } = await assertAdminCanReadJobApplicants(jobId);
+
+  if (!adminCanManageApplicants) {
     throw createForbiddenError('Admin can only manage applicants for LeamJobs-owned jobs');
   }
 
-  return canonicalEmployer.userId;
+  return employerId;
 };
 
 export const listAdminApplications = async (jobId) => {
-  const employerId = await assertAdminCanAccessLeamJobsJob(jobId);
-  return listEmployerApplications(employerId, jobId);
+  const { employerId, adminCanManageApplicants } = await assertAdminCanReadJobApplicants(jobId);
+  const data = await listEmployerApplications(employerId, jobId);
+  return { ...data, adminCanManageApplicants };
 };
 
 export const getAdminApplication = async (jobId, applicationId) => {
-  const employerId = await assertAdminCanAccessLeamJobsJob(jobId);
-  return getEmployerApplication(employerId, jobId, applicationId);
+  const { employerId, adminCanManageApplicants } = await assertAdminCanReadJobApplicants(jobId);
+  const application = await getEmployerApplication(employerId, jobId, applicationId);
+  return { application, adminCanManageApplicants };
 };
 
 export const getAdminApplicationResume = async (jobId, applicationId) => {
-  const employerId = await assertAdminCanAccessLeamJobsJob(jobId);
+  const { employerId } = await assertAdminCanReadJobApplicants(jobId);
   return getEmployerApplicationResume(employerId, jobId, applicationId);
 };
 
 export const updateAdminApplicationStatus = async (jobId, applicationId, status) => {
-  const employerId = await assertAdminCanAccessLeamJobsJob(jobId);
+  const employerId = await assertAdminCanMutateLeamJobsApplicants(jobId);
   return updateEmployerApplicationStatus(employerId, jobId, applicationId, status);
 };
 
 export const selectAdminContractApplication = async (jobId, applicationId) => {
-  const employerId = await assertAdminCanAccessLeamJobsJob(jobId);
+  const employerId = await assertAdminCanMutateLeamJobsApplicants(jobId);
   return selectContractJobApplication(employerId, jobId, applicationId);
 };
