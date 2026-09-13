@@ -21,6 +21,14 @@ import { writeSiteContent } from '../controllers/siteContent.controller.js';
 import { validateSiteContentUpdate } from '../validators/siteContent.validation.js';
 import { analytics } from '../controllers/adminAnalytics.controller.js';
 import { validateAdminAnalyticsQuery } from '../validators/adminAnalytics.validation.js';
+import {
+  getAdminApplicationController,
+  getAdminApplicationResumeController,
+  listAdminApplicationController,
+  selectAdminContractApplicationController,
+  updateAdminApplicationStatusController,
+} from '../controllers/adminApplications.controller.js';
+import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
 
 const adminRouter = Router();
 
@@ -34,6 +42,11 @@ adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteCont
 adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
 adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), listJobs);
 adminRouter.get('/jobs/:jobId', authenticate, requireRole('ADMIN'), getJob);
+adminRouter.get('/jobs/:jobId/applications', authenticate, requireRole('ADMIN'), listAdminApplicationController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requireRole('ADMIN'), getAdminApplicationController);
+adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
+adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
 adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob);
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
