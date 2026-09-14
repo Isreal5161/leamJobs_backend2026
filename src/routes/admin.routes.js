@@ -28,7 +28,15 @@ import {
   selectAdminContractApplicationController,
   updateAdminApplicationStatusController,
 } from '../controllers/adminApplications.controller.js';
+import {
+  confirmAdminCompletion,
+  confirmAdminContract,
+  getAdminContract,
+  initializeAdminContractPayment,
+  verifyAdminContractPayment,
+} from '../controllers/contract.controller.js';
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
+import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
 
 const adminRouter = Router();
 
@@ -47,6 +55,11 @@ adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requir
 adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
 adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
+adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
+adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);
+adminRouter.post('/contracts/:contractId/payment', authenticate, requireRole('ADMIN'), validateContractPayment, initializeAdminContractPayment);
+adminRouter.post('/contracts/:contractId/payment/verify', authenticate, requireRole('ADMIN'), validateContractPaymentVerification, verifyAdminContractPayment);
+adminRouter.post('/contracts/:contractId/confirm-completion', authenticate, requireRole('ADMIN'), confirmAdminCompletion);
 adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob);
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);

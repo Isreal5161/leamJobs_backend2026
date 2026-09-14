@@ -105,7 +105,7 @@ const findExistingAttempt = (payments, idempotencyKey) => payments.find((payment
   || ['PENDING', 'PROCESSING', 'SUCCESSFUL'].includes(payment.status)
 ));
 
-export const initializeContractPayment = async ({ contractId, employerId, idempotencyKey }) => {
+export const initializeContractPayment = async ({ contractId, employerId, idempotencyKey, redirectPath }) => {
   const requestedKey = idempotencyKey?.trim();
   if (requestedKey && requestedKey.length > 100) throw new ContractPaymentError('Idempotency key is too long', 400);
 
@@ -148,7 +148,7 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
       email: attempt.email,
       txRef: attempt.payment.providerReference,
       meta: { contractId },
-      redirectUrl: `${env.FRONTEND_URL}/employer/contracts/${contractId}`,
+      redirectUrl: `${env.FRONTEND_URL}${redirectPath || `/employer/contracts/${encodeURIComponent(contractId)}`}`,
     });
     const updated = await prisma.payment.update({
       where: { id: attempt.payment.id },
