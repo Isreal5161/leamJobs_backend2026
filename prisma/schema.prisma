@@ -190,14 +190,33 @@ model Application {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  seeker   User       @relation("SeekerApplications", fields: [seekerId], references: [id], onDelete: Restrict)
-  job      Job        @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  contract Contract?
+  seeker      User                  @relation("SeekerApplications", fields: [seekerId], references: [id], onDelete: Restrict)
+  job         Job                   @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  contract    Contract?
   conversation Conversation?
+  cvSnapshot  ApplicationCvSnapshot?
 
   @@unique([seekerId, jobId])
   @@index([seekerId, createdAt])
   @@index([jobId, createdAt])
+}
+
+enum CvSource {
+  LEAMJOBS_TEMPLATE
+}
+
+model ApplicationCvSnapshot {
+  id                 String   @id @default(uuid())
+  applicationId      String   @unique
+  source             CvSource @default(LEAMJOBS_TEMPLATE)
+  templateId         String?
+  templateName       String?
+  templateVersion    String?
+  snapshotCapturedAt  DateTime @default(now())
+  snapshot           Json     @db.JsonB
+  createdAt          DateTime @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 }
 
 model Conversation {

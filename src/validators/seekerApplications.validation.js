@@ -3,6 +3,9 @@ import { z } from 'zod';
 const createApplicationSchema = z.object({
   jobId: z.string().uuid('A valid job ID is required'),
   coverLetter: z.string().trim().max(5000, 'Cover letter must be 5000 characters or fewer').optional(),
+  cvSource: z.enum(['template', 'upload']).optional(),
+  resumeUrl: z.string().url().nullable().optional(),
+  resumeObjectKey: z.string().nullable().optional(),
 }).strict();
 
 export const validateCreateApplication = (req, res, next) => {

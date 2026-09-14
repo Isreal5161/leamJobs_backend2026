@@ -11,7 +11,12 @@ const mockPrisma = {
   user: { findUnique: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
+  applicationCvSnapshot: { create: jest.fn() },
   job: { findFirst: jest.fn() },
+  $transaction: jest.fn(async (callback) => callback({
+    application: mockPrisma.application,
+    applicationCvSnapshot: mockPrisma.applicationCvSnapshot,
+  })),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -83,9 +88,45 @@ const createApplication = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: seekerId,
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: 'ada@example.com',
+    phone: '+2348123456789',
+  });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({
     resumeUrl: 'https://files.example/resume.pdf',
     resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+    professionalTitle: 'Senior Product Designer',
+    bio: 'Product designer with a passion for accessible experiences.',
+    country: 'Nigeria',
+    state: 'Lagos',
+    city: 'Lekki',
+    location: 'Lekki, Lagos, Nigeria',
+    skills: ['UX Research', 'Figma', 'Design Systems'],
+    education: [{ degree: 'BSc Computer Science', school: 'University of Lagos', year: '2014' }],
+    experience: [{
+      jobTitle: 'Senior Product Designer',
+      company: 'LeamJobs',
+      startDate: '2022-01',
+      endDate: '2024-05',
+      currentlyWorking: false,
+      description: 'Led product design across multiple client workflows.',
+    }],
+    certifications: [{ name: 'Google UX Design', issuer: 'Google' }],
+    languages: [{ name: 'English', proficiency: 'Native' }],
+    projects: [{
+      name: 'LeamJobs Platform',
+      description: 'Design system for a hiring platform.',
+      technologies: ['Figma', 'React'],
+      projectUrl: 'https://example.com',
+      githubUrl: 'https://github.com/example',
+      startDate: '2023-01',
+      endDate: '2023-12',
+    }],
+    linkedinUrl: 'https://linkedin.com/in/ada',
+    cvTemplate: 'modern',
   });
 });
 
@@ -248,6 +289,137 @@ describe('seeker job and application endpoints', () => {
         resumeUrl: cvB.resumeUrl,
         resumeObjectKey: cvB.resumeObjectKey,
         resumeVersion: cvB.resumeObjectKey,
+      }),
+    }));
+  });
+
+  test('uses the authenticated seeker profile uploaded CV and rejects client-supplied mismatched uploaded CV ownership', async () => {
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      resumeUrl: 'https://files.example/resume.pdf',
+      resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+      resumeVersion: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({
+        jobId,
+        coverLetter: 'I would love to contribute.',
+        cvSource: 'upload',
+        resumeUrl: 'https://files.example/another-user.pdf',
+        resumeObjectKey: 'seekers/22222222-2222-4222-8222-222222222222/resume/other-user.pdf',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe('Uploaded CV does not belong to the authenticated seeker.');
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+
+    const validUploadResponse = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({
+        jobId,
+        coverLetter: 'I would love to contribute.',
+        cvSource: 'upload',
+      });
+
+    expect(validUploadResponse.status).toBe(201);
+    expect(mockPrisma.application.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        resumeUrl: 'https://files.example/resume.pdf',
+        resumeObjectKey: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+        resumeVersion: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
+      }),
+    }));
+    expect(mockPrisma.applicationCvSnapshot.create).not.toHaveBeenCalled();
+  });
+
+  test('allows application creation without a saved CV when using the LeamJobs CV flow', async () => {
+    mockPrisma.seekerProfile.findUnique.mockResolvedValue({
+      resumeUrl: null,
+      resumeObjectKey: null,
+      professionalTitle: 'Product Designer',
+      bio: 'Designs digital experiences.',
+      country: 'Nigeria',
+      state: 'Lagos',
+      city: 'Lekki',
+      location: 'Lekki, Lagos, Nigeria',
+      skills: ['Figma'],
+      education: [],
+      experience: [],
+      certifications: [],
+      languages: [],
+      projects: [],
+      linkedinUrl: 'https://linkedin.com/in/example',
+      cvTemplate: 'modern',
+    });
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      resumeUrl: null,
+      resumeObjectKey: null,
+      resumeVersion: null,
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.', cvSource: 'template' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(mockPrisma.application.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        seekerId,
+        jobId,
+        coverLetter: 'I would love to contribute.',
+        resumeUrl: null,
+        resumeObjectKey: null,
+        resumeVersion: null,
+      }),
+    }));
+  });
+
+  test('creates an immutable LeamJobs template CV snapshot from the authenticated profile', async () => {
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      resumeUrl: null,
+      resumeObjectKey: null,
+      resumeVersion: null,
+    }));
+    mockPrisma.applicationCvSnapshot.create.mockResolvedValue({
+      id: 'snapshot-1',
+      applicationId: '44444444-4444-4444-8444-444444444444',
+      source: 'LEAMJOBS_TEMPLATE',
+      templateId: 'modern',
+      templateName: 'Modern',
+      snapshotCapturedAt: new Date(),
+      snapshot: { personalInfo: { fullName: 'Ada Lovelace', title: 'Senior Product Designer', email: 'ada@example.com' } },
+    });
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.', cvSource: 'template' });
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.applicationCvSnapshot.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        applicationId: '44444444-4444-4444-8444-444444444444',
+        source: 'LEAMJOBS_TEMPLATE',
+        templateId: 'modern',
+        templateName: 'modern',
+        snapshot: expect.objectContaining({
+          personalInfo: expect.objectContaining({
+            fullName: 'Ada Lovelace',
+            title: 'Senior Product Designer',
+            email: 'ada@example.com',
+          }),
+        }),
       }),
     }));
   });

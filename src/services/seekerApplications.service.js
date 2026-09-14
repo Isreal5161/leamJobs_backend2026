@@ -24,14 +24,6 @@ export class ApplicationJobClosedError extends Error {
   }
 }
 
-export class ApplicationResumeMissingError extends Error {
-  constructor() {
-    super('Please upload a CV before submitting your application.');
-    this.name = 'ApplicationResumeMissingError';
-    this.status = 400;
-  }
-}
-
 const applicationSelect = {
   id: true,
   jobId: true,
@@ -78,6 +70,66 @@ const mapApplication = (application) => ({
   contractId: application.contract?.id ?? null,
 });
 
+const buildLeamJobsCvSnapshot = (user, profile) => {
+  const fullName = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim();
+  const location = [profile?.city, profile?.state, profile?.country]
+    .filter(Boolean)
+    .join(', ') || profile?.location || '';
+
+  return {
+    personalInfo: {
+      fullName,
+      title: profile?.professionalTitle ?? '',
+      email: user?.email ?? '',
+      phone: user?.phone ?? undefined,
+      location: location || undefined,
+      linkedin: profile?.linkedinUrl ?? undefined,
+    },
+    summary: profile?.bio ?? '',
+    experience: Array.isArray(profile?.experience)
+      ? profile.experience.map((item) => ({
+        jobTitle: item?.jobTitle ?? '',
+        company: item?.company ?? '',
+        startDate: item?.startDate ?? '',
+        endDate: item?.endDate ?? '',
+        currentlyWorking: Boolean(item?.currentlyWorking),
+        description: item?.description ?? '',
+      }))
+      : [],
+    education: Array.isArray(profile?.education)
+      ? profile.education.map((item) => ({
+        degree: item?.degree ?? '',
+        school: item?.school ?? '',
+        year: item?.year ?? '',
+      }))
+      : [],
+    skills: Array.isArray(profile?.skills) ? profile.skills.filter(Boolean) : [],
+    certifications: Array.isArray(profile?.certifications)
+      ? profile.certifications.map((item) => ({
+        name: item?.name ?? '',
+        issuer: item?.issuer ?? '',
+      }))
+      : [],
+    languages: Array.isArray(profile?.languages)
+      ? profile.languages.map((item) => ({
+        name: item?.name ?? '',
+        proficiency: item?.proficiency ?? '',
+      }))
+      : [],
+    projects: Array.isArray(profile?.projects)
+      ? profile.projects.map((item) => ({
+        name: item?.name ?? '',
+        description: item?.description ?? '',
+        technologies: Array.isArray(item?.technologies) ? item.technologies.filter(Boolean) : [],
+        projectUrl: item?.projectUrl ?? '',
+        githubUrl: item?.githubUrl ?? '',
+        startDate: item?.startDate ?? '',
+        endDate: item?.endDate ?? '',
+      }))
+      : [],
+  };
+};
+
 const findApplicationJob = async (jobId) => {
   const job = await prisma.job.findFirst({
     where: { id: jobId, status: 'APPROVED' },
@@ -93,6 +145,34 @@ const findApplicationJob = async (jobId) => {
   }
 
   return job;
+};
+
+const resolveAuthorizedUploadedCv = (seekerProfile, requestedResumeUrl, requestedResumeObjectKey) => {
+  const profileResumeUrl = seekerProfile?.resumeUrl ?? null;
+  const profileResumeObjectKey = seekerProfile?.resumeObjectKey ?? null;
+
+  if (requestedResumeUrl && requestedResumeUrl !== profileResumeUrl) {
+    const error = new Error('Uploaded CV does not belong to the authenticated seeker.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (requestedResumeObjectKey && requestedResumeObjectKey !== profileResumeObjectKey) {
+    const error = new Error('Uploaded CV does not belong to the authenticated seeker.');
+    error.status = 400;
+    throw error;
+  }
+
+  if (!profileResumeUrl && !profileResumeObjectKey) {
+    const error = new Error('No uploaded CV is available for this profile.');
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    resumeUrl: profileResumeUrl,
+    resumeObjectKey: profileResumeObjectKey,
+  };
 };
 
 export const getSeekerApplications = async (seekerId) => {
@@ -116,7 +196,7 @@ export const getSeekerApplications = async (seekerId) => {
   };
 };
 
-export const createSeekerApplication = async (seekerId, { jobId, coverLetter }) => {
+export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cvSource, resumeUrl, resumeObjectKey } = {}) => {
   const job = await findApplicationJob(jobId);
 
   const existingApplication = await prisma.application.findUnique({
@@ -128,30 +208,79 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter }) 
     throw new ApplicationDuplicateError();
   }
 
-  const seekerProfile = await prisma.seekerProfile.findUnique({
-    where: { userId: seekerId },
-    select: {
-      resumeUrl: true,
-      resumeObjectKey: true,
-    },
-  });
+  const [user, seekerProfile] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: seekerId },
+      select: {
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+      },
+    }),
+    prisma.seekerProfile.findUnique({
+      where: { userId: seekerId },
+      select: {
+        professionalTitle: true,
+        bio: true,
+        country: true,
+        state: true,
+        city: true,
+        location: true,
+        skills: true,
+        education: true,
+        experience: true,
+        certifications: true,
+        languages: true,
+        projects: true,
+        linkedinUrl: true,
+        resumeUrl: true,
+        resumeObjectKey: true,
+        cvTemplate: true,
+      },
+    }),
+  ]);
 
-  if (!seekerProfile?.resumeObjectKey) {
-    throw new ApplicationResumeMissingError();
-  }
+  const isTemplateApplication = cvSource === 'template';
+  const isUploadApplication = cvSource === 'upload';
+
+  const uploadedCv = isUploadApplication
+    ? resolveAuthorizedUploadedCv(seekerProfile, resumeUrl, resumeObjectKey)
+    : { resumeUrl: seekerProfile?.resumeUrl ?? null, resumeObjectKey: seekerProfile?.resumeObjectKey ?? null };
+
+  const applicationResumeUrl = isTemplateApplication ? null : uploadedCv.resumeUrl;
+  const applicationResumeObjectKey = isTemplateApplication ? null : uploadedCv.resumeObjectKey;
+  const snapshotPayload = isTemplateApplication ? buildLeamJobsCvSnapshot(user, seekerProfile) : null;
 
   try {
-    const application = await prisma.application.create({
-      data: {
-        seekerId,
-        jobId,
-        coverLetter,
-        resumeUrl: seekerProfile.resumeUrl,
-        resumeObjectKey: seekerProfile.resumeObjectKey,
-        resumeVersion: seekerProfile.resumeObjectKey,
-        resumeSubmittedAt: new Date(),
-      },
-      select: applicationSelect,
+    const application = await prisma.$transaction(async (transaction) => {
+      const created = await transaction.application.create({
+        data: {
+          seekerId,
+          jobId,
+          coverLetter,
+          resumeUrl: applicationResumeUrl,
+          resumeObjectKey: applicationResumeObjectKey,
+          resumeVersion: applicationResumeObjectKey ?? null,
+          resumeSubmittedAt: new Date(),
+          ...(cvSource ? { coverLetter } : {}),
+        },
+        select: applicationSelect,
+      });
+
+      if (isTemplateApplication) {
+        await transaction.applicationCvSnapshot.create({
+          data: {
+            applicationId: created.id,
+            source: 'LEAMJOBS_TEMPLATE',
+            templateId: seekerProfile?.cvTemplate ?? 'modern',
+            templateName: seekerProfile?.cvTemplate ?? 'modern',
+            snapshot: snapshotPayload,
+          },
+        });
+      }
+
+      return created;
     });
 
     return mapApplication(application);

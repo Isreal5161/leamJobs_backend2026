@@ -90,6 +90,17 @@ const detailSelect = {
   contract: { select: { id: true } },
   seeker: { select: applicantSelect },
   job: { select: { id: true, title: true, employerId: true } },
+  cvSnapshot: {
+    select: {
+      id: true,
+      source: true,
+      templateId: true,
+      templateName: true,
+      templateVersion: true,
+      snapshotCapturedAt: true,
+      snapshot: true,
+    },
+  },
 };
 
 const assertStatus = (status) => {
@@ -141,35 +152,48 @@ const mapApplicationListItem = (application) => {
   };
 };
 
-const mapApplicationDetail = (application) => ({
-  id: application.id,
-  jobId: application.jobId,
-  status: application.status,
-  coverLetter: application.coverLetter,
-  createdAt: application.createdAt,
-  updatedAt: application.updatedAt,
-  contractId: application.contract?.id ?? null,
-  resume: (() => {
-    const source = application.resumeObjectKey
+const mapApplicationDetail = (application) => {
+  const snapshot = application.cvSnapshot ?? null;
+  const source = snapshot
+    ? 'template'
+    : application.resumeObjectKey
       ? 'application'
       : application.seeker.seekerProfile?.resumeObjectKey
         ? 'profile'
         : application.seeker.seekerProfile?.cvTemplate
           ? 'template'
           : null;
-    return {
-    available: Boolean(source),
-    source,
-    submittedAt: application.resumeSubmittedAt,
-    version: application.resumeVersion,
-    };
-  })(),
-  job: {
-    id: application.job.id,
-    title: application.job.title,
-  },
-  applicant: mapApplicant(application.seeker),
-});
+
+  return {
+    id: application.id,
+    jobId: application.jobId,
+    status: application.status,
+    coverLetter: application.coverLetter,
+    createdAt: application.createdAt,
+    updatedAt: application.updatedAt,
+    contractId: application.contract?.id ?? null,
+    resume: {
+      available: Boolean(source),
+      source,
+      submittedAt: application.resumeSubmittedAt,
+      version: application.resumeVersion,
+    },
+    cvSnapshot: snapshot ? {
+      id: snapshot.id,
+      source: snapshot.source,
+      templateId: snapshot.templateId ?? null,
+      templateName: snapshot.templateName ?? null,
+      templateVersion: snapshot.templateVersion ?? null,
+      snapshotCapturedAt: snapshot.snapshotCapturedAt,
+      snapshot: snapshot.snapshot,
+    } : null,
+    job: {
+      id: application.job.id,
+      title: application.job.title,
+    },
+    applicant: mapApplicant(application.seeker),
+  };
+};
 
 const ownedApplicationWhere = (employerId, jobId, applicationId) => ({
   id: applicationId,
