@@ -13,6 +13,7 @@ const currentlyFundedEscrowStatuses = ['FUNDED', 'RELEASE_ELIGIBLE'];
 
 const countBy = (rows, key) => rows.map((row) => ({ [key]: row[key], count: row._count._all }));
 const moneyRows = (rows, field = 'amount') => rows.map((row) => ({ currency: row.currency, amount: row._sum[field]?.toString() ?? '0' }));
+const moneyRowsByAmount = (rows) => rows.map((row) => ({ currency: row.currency, amount: row._sum.amount?.toString() ?? '0' }));
 const toTrendRows = (rows) => rows.map((row) => ({ date: row.date, count: Number(row.count) }));
 const completeCounts = (values, rows, key) => values.map((value) => ({ [key]: value, count: rows.find((row) => row[key] === value)?._count._all ?? 0 }));
 
@@ -53,7 +54,7 @@ export const getAdminAnalytics = async ({ from, to, granularity }) => {
     totalJobs, totalApplications, totalContracts,
     jobsByStatus, applicationsByStatus, contractsByStatus, contractsByType,
     paymentsByStatus, paymentsByType, subscriptionsByStatus,
-    successfulPayments, fundedEscrow, releasedEscrow, platformFees,
+    successfulPayments, successfulPaymentsByType, pendingPayments, failedPayments, fundedEscrow, releasedEscrow, platformFees,
     usersTrend, jobsTrend, applicationsTrend, contractsTrend,
   ] = await Promise.all([
     prisma.user.count(),
@@ -72,6 +73,9 @@ export const getAdminAnalytics = async ({ from, to, granularity }) => {
     prisma.payment.groupBy({ by: ['paymentType'], _count: { _all: true }, where: { createdAt: dateWhere } }),
     prisma.subscription.groupBy({ by: ['status'], _count: { _all: true }, where: { createdAt: dateWhere } }),
     prisma.payment.groupBy({ by: ['currency'], _sum: { amount: true }, where: { createdAt: dateWhere, status: 'SUCCESSFUL' } }),
+    prisma.payment.groupBy({ by: ['paymentType', 'currency'], _sum: { amount: true }, where: { createdAt: dateWhere, status: 'SUCCESSFUL' } }),
+    prisma.payment.groupBy({ by: ['currency'], _sum: { amount: true }, where: { createdAt: dateWhere, status: { in: ['PENDING', 'PROCESSING'] } } }),
+    prisma.payment.groupBy({ by: ['currency'], _sum: { amount: true }, where: { createdAt: dateWhere, status: 'FAILED' } }),
     prisma.escrow.groupBy({ by: ['currency'], _sum: { fundedAmount: true }, where: { createdAt: dateWhere, status: { in: currentlyFundedEscrowStatuses } } }),
     prisma.escrow.groupBy({ by: ['currency'], _sum: { releasedAmount: true }, where: { createdAt: dateWhere, status: 'RELEASED' } }),
     // Platform fees are stored historical values, counted only for funded escrow states.
@@ -103,6 +107,15 @@ export const getAdminAnalytics = async ({ from, to, granularity }) => {
       paymentsByStatus: completeCounts(paymentStatuses, paymentsByStatus, 'status'), paymentsByType: completeCounts(paymentTypes, paymentsByType, 'paymentType'),
       subscriptionsByStatus: completeCounts(subscriptionStatuses, subscriptionsByStatus, 'status'),
     },
-    financial: { successfulPayments: moneyRows(successfulPayments), fundedEscrow: moneyRows(fundedEscrow, 'fundedAmount'), releasedEscrow: moneyRows(releasedEscrow, 'releasedAmount'), platformFees: moneyRows(platformFees, 'platformFeeAmount') },
+    financial: {
+      successfulPayments: moneyRows(successfulPayments),
+      contractFunding: moneyRowsByAmount(successfulPaymentsByType.filter((row) => row.paymentType === 'CONTRACT_FUNDING')),
+      subscriptionPayments: moneyRowsByAmount(successfulPaymentsByType.filter((row) => row.paymentType === 'SUBSCRIPTION')),
+      pendingPayments: moneyRows(pendingPayments),
+      failedPayments: moneyRows(failedPayments),
+      fundedEscrow: moneyRows(fundedEscrow, 'fundedAmount'),
+      releasedEscrow: moneyRows(releasedEscrow, 'releasedAmount'),
+      platformFees: moneyRows(platformFees, 'platformFeeAmount'),
+    },
   };
 };

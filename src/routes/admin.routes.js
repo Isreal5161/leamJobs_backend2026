@@ -37,6 +37,8 @@ import {
 } from '../controllers/contract.controller.js';
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
 import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
+import { validateAdminPaymentsQuery } from '../validators/adminPayments.validation.js';
+import { listAdminPaymentsController } from '../controllers/adminPayments.controller.js';
 
 const adminRouter = Router();
 
@@ -46,6 +48,7 @@ adminRouter.get('/companies/:userId/logo', authenticate, requireRole('ADMIN'), g
 adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
+adminRouter.get('/payments', authenticate, requireRole('ADMIN'), validateAdminPaymentsQuery, listAdminPaymentsController);
 adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
 adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
 adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), listJobs);

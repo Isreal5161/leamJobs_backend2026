@@ -63,7 +63,10 @@ test('admins receive database-backed summaries, trends, breakdowns, and currency
   mockPrisma.payment.groupBy
     .mockResolvedValueOnce([{ status: 'SUCCESSFUL', _count: { _all: 3 } }])
     .mockResolvedValueOnce([{ paymentType: 'SUBSCRIPTION', _count: { _all: 2 } }])
-    .mockResolvedValueOnce([{ currency: 'NGN', _sum: { amount: '100.00' } }, { currency: 'USD', _sum: { amount: '20.00' } }]);
+    .mockResolvedValueOnce([{ currency: 'NGN', _sum: { amount: '100.00' } }, { currency: 'USD', _sum: { amount: '20.00' } }])
+    .mockResolvedValueOnce([{ paymentType: 'CONTRACT_FUNDING', currency: 'NGN', _sum: { amount: '80.00' } }, { paymentType: 'SUBSCRIPTION', currency: 'USD', _sum: { amount: '20.00' } }])
+    .mockResolvedValueOnce([{ currency: 'NGN', _sum: { amount: '12.00' } }])
+    .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: '7.00' } }]);
   mockPrisma.escrow.groupBy
     .mockResolvedValueOnce([{ currency: 'NGN', _sum: { fundedAmount: '500.00' } }])
     .mockResolvedValueOnce([{ currency: 'NGN', _sum: { releasedAmount: '450.00' } }])
@@ -78,6 +81,10 @@ test('admins receive database-backed summaries, trends, breakdowns, and currency
   expect(response.body.data.summary).toEqual(expect.objectContaining({ totalUsers: 12, totalSeekers: 7, totalEmployers: 4, activeUsers: 10, verifiedUsers: 8, totalJobs: 9, approvedJobs: 6, pendingJobs: 0, rejectedJobs: 0, closedJobs: 0, totalApplications: 22, totalContracts: 5 }));
   expect(response.body.data.trends.users).toEqual([{ date: '2026-09-01', count: 3 }]);
   expect(response.body.data.financial.successfulPayments).toEqual([{ currency: 'NGN', amount: '100.00' }, { currency: 'USD', amount: '20.00' }]);
+  expect(response.body.data.financial.contractFunding).toEqual([{ currency: 'NGN', amount: '80.00' }]);
+  expect(response.body.data.financial.subscriptionPayments).toEqual([{ currency: 'USD', amount: '20.00' }]);
+  expect(response.body.data.financial.pendingPayments).toEqual([{ currency: 'NGN', amount: '12.00' }]);
+  expect(response.body.data.financial.failedPayments).toEqual([{ currency: 'USD', amount: '7.00' }]);
   expect(response.body.data.financial.fundedEscrow).toEqual([{ currency: 'NGN', amount: '500.00' }]);
   expect(response.body.data.breakdowns.jobsByStatus).toEqual(expect.arrayContaining([{ status: 'APPROVED', count: 6 }, { status: 'REJECTED', count: 0 }]));
   expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(4);
@@ -132,5 +139,14 @@ test('default date range is provided and empty aggregates remain valid', async (
   expect(response.status).toBe(200);
   expect(response.body.data.dateRange.granularity).toBe('day');
   expect(response.body.data.trends).toEqual({ users: [], jobs: [], applications: [], contracts: [] });
-  expect(response.body.data.financial).toEqual({ successfulPayments: [], fundedEscrow: [], releasedEscrow: [], platformFees: [] });
+  expect(response.body.data.financial).toEqual({
+    successfulPayments: [],
+    contractFunding: [],
+    subscriptionPayments: [],
+    pendingPayments: [],
+    failedPayments: [],
+    fundedEscrow: [],
+    releasedEscrow: [],
+    platformFees: [],
+  });
 });

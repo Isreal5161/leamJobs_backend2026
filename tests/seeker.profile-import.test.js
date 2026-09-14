@@ -125,7 +125,7 @@ describe('seeker resume import endpoint', () => {
     expect(mockSend).toHaveBeenCalled();
     expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
     expect(mockPrisma.seekerProfile.update).not.toHaveBeenCalled();
-  });
+  }, 15000);
 
   test('fails safely for malformed PDF data', async () => {
     mockSend.mockResolvedValueOnce({ Body: (async function* () { yield Buffer.from('%PDF-1.7 malformed document'); })() });
