@@ -55,6 +55,7 @@ adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requir
 adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
 adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
+adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), listReleaseCandidates);
 adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
 adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);
 adminRouter.post('/contracts/:contractId/payment', authenticate, requireRole('ADMIN'), validateContractPayment, initializeAdminContractPayment);
@@ -64,7 +65,6 @@ adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob)
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
 adminRouter.patch('/jobs/:jobId/decision', authenticate, requireRole('ADMIN'), decideJob);
-adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), listReleaseCandidates);
 adminRouter.post('/contracts/:contractId/release', authenticate, requireRole('ADMIN'), releaseContract);
 
 export default adminRouter;
