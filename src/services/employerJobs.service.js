@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import { createNotification } from './notification.service.js';
 
 const employerProfileSelect = {
   companyName: true,
@@ -209,6 +210,21 @@ export const createEmployerJob = async (employerId, payload) => {
     },
     select: jobSelect,
   });
+
+  const admins = await prisma.user?.findMany?.({
+    where: { role: 'ADMIN', isActive: true },
+    select: { id: true },
+  }) ?? [];
+  await Promise.all(admins.map((admin) => createNotification({
+    recipientUserId: admin.id,
+    actorUserId: employerId,
+    type: 'INFO',
+    category: 'ADMIN',
+    eventKey: `job:submitted:${job.id}`,
+    title: 'Job awaiting review',
+    message: `"${job.title}" has been submitted and is awaiting admin review.`,
+    link: '/admin/jobs',
+  }).catch(() => undefined)));
 
   return mapEmployerJob(job);
 };

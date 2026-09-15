@@ -13,7 +13,7 @@ const paymentSelect = {
   createdAt: true,
   updatedAt: true,
   user: { select: { id: true, firstName: true, lastName: true, email: true } },
-  subscription: { select: { id: true, plan: true, status: true } },
+  subscription: { select: { id: true, plan: { select: { key: true, displayName: true } }, status: true } },
   escrow: {
     select: {
       id: true,
@@ -59,7 +59,7 @@ const mapPayment = (payment) => {
     updatedAt: payment.updatedAt,
     context: {
       subscriptionId: payment.subscription?.id ?? null,
-      subscriptionPlan: payment.subscription?.plan ?? null,
+      subscriptionPlan: payment.subscription?.plan?.key ?? null,
       escrowId: payment.escrow?.id ?? null,
       contractId: contract?.id ?? null,
       jobId: contract?.job?.id ?? null,

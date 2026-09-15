@@ -163,7 +163,7 @@ describe('POST /api/seeker/payout-accounts', () => {
       country: 'Nigeria',
       currency: 'NGN',
       payoutMethod: 'BANK_ACCOUNT',
-      provider: 'FLUTTERWAVE',
+      provider: 'PAYSTACK',
       maskedAccountNumber: '****6789',
       isDefault: true,
       verified: false,

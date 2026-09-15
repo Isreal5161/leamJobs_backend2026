@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
+import { executeWithdrawal } from './withdrawalExecution.service.js';
 
 const withdrawalSelect = {
   id: true,
@@ -105,7 +106,7 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
   if (amount.gte(new Prisma.Decimal('1000000000000'))) throw new WithdrawalValidationError('Withdrawal amount is too large');
 
   try {
-    return await prisma.$transaction(async (transaction) => {
+    const withdrawal = await prisma.$transaction(async (transaction) => {
       const lockedWallets = await transaction.$queryRaw`
         SELECT "id", "currency", "availableBalance", "pendingWithdrawalBalance", "version"
         FROM "Wallet"
@@ -182,6 +183,8 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
 
       return serializeWithdrawal(withdrawal);
     });
+    if (process.env.NODE_ENV !== 'test') setImmediate(() => { void executeWithdrawal(withdrawal.id).catch(() => undefined); });
+    return withdrawal;
   } catch (error) {
     if (error?.code === 'P2002') {
       const existing = await prisma.withdrawal.findUnique({

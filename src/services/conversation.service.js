@@ -48,6 +48,19 @@ const conversationInclude = {
   seeker: { select: seekerSelect },
   job: { select: jobSelect },
   application: { select: { id: true, status: true, jobId: true } },
+  invitation: {
+    select: {
+      id: true,
+      status: true,
+      message: true,
+      createdAt: true,
+      respondedAt: true,
+      expiresAt: true,
+      applicationId: true,
+      job: { select: { id: true, title: true, location: true, status: true, applicationDeadline: true } },
+      employer: { select: { id: true, firstName: true, lastName: true, employerProfile: { select: { companyName: true, companyLogoUrl: true } } } },
+    },
+  },
 };
 
 const mapEmployer = (employer) => ({
@@ -73,6 +86,23 @@ const mapConversation = (conversation) => ({
   employer: mapEmployer(conversation.employer),
   job: conversation.job,
   application: conversation.application,
+  invitation: conversation.invitation ? {
+    id: conversation.invitation.id,
+    status: conversation.invitation.status,
+    message: conversation.invitation.message,
+    createdAt: conversation.invitation.createdAt,
+    respondedAt: conversation.invitation.respondedAt,
+    expiresAt: conversation.invitation.expiresAt,
+    applicationId: conversation.invitation.applicationId,
+    job: conversation.invitation.job,
+    employer: conversation.invitation.employer ? {
+      id: conversation.invitation.employer.id,
+      firstName: conversation.invitation.employer.firstName,
+      lastName: conversation.invitation.employer.lastName,
+      companyName: conversation.invitation.employer.employerProfile?.companyName ?? null,
+      companyLogoUrl: conversation.invitation.employer.employerProfile?.companyLogoUrl ?? null,
+    } : null,
+  } : null,
   lastMessage: conversation.messages?.[0] ? {
     id: conversation.messages[0].id,
     body: conversation.messages[0].body,

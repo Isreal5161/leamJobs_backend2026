@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { cvTemplateIds } from '../utils/cvTemplates.js';
 
 const certificationItemSchema = z.object({
   id: z.string().trim().min(1, 'Certification id is required').max(200, 'Certification id is too long'),
@@ -77,7 +78,7 @@ const experienceItemSchema = z.object({
 
 const linkedinUrlSchema = z.string().trim().url('Invalid LinkedIn URL').optional().or(z.literal('').optional()).or(z.null());
 
-const cvTemplateSchema = z.enum(['modern', 'professional', 'creative', 'minimalist']).optional().nullable();
+const cvTemplateSchema = z.enum(cvTemplateIds).optional().nullable();
 
 const seekerCVUpdateSchema = z.object({
   bio: z.string().trim().max(1000, 'Bio must not exceed 1000 characters').optional().or(z.literal('').transform(() => null)).or(z.null()),

@@ -1,4 +1,7 @@
 import { prisma } from '../config/database.js';
+import { hasEntitlement } from './subscriptionEntitlement.service.js';
+import { isAdvancedCvTemplate } from '../utils/cvTemplates.js';
+import { createNotification } from './notification.service.js';
 
 export class ApplicationDuplicateError extends Error {
   constructor() {
@@ -35,10 +38,12 @@ const applicationSelect = {
     select: {
       id: true,
       title: true,
+      employerId: true,
       jobType: true,
       location: true,
       employer: {
         select: {
+          email: true,
           employerProfile: { select: { companyName: true } },
         },
       },
@@ -244,6 +249,15 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
   const isTemplateApplication = cvSource === 'template';
   const isUploadApplication = cvSource === 'upload';
 
+  if (isTemplateApplication && isAdvancedCvTemplate(seekerProfile?.cvTemplate)) {
+    const canUseAdvancedCv = await hasEntitlement(seekerId, 'ADVANCED_CV');
+    if (!canUseAdvancedCv) {
+      const error = new Error('This CV presentation requires an active Advanced CV entitlement.');
+      error.status = 403;
+      throw error;
+    }
+  }
+
   const uploadedCv = isUploadApplication
     ? resolveAuthorizedUploadedCv(seekerProfile, resumeUrl, resumeObjectKey)
     : { resumeUrl: seekerProfile?.resumeUrl ?? null, resumeObjectKey: seekerProfile?.resumeObjectKey ?? null };
@@ -279,6 +293,19 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
           },
         });
       }
+
+      const seekerName = `${user?.firstName ?? ''} ${user?.lastName ?? ''}`.trim() || 'A seeker';
+      await createNotification({
+        recipientUserId: created.job.employerId,
+        recipientEmail: created.job.employer?.email,
+        actorUserId: seekerId,
+        type: 'INFO',
+        category: 'APPLICATION',
+        eventKey: `application:submitted:${created.id}`,
+        title: 'New application received',
+        message: `${seekerName} applied for "${created.job.title}".`,
+        link: '/employer/applicants',
+      }, transaction).catch(() => undefined);
 
       return created;
     });

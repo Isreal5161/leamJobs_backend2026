@@ -1,6 +1,8 @@
 import { prisma } from '../config/database.js';
 import { randomUUID } from 'node:crypto';
 import { createObjectKey, deleteObject, readObject, uploadObject } from './storage/storage.service.js';
+import { hasEntitlement } from './subscriptionEntitlement.service.js';
+import { isAdvancedCvTemplate } from '../utils/cvTemplates.js';
 
 const profileSelect = {
   id: true,
@@ -262,6 +264,15 @@ export const upsertSeekerProfileForUser = async (userId, payload) => {
 
 export const updateSeekerCVForUser = async (userId, payload) => {
   const normalizedPayload = {};
+
+  if (payload.cvTemplate !== undefined && isAdvancedCvTemplate(payload.cvTemplate)) {
+    const canUseAdvancedCv = await hasEntitlement(userId, 'ADVANCED_CV');
+    if (!canUseAdvancedCv) {
+      const error = new Error('This CV presentation requires an active Advanced CV entitlement.');
+      error.status = 403;
+      throw error;
+    }
+  }
 
   if (payload.bio !== undefined) {
     normalizedPayload.bio = payload.bio ? payload.bio.trim() || null : null;

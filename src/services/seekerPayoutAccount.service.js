@@ -108,10 +108,10 @@ const resolveMethodFields = (payload) => {
   if (isNigeria(payload.country)) {
     return {
       payoutMethod: 'BANK_ACCOUNT',
-      provider: 'FLUTTERWAVE',
+      provider: 'PAYSTACK',
       currency: 'NGN',
       bankName: payload.bankName,
-      bankCode: null,
+      bankCode: payload.bankCode,
       identifier: payload.accountNumber,
     };
   }

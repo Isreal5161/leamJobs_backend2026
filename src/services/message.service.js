@@ -1,5 +1,20 @@
 import { prisma } from '../config/database.js';
 import { ConversationNotFoundError } from './conversation.service.js';
+import { createNotification } from './notification.service.js';
+
+const resolveRecipientMessageLink = async (recipientUserId, client = prisma) => {
+  const userClient = client?.user ?? prisma.user;
+  if (!userClient) return '/seeker/messages';
+
+  const user = await userClient.findUnique({
+    where: { id: recipientUserId },
+    select: { role: true },
+  });
+
+  if (user?.role === 'EMPLOYER') return '/employer/messages';
+  if (user?.role === 'ADMIN') return '/admin/notifications';
+  return '/seeker/messages';
+};
 
 const mapMessage = (message) => ({
   id: message.id,
@@ -62,7 +77,29 @@ export const sendSeekerMessage = async (seekerId, conversationId, { body, client
       const created = await transaction.message.create({
         data: { conversationId, senderId: seekerId, body, clientMessageId },
       });
-      await transaction.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: created.createdAt } });
+      await (transaction.conversation?.update ?? prisma.conversation.update)({ where: { id: conversationId }, data: { lastMessageAt: created.createdAt } });
+
+      const conversationClient = transaction.conversation?.findUnique ?? prisma.conversation.findUnique;
+      const conversation = await conversationClient({
+        where: { id: conversationId },
+        select: { employerId: true, seekerId: true },
+      });
+
+      const recipientUserId = conversation?.employerId && conversation.employerId !== seekerId ? conversation.employerId : conversation?.seekerId ?? null;
+      if (recipientUserId) {
+        const link = await resolveRecipientMessageLink(recipientUserId, transaction);
+        await createNotification({
+          recipientUserId,
+          actorUserId: seekerId,
+          type: 'INFO',
+          category: 'MESSAGE',
+          eventKey: `message:new:${conversationId}:${created.id}`,
+          title: 'New message',
+          message: `${body.length > 120 ? `${body.slice(0, 117)}...` : body}`,
+          link,
+        }, transaction).catch(() => undefined);
+      }
+
       return created;
     });
     return mapMessage(message);
@@ -109,7 +146,29 @@ export const sendEmployerMessage = async (employerId, conversationId, { body, cl
       const created = await transaction.message.create({
         data: { conversationId, senderId: employerId, body, clientMessageId },
       });
-      await transaction.conversation.update({ where: { id: conversationId }, data: { lastMessageAt: created.createdAt } });
+      await (transaction.conversation?.update ?? prisma.conversation.update)({ where: { id: conversationId }, data: { lastMessageAt: created.createdAt } });
+
+      const conversationClient = transaction.conversation?.findUnique ?? prisma.conversation.findUnique;
+      const conversation = await conversationClient({
+        where: { id: conversationId },
+        select: { employerId: true, seekerId: true },
+      });
+
+      const recipientUserId = conversation?.seekerId && conversation.seekerId !== employerId ? conversation.seekerId : conversation?.employerId ?? null;
+      if (recipientUserId) {
+        const link = await resolveRecipientMessageLink(recipientUserId, transaction);
+        await createNotification({
+          recipientUserId,
+          actorUserId: employerId,
+          type: 'INFO',
+          category: 'MESSAGE',
+          eventKey: `message:new:${conversationId}:${created.id}`,
+          title: 'New message',
+          message: `${body.length > 120 ? `${body.slice(0, 117)}...` : body}`,
+          link,
+        }, transaction).catch(() => undefined);
+      }
+
       return created;
     });
     return mapMessage(message);

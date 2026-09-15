@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
+import { createNotification } from './notification.service.js';
 
 export const contractSelect = {
   id: true,
@@ -239,6 +240,27 @@ export const confirmContract = async ({ contractId, userId, role }) => {
           select: contractSelect.freelanceDetails.select.escrow.select,
         });
       }
+
+      await Promise.all([
+        createNotification({
+          recipientUserId: contract.employerId,
+          type: 'SUCCESS',
+          category: 'CONTRACT',
+          eventKey: `contract:active:${contract.id}`,
+          title: 'Contract is active',
+          message: `The contract for ${contract.job?.title ?? 'your contract'} is now active.`,
+          link: `/employer/contracts/${contract.id}`,
+        }, transaction).catch(() => undefined),
+        createNotification({
+          recipientUserId: contract.seekerId,
+          type: 'SUCCESS',
+          category: 'CONTRACT',
+          eventKey: `contract:active:${contract.id}`,
+          title: 'Contract is active',
+          message: `The contract for ${contract.job?.title ?? 'your contract'} is now active.`,
+          link: `/seeker/contracts/${contract.id}`,
+        }, transaction).catch(() => undefined),
+      ]);
     } else {
       updatedContract = await transaction.contract.findUnique({
         where: { id: contract.id },
@@ -294,6 +316,16 @@ export const submitContractCompletion = async ({ contractId, seekerId, completio
         workStatus: 'COMPLETION_SUBMITTED',
       },
     });
+    await createNotification({
+      recipientUserId: contract.employerId,
+      actorUserId: seekerId,
+      type: 'INFO',
+      category: 'CONTRACT',
+      eventKey: `contract:completion-submitted:${contract.id}`,
+      title: 'Completion submitted for review',
+      message: `Completion was submitted for ${contract.job?.title ?? 'your contract'}.`,
+      link: `/employer/contracts/${contract.id}`,
+    }, transaction).catch(() => undefined);
     return mapContract(await transaction.contract.findUnique({ where: { id: contractId }, select: contractSelect }));
   });
 };
@@ -317,6 +349,16 @@ export const confirmContractCompletion = async ({ contractId, employerId }) => {
       where: { freelanceContractId: contractId },
       data: { status: 'RELEASE_ELIGIBLE', releaseEligibleAt: confirmedAt },
     });
+    await createNotification({
+      recipientUserId: contract.seekerId,
+      actorUserId: employerId,
+      type: 'SUCCESS',
+      category: 'PAYMENT',
+      eventKey: `escrow:release-eligible:${contract.id}`,
+      title: 'Payment is ready for release',
+      message: `Payment for ${contract.job?.title ?? 'your contract'} is ready for final release.`,
+      link: `/seeker/contracts/${contract.id}`,
+    }, transaction).catch(() => undefined);
     return mapContract(await transaction.contract.findUnique({ where: { id: contractId }, select: contractSelect }));
   });
 };

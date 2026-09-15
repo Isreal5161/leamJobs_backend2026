@@ -1,5 +1,7 @@
 import { prisma } from '../config/database.js';
 import { getLeamJobsEmployerIdentity } from './leamjobsEmployer.service.js';
+import { createNotification } from './notification.service.js';
+import { findRelevantSeekersForJob } from './seekerRecommendations.service.js';
 
 const jobSelect = {
   id: true,
@@ -330,6 +332,30 @@ export const approveAdminJob = async (adminId, jobId) => {
     select: jobSelect,
   });
 
+  await createNotification({
+    recipientUserId: existing.employerId,
+    actorUserId: adminId,
+    type: 'SUCCESS',
+    category: 'JOB',
+    eventKey: `job:approved:${updated.id}`,
+    title: 'Your job has been approved',
+    message: `"${updated.title}" is now live on LeamJobs.`,
+    link: `/employer/jobs/${updated.id}`,
+  }).catch(() => undefined);
+
+  const relevantSeekers = await findRelevantSeekersForJob(updated.skills);
+  await Promise.all(relevantSeekers.map((seeker) => createNotification({
+    recipientUserId: seeker.id,
+    recipientEmail: seeker.email,
+    actorUserId: adminId,
+    type: 'INFO',
+    category: 'JOB',
+    eventKey: `job:approved:seeker:${updated.id}`,
+    title: 'A job matches your skills',
+    message: `"${updated.title}" is now live and matches skills in your profile.`,
+    link: `/seeker/jobs/${updated.id}`,
+  }).catch(() => undefined)));
+
   return mapAdminJob(updated);
 };
 
@@ -347,6 +373,17 @@ export const rejectAdminJob = async (adminId, jobId, rejectionReason) => {
     },
     select: jobSelect,
   });
+
+  await createNotification({
+    recipientUserId: existing.employerId,
+    actorUserId: adminId,
+    type: 'WARNING',
+    category: 'JOB',
+    eventKey: `job:rejected:${updated.id}`,
+    title: 'Your job was not approved',
+    message: `"${updated.title}" needs attention before it can go live. ${rejectionReason}`,
+    link: `/employer/jobs/${updated.id}`,
+  }).catch(() => undefined);
 
   return mapAdminJob(updated);
 };

@@ -4,6 +4,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './flutterwave.service.js';
 import { contractSelect, ContractNotFoundError, mapContract } from './contract.service.js';
+import { createNotification } from './notification.service.js';
 
 export class ContractPaymentError extends Error {
   constructor(message, status = 409) {
@@ -161,6 +162,15 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
       where: { id: attempt.payment.id },
       data: { status: 'FAILED', metadata: { contractId, failure: error.message } },
     }).catch(() => undefined);
+    await createNotification({
+      recipientUserId: employerId,
+      type: 'ALERT',
+      category: 'PAYMENT',
+      eventKey: `contract:payment-failed:${attempt.payment.id}`,
+      title: 'Contract payment failed',
+      message: 'The contract funding payment could not be completed. Please try again.',
+      link: `/employer/contracts/${contractId}`,
+    }).catch(() => undefined);
     throw error;
   }
 };
@@ -221,6 +231,15 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
     validateProviderPayment(providerPayment, payment);
   } catch (error) {
     await markPaymentFailed(payment.id, { contractId, verificationFailure: error.message, providerTransactionId: String(transactionId) });
+    await createNotification({
+      recipientUserId: employerId,
+      type: 'ALERT',
+      category: 'PAYMENT',
+      eventKey: `contract:payment-failed:${payment.id}`,
+      title: 'Contract payment failed',
+      message: 'The contract funding payment could not be verified. Please review and try again.',
+      link: `/employer/contracts/${resolvedContractId}`,
+    }).catch(() => undefined);
     throw error;
   }
 

@@ -10,6 +10,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const mockPrisma = {
   user: { findUnique: jest.fn(), update: jest.fn() },
   seekerProfile: { upsert: jest.fn() },
+  subscription: { findFirst: jest.fn() },
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -52,6 +53,7 @@ const createUserRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.subscription.findFirst.mockResolvedValue(null);
 });
 
 describe('seeker profile onboarding endpoints', () => {
@@ -654,6 +656,75 @@ describe('seeker profile CV endpoints', () => {
 
     expect(response.status).toBe(400);
     expect(response.body.message).toBe('Validation failed');
+  });
+
+  test.each(['PENDING', 'EXPIRED', 'CANCELLED', 'FAILED'])('rejects advanced CV template for %s subscription', async (status) => {
+    mockPrisma.subscription.findFirst.mockResolvedValue(null);
+
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ cvTemplate: 'executive' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('rejects advanced CV template for a free user', async () => {
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ cvTemplate: 'ats' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('allows advanced CV template for an active subscriber with ADVANCED_CV', async () => {
+    mockPrisma.subscription.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
+      startDate: new Date(Date.now() - 60_000),
+      endDate: new Date(Date.now() + 60_000),
+      plan: { entitlements: [{ entitlement: { key: 'ADVANCED_CV' } }] },
+    });
+    mockPrisma.seekerProfile.upsert.mockResolvedValue({ id: 'profile-1', cvTemplate: 'compact' });
+
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ cvTemplate: 'compact' });
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalled();
+  });
+
+  test('rejects advanced CV template for an active subscription without ADVANCED_CV', async () => {
+    mockPrisma.subscription.findFirst.mockResolvedValue({
+      status: 'ACTIVE',
+      startDate: new Date(Date.now() - 60_000),
+      endDate: new Date(Date.now() + 60_000),
+      plan: { entitlements: [{ entitlement: { key: 'PROFILE_ANALYTICS' } }] },
+    });
+
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ cvTemplate: 'executive' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('keeps core templates available to free users', async () => {
+    mockPrisma.seekerProfile.upsert.mockResolvedValue({ id: 'profile-1', cvTemplate: 'professional' });
+
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ cvTemplate: 'professional' });
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalled();
   });
 
   test('PATCH /api/seeker/profile/cv allows partial CV updates', async () => {

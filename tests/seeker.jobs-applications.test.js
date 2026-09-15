@@ -12,6 +12,7 @@ const mockPrisma = {
   seekerProfile: { findUnique: jest.fn() },
   application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
   applicationCvSnapshot: { create: jest.fn() },
+  subscription: { findFirst: jest.fn() },
   job: { findFirst: jest.fn() },
   $transaction: jest.fn(async (callback) => callback({
     application: mockPrisma.application,
@@ -88,6 +89,7 @@ const createApplication = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.user.findUnique.mockResolvedValue({
     id: seekerId,
     firstName: 'Ada',
@@ -422,6 +424,38 @@ describe('seeker job and application endpoints', () => {
         }),
       }),
     }));
+  });
+
+  test('does not allow a free seeker to use a saved advanced template for an application', async () => {
+    mockPrisma.seekerProfile.findUnique.mockResolvedValue({
+      resumeUrl: null,
+      resumeObjectKey: null,
+      professionalTitle: 'Senior Product Designer',
+      bio: 'Designs digital experiences.',
+      country: 'Nigeria',
+      state: 'Lagos',
+      city: 'Lekki',
+      location: 'Lekki, Lagos, Nigeria',
+      skills: ['Figma'],
+      education: [],
+      experience: [],
+      certifications: [],
+      languages: [],
+      projects: [],
+      linkedinUrl: 'https://linkedin.com/in/example',
+      cvTemplate: 'executive',
+    });
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.', cvSource: 'template' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+    expect(mockPrisma.applicationCvSnapshot.create).not.toHaveBeenCalled();
   });
 
   test('returns 404 for nonexistent, unapproved, or expired application jobs', async () => {

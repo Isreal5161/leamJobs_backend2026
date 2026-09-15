@@ -39,6 +39,13 @@ import { validateEmployerApplicationStatus } from '../validators/employerApplica
 import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
 import { validateAdminPaymentsQuery } from '../validators/adminPayments.validation.js';
 import { listAdminPaymentsController } from '../controllers/adminPayments.controller.js';
+import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription } from '../controllers/adminSubscriptions.controller.js';
+import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId } from '../validators/adminSubscriptions.validation.js';
+import { executeWithdrawalController, reconcileWithdrawalController } from '../controllers/withdrawal.controller.js';
+import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
+import { validateNotificationPagination } from '../validators/notification.validation.js';
+import { campaignPreview, campaignRecipients, createCampaign, previewTemplate, sendCampaign, templates, updateCampaign, updateTemplate } from '../controllers/adminCommunications.controller.js';
+import { validateCampaignCreate, validateCampaignRecipientQuery, validateCampaignUpdate, validateTemplateKey, validateTemplateUpdate } from '../validators/adminCommunications.validation.js';
 
 const adminRouter = Router();
 
@@ -49,6 +56,14 @@ adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsers
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
 adminRouter.get('/payments', authenticate, requireRole('ADMIN'), validateAdminPaymentsQuery, listAdminPaymentsController);
+adminRouter.post('/withdrawals/:id/execute', authenticate, requireRole('ADMIN'), executeWithdrawalController);
+adminRouter.post('/withdrawals/:id/reconcile', authenticate, requireRole('ADMIN'), reconcileWithdrawalController);
+adminRouter.get('/subscription-plans', authenticate, requireRole('ADMIN'), listPlans);
+adminRouter.post('/subscription-plans', authenticate, requireRole('ADMIN'), validateAdminSubscriptionPlanCreate, createPlan);
+adminRouter.patch('/subscription-plans/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);
+adminRouter.get('/subscriptions/summary', authenticate, requireRole('ADMIN'), subscriptionSummary);
+adminRouter.get('/subscriptions', authenticate, requireRole('ADMIN'), validateAdminSubscriptionsQuery, subscriptions);
+adminRouter.get('/subscriptions/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, subscription);
 adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
 adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
 adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), listJobs);
@@ -68,6 +83,17 @@ adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob)
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
 adminRouter.patch('/jobs/:jobId/decision', authenticate, requireRole('ADMIN'), decideJob);
+adminRouter.get('/notifications', authenticate, requireRole('ADMIN'), validateNotificationPagination, listNotifications);
+adminRouter.patch('/notifications/read-all', authenticate, requireRole('ADMIN'), readAllNotifications);
+adminRouter.patch('/notifications/:notificationId/read', authenticate, requireRole('ADMIN'), readNotification);
+adminRouter.get('/communications/templates', authenticate, requireRole('ADMIN'), templates);
+adminRouter.patch('/communications/templates/:key', authenticate, requireRole('ADMIN'), validateTemplateKey, validateTemplateUpdate, updateTemplate);
+adminRouter.post('/communications/templates/:key/preview', authenticate, requireRole('ADMIN'), validateTemplateKey, previewTemplate);
+adminRouter.post('/communications/campaigns', authenticate, requireRole('ADMIN'), validateCampaignCreate, createCampaign);
+adminRouter.patch('/communications/campaigns/:id', authenticate, requireRole('ADMIN'), validateCampaignUpdate, updateCampaign);
+adminRouter.get('/communications/campaigns/:id/preview', authenticate, requireRole('ADMIN'), campaignPreview);
+adminRouter.get('/communications/recipients/count', authenticate, requireRole('ADMIN'), validateCampaignRecipientQuery, campaignRecipients);
+adminRouter.post('/communications/campaigns/:id/send', authenticate, requireRole('ADMIN'), sendCampaign);
 adminRouter.post('/contracts/:contractId/release', authenticate, requireRole('ADMIN'), releaseContract);
 
 export default adminRouter;

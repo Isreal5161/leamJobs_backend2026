@@ -14,7 +14,7 @@ export const PAYOUT_COUNTRIES = [
   'India',
 ];
 
-// Only Nigeria has a concrete, documented payout path today (Flutterwave bank transfer).
+// Only Nigeria has a concrete, documented payout path today (Paystack bank transfer).
 // Every other supported country is accepted for data-capture purposes only - see
 // PayoutAccount.verifiedAt, which is never set automatically, so those accounts stay
 // non-withdrawal-eligible until a real payment-provider integration exists for them.

@@ -2,6 +2,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
+import { queueWelcomeEmail } from './adminCommunications.service.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -44,7 +45,7 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
   try {
-    return await prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         firstName: normalizedFirstName,
         lastName: normalizedLastName,
@@ -54,6 +55,8 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
         role,
       },
     });
+    void queueWelcomeEmail(user).catch((error) => console.error('Welcome email queue failed:', { message: error.message }));
+    return user;
   } catch (error) {
     if (error?.code === 'P2002' && error.meta?.target?.includes('email')) {
       throw new DuplicateEmailError();

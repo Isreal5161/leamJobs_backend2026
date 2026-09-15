@@ -7,6 +7,7 @@ const detailsSchema = z.object({
   country: z.enum(PAYOUT_COUNTRIES, { errorMap: () => ({ message: 'This country is not currently supported for payouts.' }) }),
   accountHolderName: z.string().trim().min(2, 'Account holder name is required').max(200, 'Account holder name is too long'),
   bankName: z.string().trim().min(2, 'Bank name is required').max(150, 'Bank name is too long').optional(),
+  bankCode: z.string().trim().min(3).max(20).regex(/^[A-Za-z0-9_-]+$/, 'Bank code is invalid').optional(),
   accountNumber: z.string().trim().regex(/^\d{6,20}$/, 'Account number must be 6-20 digits').optional(),
   payoutIdentifier: z.string().trim().min(4, 'Payout details are required').max(200, 'Payout details are too long').optional(),
   currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter code').optional(),
@@ -20,7 +21,7 @@ const detailsSchema = z.object({
   } else {
     if (!data.payoutIdentifier) ctx.addIssue({ path: ['payoutIdentifier'], code: z.ZodIssueCode.custom, message: 'Payout details are required' });
     if (!data.currency) ctx.addIssue({ path: ['currency'], code: z.ZodIssueCode.custom, message: 'Currency is required' });
-    if (data.bankName || data.accountNumber) ctx.addIssue({ path: ['bankName'], code: z.ZodIssueCode.custom, message: 'Bank fields are only used for Nigeria bank accounts' });
+    if (data.bankName || data.bankCode || data.accountNumber) ctx.addIssue({ path: ['bankName'], code: z.ZodIssueCode.custom, message: 'Bank fields are only used for Nigeria bank accounts' });
   }
 });
 

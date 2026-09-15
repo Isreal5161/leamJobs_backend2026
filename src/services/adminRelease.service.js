@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
+import { createNotification } from './notification.service.js';
 
 export class AdminReleaseNotFoundError extends Error {
   constructor() {
@@ -217,6 +218,16 @@ export const releaseContractFunds = async (contractId) => {
       where: { contractId: contract.id },
       data: { workStatus: 'RELEASED' },
     });
+
+    await createNotification({
+      recipientUserId: contract.seekerId,
+      type: 'SUCCESS',
+      category: 'PAYMENT',
+      eventKey: `escrow:released:${escrow.id}`,
+      title: 'Contract payment released',
+      message: 'Your contract payment has been released to your wallet.',
+      link: '/seeker/payments',
+    }, transaction).catch(() => undefined);
 
     return { alreadyReleased: false, escrow: releaseResult(releasedEscrow) };
   });

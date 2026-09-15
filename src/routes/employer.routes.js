@@ -17,6 +17,7 @@ import {
 } from '../controllers/employerApplications.controller.js';
 import { deleteLogo, getLogo, getProfile, updateProfile, uploadLogo } from '../controllers/employerProfile.controller.js';
 import { closeJob, createJob, getJob, listJobs, updateJob } from '../controllers/employerJobs.controller.js';
+import { listCandidates } from '../controllers/employerCandidates.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
@@ -32,6 +33,11 @@ import {
 	verifyEmployerContractPayment,
 } from '../controllers/contract.controller.js';
 import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
+import { validateEmployerCandidatesQuery } from '../validators/employerCandidates.validation.js';
+import { createInvitation } from '../controllers/jobInvitation.controller.js';
+import { validateCreateJobInvitation } from '../validators/jobInvitation.validation.js';
+import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
+import { validateNotificationPagination } from '../validators/notification.validation.js';
 
 const employerRouter = Router();
 
@@ -47,6 +53,8 @@ employerRouter.post('/contracts/:contractId/payment', authenticate, requireRole(
 employerRouter.post('/contracts/:contractId/payment/verify', authenticate, requireRole('EMPLOYER'), validateContractPaymentVerification, verifyEmployerContractPayment);
 employerRouter.post('/contracts/:contractId/confirm-completion', authenticate, requireRole('EMPLOYER'), confirmCompletion);
 employerRouter.get('/dashboard', authenticate, requireRole('EMPLOYER'), dashboard);
+employerRouter.get('/candidates', authenticate, requireRole('EMPLOYER'), validateEmployerCandidatesQuery, listCandidates);
+employerRouter.post('/invitations', authenticate, requireRole('EMPLOYER'), validateCreateJobInvitation, createInvitation);
 employerRouter.get('/jobs', authenticate, requireRole('EMPLOYER'), listJobs);
 employerRouter.post('/jobs', authenticate, requireRole('EMPLOYER'), validateCreateEmployerJob, createJob);
 employerRouter.get('/jobs/:jobId', authenticate, requireRole('EMPLOYER'), getJob);
@@ -63,5 +71,8 @@ employerRouter.get('/conversations/:conversationId', authenticate, requireRole('
 employerRouter.get('/conversations/:conversationId/messages', authenticate, requireRole('EMPLOYER'), validateMessagePagination, listMessages);
 employerRouter.post('/conversations/:conversationId/messages', authenticate, requireRole('EMPLOYER'), validateSendMessage, postMessage);
 employerRouter.patch('/conversations/:conversationId/read', authenticate, requireRole('EMPLOYER'), markConversationRead);
+employerRouter.get('/notifications', authenticate, requireRole('EMPLOYER'), validateNotificationPagination, listNotifications);
+employerRouter.patch('/notifications/read-all', authenticate, requireRole('EMPLOYER'), readAllNotifications);
+employerRouter.patch('/notifications/:notificationId/read', authenticate, requireRole('EMPLOYER'), readNotification);
 
 export default employerRouter;

@@ -10,6 +10,7 @@ import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
 import { flutterwaveWebhook } from './controllers/contract.controller.js';
+import { paystackWithdrawalWebhook } from './controllers/withdrawal.controller.js';
 import { readSiteContent } from './controllers/siteContent.controller.js';
 
 const app = express();
@@ -30,6 +31,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+app.post('/api/payments/paystack/withdrawal-webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));

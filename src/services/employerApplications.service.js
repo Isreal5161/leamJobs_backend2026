@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { readObject } from './storage/storage.service.js';
 import { getActivePlatformFeePercentage } from './platformFee.service.js';
+import { createNotification } from './notification.service.js';
 
 const applicationStatuses = ['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'REJECTED', 'ACCEPTED', 'WITHDRAWN'];
 
@@ -233,6 +234,18 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
       data: { status },
       select: detailSelect,
     });
+    if (application.status !== status) {
+      await createNotification({
+        recipientUserId: updated.seeker.id,
+        actorUserId: employerId,
+        type: status === 'REJECTED' ? 'WARNING' : 'INFO',
+        category: 'APPLICATION',
+        eventKey: `application:status:${updated.id}:${status}`,
+        title: 'Application status updated',
+        message: `Your application for ${updated.job.title} is now ${status.toLowerCase().replace('_', ' ')}.`,
+        link: '/seeker/applications',
+      }).catch(() => undefined);
+    }
     return mapApplicationDetail(updated);
   }
 
@@ -279,6 +292,18 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         data: { status: 'ACCEPTED' },
         select: detailSelect,
       });
+
+      await createNotification({
+        recipientUserId: application.seeker.id,
+        actorUserId: employerId,
+        type: 'SUCCESS',
+        category: 'APPLICATION',
+        eventKey: `application:accepted:${updated.id}`,
+        title: 'Your application was accepted',
+        message: `You have been selected for ${updated.job.title}.`,
+        link: `/seeker/applications`,
+      }, transaction).catch(() => undefined);
+
       return mapApplicationDetail(updated);
     }
 
@@ -392,6 +417,17 @@ export const selectContractJobApplication = async (employerId, jobId, applicatio
     if (!['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'PAYMENT_PENDING'].includes(application.status)) {
       throw new ContractJobSelectionError('This application is not eligible for selection');
     }
+
+    await createNotification({
+      recipientUserId: application.seekerId,
+      actorUserId: employerId,
+      type: 'INFO',
+      category: 'APPLICATION',
+      eventKey: `application:selected:${application.id}`,
+      title: 'You were selected for a contract role',
+      message: 'Your application has moved to the contract selection flow.',
+      link: `/seeker/applications`,
+    }, transaction).catch(() => undefined);
 
     const compensation = application.job.contractCompensation;
     const agreedAmount = new Prisma.Decimal(compensation.amount);
