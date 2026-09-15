@@ -24,7 +24,9 @@ const assertFields = (fields) => {
   if (fields.ctaLabel && !fields.ctaUrl) throw Object.assign(new Error('CTA URL is required when CTA text is provided'), { status: 400 });
   if (fields.ctaUrl && !/^\/(?!\/)/.test(fields.ctaUrl) && !/^https:\/\//.test(fields.ctaUrl)) throw Object.assign(new Error('CTA URL must be a trusted path or HTTPS URL'), { status: 400 });
 };
-const publicUrl = (path) => `${env.FRONTEND_URL || 'http://localhost:5173'}${path}`;
+export const publicUrl = (path) => /^https?:\/\//i.test(path)
+  ? path
+  : `${env.FRONTEND_URL || 'http://localhost:5173'}${path}`;
 
 export const getOrCreateSystemTemplate = async (key, client = prisma) => {
   const existing = await client.emailTemplate.findUnique({ where: { key }, select: templateSelect });

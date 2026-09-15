@@ -35,6 +35,17 @@ test('queues an idempotent email delivery without storing credentials', async ()
   expect(data).not.toHaveProperty('password');
 });
 
+test('renders campaign headings and emphasis as email HTML', async () => {
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-2', status: 'PENDING', attempts: 0, recipientUserId: 'user-2', emailType: 'PROMOTIONAL_CAMPAIGN', eventKey: 'campaign:1:user-2' });
+  await queueEmail({ recipientUserId: 'user-2', emailType: 'PROMOTIONAL_CAMPAIGN', eventKey: 'campaign:1:user-2', recipientEmail: 'seeker@example.com', context: { title: 'Discover more', message: '## Discover more\n\n**Explore LeamJobs today.**' } });
+  const html = mockPrisma.emailDelivery.create.mock.calls[0][0].data.html;
+  expect(html).toContain('<h2');
+  expect(html).toContain('Discover more</h2>');
+  expect(html).toContain('<strong>Explore LeamJobs today.</strong>');
+  expect(html).not.toContain('## Discover more');
+  expect(html).not.toContain('**Explore LeamJobs today.**');
+});
+
 test('disabled processor does not attempt SMTP work', async () => {
   await expect(processPendingEmails({ client: mockPrisma })).resolves.toBe(0);
   expect(mockPrisma.emailDelivery.findMany).not.toHaveBeenCalled();

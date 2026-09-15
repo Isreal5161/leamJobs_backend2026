@@ -14,9 +14,15 @@ const mockPrisma = {
   emailDelivery: { create: jest.fn(), findUnique: jest.fn() },
 };
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
-const { getOrCreateSystemTemplate, queueWelcomeEmail, getEligibleCampaignRecipients, sendPromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
+const { publicUrl, getOrCreateSystemTemplate, queueWelcomeEmail, getEligibleCampaignRecipients, sendPromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
 
 afterEach(() => jest.clearAllMocks());
+
+test('preserves absolute CTA URLs and prefixes relative paths', () => {
+  expect(publicUrl('https://leamjobs.com')).toBe('https://leamjobs.com');
+  expect(publicUrl('http://example.com')).toBe('http://example.com');
+  expect(publicUrl('/jobs/example')).toBe('https://leamjobs.com/jobs/example');
+});
 
 test('creates and uses the role-specific seeker welcome template with deterministic identity', async () => {
   const template = { id: 'template-1', key: 'WELCOME_SEEKER', name: 'Welcome - Seeker', kind: 'WELCOME_SEEKER', subject: 'Welcome', heading: 'Start here', body: 'Hello', ctaLabel: 'Profile', ctaUrl: '/seeker/profile', isActive: true, updatedAt: new Date() };
