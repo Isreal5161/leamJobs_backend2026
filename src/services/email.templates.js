@@ -10,7 +10,7 @@ const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing }
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)}</title></head>
 <body style="margin:0;background:#f4f7f5;color:#1d2924;font-family:Arial,sans-serif;line-height:1.6">
   <div style="max-width:620px;margin:24px auto;padding:0 16px">
-    <div style="background:#17352b;color:#fff;padding:22px 26px;border-radius:10px 10px 0 0;font-size:22px;font-weight:700">LeamJobs</div>
+    <div style="background:#0B1F3A;color:#fff;padding:22px 26px;border-radius:10px 10px 0 0;font-size:22px;font-weight:700">LeamJobs</div>
     <main style="background:#fff;padding:30px 26px;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px">
       <h1 style="margin:0 0 18px;font-size:24px;line-height:1.25;color:#17352b">${escapeHtml(heading)}</h1>
       ${body}
