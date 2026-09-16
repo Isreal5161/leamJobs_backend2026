@@ -25,6 +25,7 @@ import { validateAdminAnalyticsQuery } from '../validators/adminAnalytics.valida
 import {
   getAdminApplicationController,
   getAdminApplicationResumeController,
+  getAdminApplicationProfilePictureController,
   listAdminApplicationController,
   selectAdminContractApplicationController,
   updateAdminApplicationStatusController,
@@ -74,6 +75,7 @@ adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requir
 adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
 adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', authenticate, requireRole('ADMIN'), getAdminApplicationProfilePictureController);
 adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), listReleaseCandidates);
 adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
 adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);

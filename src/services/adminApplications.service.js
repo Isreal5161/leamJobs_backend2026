@@ -3,6 +3,7 @@ import { getLeamJobsEmployerIdentity } from './leamjobsEmployer.service.js';
 import {
   getEmployerApplication,
   getEmployerApplicationResume,
+  getEmployerApplicationProfilePicture,
   listEmployerApplications,
   selectContractJobApplication,
   updateEmployerApplicationStatus,
@@ -63,6 +64,11 @@ export const getAdminApplication = async (jobId, applicationId) => {
 export const getAdminApplicationResume = async (jobId, applicationId) => {
   const { employerId } = await assertAdminCanReadJobApplicants(jobId);
   return getEmployerApplicationResume(employerId, jobId, applicationId);
+};
+
+export const getAdminApplicationProfilePicture = async (jobId, applicationId) => {
+  const { employerId } = await assertAdminCanReadJobApplicants(jobId);
+  return getEmployerApplicationProfilePicture(employerId, jobId, applicationId);
 };
 
 export const updateAdminApplicationStatus = async (jobId, applicationId, status) => {

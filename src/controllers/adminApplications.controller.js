@@ -1,6 +1,7 @@
 import {
   getAdminApplication,
   getAdminApplicationResume,
+  getAdminApplicationProfilePicture,
   listAdminApplications,
   selectAdminContractApplication,
   updateAdminApplicationStatus,
@@ -53,6 +54,18 @@ export const getAdminApplicationResumeController = async (req, res, next) => {
     };
     res.type(contentTypes[extension] ?? 'application/octet-stream');
     res.setHeader('Content-Disposition', 'inline');
+    return res.send(result.buffer);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getAdminApplicationProfilePictureController = async (req, res, next) => {
+  try {
+    const result = await getAdminApplicationProfilePicture(req.params.jobId, req.params.applicationId);
+    const extension = result.objectKey.split('.').pop()?.toLowerCase();
+    const contentTypes = { jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+    res.type(contentTypes[extension] ?? 'application/octet-stream');
     return res.send(result.buffer);
   } catch (error) {
     return next(error);

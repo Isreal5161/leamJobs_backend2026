@@ -1,5 +1,6 @@
 import { prisma } from '../config/database.js';
 import { AuthenticationRequiredError } from './auth.service.js';
+import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
 const PROFILE_COMPLETION_FIELDS = 9;
 const RECENT_APPLICATION_LIMIT = 5;
@@ -88,7 +89,7 @@ const mapCompany = (employer) => {
     industry: company.industry,
     size: company.companySize,
     location: company.location,
-    logoUrl: company.companyLogoUrl,
+    logoUrl: publicCompanyLogoUrl(employer?.id, company.companyLogoUrl),
   };
 };
 
@@ -226,7 +227,7 @@ export const getSeekerDashboard = async (seekerId) => {
         responsibilities: true,
         benefits: true,
         createdAt: true,
-        employer: { select: { employerProfile: { select: companySelect } } },
+        employer: { select: { id: true, employerProfile: { select: companySelect } } },
         employmentCompensation: {
           select: { salaryMin: true, salaryMax: true, currency: true, salaryPeriod: true },
         },

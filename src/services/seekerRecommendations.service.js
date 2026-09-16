@@ -2,12 +2,14 @@ import { prisma } from '../config/database.js';
 import { mapSeekerJob } from './seekerJobs.service.js';
 import { normalizeSkills } from '../utils/skillNormalization.js';
 import { hasEntitlement } from './subscriptionEntitlement.service.js';
+import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
 export const FREE_RECOMMENDATION_WINDOW = 6;
 export const PAID_RECOMMENDATION_WINDOW = 12;
 
 const jobRecommendationSelect = {
   id: true,
+  employerId: true,
   title: true,
   description: true,
   location: true,

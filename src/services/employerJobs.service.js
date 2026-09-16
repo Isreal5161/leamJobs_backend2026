@@ -1,5 +1,6 @@
 import { prisma } from '../config/database.js';
 import { createNotification } from './notification.service.js';
+import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
 const employerProfileSelect = {
   companyName: true,
@@ -52,7 +53,7 @@ const toList = (value) => {
   return value ?? null;
 };
 
-const mapCompany = (employer) => {
+const mapCompany = (employer, employerId) => {
   const profile = employer?.employerProfile;
   if (!profile) return null;
 
@@ -62,7 +63,7 @@ const mapCompany = (employer) => {
     website: profile.website,
     industry: profile.industry,
     location: profile.location,
-    logoUrl: profile.companyLogoUrl,
+    logoUrl: publicCompanyLogoUrl(employerId, profile.companyLogoUrl),
   };
 };
 
@@ -117,7 +118,7 @@ export const mapEmployerJob = (job) => ({
   closedAt: job.closedAt,
   createdAt: job.createdAt,
   updatedAt: job.updatedAt,
-  company: mapCompany(job.employer),
+  company: mapCompany(job.employer, job.employerId),
   compensation: mapCompensation(job),
   applicantCount: job._count?.applications ?? 0,
 });

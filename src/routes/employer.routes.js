@@ -11,6 +11,7 @@ import {
 	createApplicationConversation,
 	getApplication,
 	getApplicationResume,
+	getApplicationProfilePicture,
 	listApplications,
 	selectContractApplication,
 	updateApplicationStatus,
@@ -65,6 +66,7 @@ employerRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, req
 employerRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('EMPLOYER'), validateEmployerApplicationStatus, updateApplicationStatus);
 employerRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('EMPLOYER'), selectContractApplication);
 employerRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('EMPLOYER'), getApplicationResume);
+employerRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', authenticate, requireRole('EMPLOYER'), getApplicationProfilePicture);
 employerRouter.post('/jobs/:jobId/applications/:applicationId/conversation', authenticate, requireRole('EMPLOYER'), createApplicationConversation);
 employerRouter.get('/conversations', authenticate, requireRole('EMPLOYER'), listConversations);
 employerRouter.get('/conversations/:conversationId', authenticate, requireRole('EMPLOYER'), getConversation);

@@ -2,6 +2,7 @@ import { prisma } from '../config/database.js';
 import { getLeamJobsEmployerIdentity } from './leamjobsEmployer.service.js';
 import { createNotification } from './notification.service.js';
 import { findRelevantSeekersForJob } from './seekerRecommendations.service.js';
+import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
 const jobSelect = {
   id: true,
@@ -25,7 +26,7 @@ const jobSelect = {
   closedAt: true,
   createdAt: true,
   updatedAt: true,
-  employer: { select: { employerProfile: { select: { companyName: true, companyDescription: true, website: true, industry: true, location: true, companyLogoUrl: true } } } },
+  employer: { select: { id: true, employerProfile: { select: { companyName: true, companyDescription: true, website: true, industry: true, location: true, companyLogoUrl: true } } } },
   employmentCompensation: {
     select: { salaryMin: true, salaryMax: true, currency: true, salaryPeriod: true },
   },
@@ -46,7 +47,7 @@ const toList = (value) => {
 
 const decimalToString = (value) => (value === null || value === undefined ? null : value.toString());
 
-const mapCompany = (employer) => {
+const mapCompany = (employer, employerId) => {
   const profile = employer?.employerProfile;
   if (!profile) return null;
 
@@ -56,7 +57,7 @@ const mapCompany = (employer) => {
     website: profile.website,
     industry: profile.industry,
     location: profile.location,
-    logoUrl: profile.companyLogoUrl,
+    logoUrl: publicCompanyLogoUrl(employerId, profile.companyLogoUrl),
   };
 };
 
@@ -112,7 +113,7 @@ const mapAdminJob = (job) => ({
   closedAt: job.closedAt,
   createdAt: job.createdAt,
   updatedAt: job.updatedAt,
-  company: mapCompany(job.employer),
+  company: mapCompany(job.employer, job.employerId),
   compensation: mapCompensation(job),
   applicantCount: job._count?.applications ?? 0,
 });

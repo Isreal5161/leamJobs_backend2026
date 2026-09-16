@@ -22,6 +22,14 @@ export class EmployerApplicationResumeUnavailableError extends Error {
   }
 }
 
+export class EmployerApplicationProfilePictureUnavailableError extends Error {
+  constructor() {
+    super('Profile picture not available for this application');
+    this.name = 'EmployerApplicationProfilePictureUnavailableError';
+    this.status = 404;
+  }
+}
+
 export class FreelanceContractCreationError extends Error {
   constructor(message) {
     super(message);
@@ -221,6 +229,15 @@ export const getEmployerApplication = async (employerId, jobId, applicationId) =
   const application = await findOwnedApplication(employerId, jobId, applicationId);
   if (!application) throw new EmployerApplicationNotFoundError();
   return mapApplicationDetail(application);
+};
+
+export const getEmployerApplicationProfilePicture = async (employerId, jobId, applicationId) => {
+  const application = await findOwnedApplication(employerId, jobId, applicationId, {
+    seeker: { select: { seekerProfile: { select: { profilePictureKey: true } } } },
+  });
+  const objectKey = application?.seeker?.seekerProfile?.profilePictureKey;
+  if (!objectKey) throw new EmployerApplicationProfilePictureUnavailableError();
+  return { buffer: await readObject(objectKey), objectKey };
 };
 
 export const updateEmployerApplicationStatus = async (employerId, jobId, applicationId, status) => {

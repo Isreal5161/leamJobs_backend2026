@@ -8,6 +8,7 @@ import adminRouter from './routes/admin.routes.js';
 import authRouter from './routes/auth.routes.js';
 import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
+import publicRouter from './routes/public.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
 import { flutterwaveWebhook } from './controllers/contract.controller.js';
 import { paystackWithdrawalWebhook } from './controllers/withdrawal.controller.js';
@@ -77,6 +78,7 @@ app.get('/api/content', readSiteContent);
 app.use('/api/auth', authRouter);
 app.use('/api/employer', employerRouter);
 app.use('/api/jobs', publicJobsRouter);
+app.use('/api/public', publicRouter);
 app.use('/api/seeker', seekerRouter);
 app.post('/api/payments/flutterwave/webhook', flutterwaveWebhook);
 

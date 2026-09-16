@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
 export class SeekerJobNotFoundError extends Error {
   constructor() {
@@ -20,6 +21,7 @@ const companySelect = {
 
 const jobSelect = {
   id: true,
+  employerId: true,
   title: true,
   description: true,
   location: true,
@@ -47,7 +49,7 @@ const jobSelect = {
 
 const decimalToString = (value) => (value === null || value === undefined ? value : value.toString());
 
-const mapCompany = (employer) => {
+const mapCompany = (employer, employerId) => {
   const company = employer?.employerProfile;
 
   if (!company) return null;
@@ -59,7 +61,7 @@ const mapCompany = (employer) => {
     industry: company.industry,
     size: company.companySize,
     location: company.location,
-    logoUrl: company.companyLogoUrl,
+    logoUrl: publicCompanyLogoUrl(employerId, company.companyLogoUrl),
   };
 };
 
@@ -131,7 +133,7 @@ export const mapSeekerJob = (job) => ({
   responsibilities: job.responsibilities ?? [],
   benefits: job.benefits ?? [],
   applicationDeadline: job.applicationDeadline ?? null,
-  company: mapCompany(job.employer),
+  company: mapCompany(job.employer, job.employerId),
   compensation: mapCompensation(job),
   createdAt: job.createdAt,
 });
