@@ -12,6 +12,7 @@ const campaignSegments = ['ALL_MARKETING_USERS', 'SEEKERS', 'EMPLOYERS', 'PUBLIC
 
 const templateSelect = { id: true, key: true, name: true, kind: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, isActive: true, updatedAt: true };
 const campaignSelect = { id: true, eventKey: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, segment: true, status: true, recipientCount: true, createdById: true, sentAt: true, createdAt: true, updatedAt: true };
+const deliveryReportSelect = { id: true, recipientEmail: true, status: true, attempts: true, createdAt: true, sentAt: true, lastError: true };
 const normalizeFields = (input) => ({
   subject: String(input.subject ?? '').trim(),
   heading: String(input.heading ?? '').trim(),
@@ -24,9 +25,11 @@ const assertFields = (fields) => {
   if (fields.ctaLabel && !fields.ctaUrl) throw Object.assign(new Error('CTA URL is required when CTA text is provided'), { status: 400 });
   if (fields.ctaUrl && !/^\/(?!\/)/.test(fields.ctaUrl) && !/^https:\/\//.test(fields.ctaUrl)) throw Object.assign(new Error('CTA URL must be a trusted path or HTTPS URL'), { status: 400 });
 };
-export const publicUrl = (path) => /^https?:\/\//i.test(path)
-  ? path
-  : `${env.FRONTEND_URL || 'http://localhost:5173'}${path}`;
+export const publicUrl = (path) => {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!env.FRONTEND_URL) throw Object.assign(new Error('FRONTEND_URL must be configured to build relative URLs'), { status: 500 });
+  return `${env.FRONTEND_URL}${path}`;
+};
 
 export const getOrCreateSystemTemplate = async (key, client = prisma) => {
   const existing = await client.emailTemplate.findUnique({ where: { key }, select: templateSelect });
@@ -133,4 +136,58 @@ export const sendPromotionalCampaign = async (campaignId) => {
     await prisma.emailCampaign.update({ where: { id: campaign.id }, data: { status: 'DRAFT' } }).catch(() => undefined);
     throw error;
   }
+};
+
+const campaignDeliveryWhere = (eventKey) => ({
+  emailType: EMAIL_TYPES.PROMOTIONAL_CAMPAIGN,
+  eventKey: { startsWith: `${eventKey}:` },
+});
+
+const deriveReportingStatus = (campaign, counts) => {
+  if (campaign.status === 'DRAFT') return 'DRAFT';
+  if (counts.pending > 0 || counts.processing > 0) return 'IN_PROGRESS';
+  const expected = campaign.recipientCount ?? counts.total;
+  if (counts.total < expected) return 'IN_PROGRESS';
+  if (counts.failed > 0 && counts.sent > 0) return 'PARTIALLY_FAILED';
+  if (counts.failed > 0 && counts.sent === 0) return 'FAILED';
+  if (counts.sent > 0 && counts.sent === expected) return 'SENT';
+  return 'IN_PROGRESS';
+};
+
+const countCampaignDeliveries = async (campaign) => {
+  const deliveries = await prisma.emailDelivery.findMany({ where: campaignDeliveryWhere(campaign.eventKey), select: { status: true } });
+  const counts = deliveries.reduce((summary, delivery) => {
+    summary.total += 1;
+    summary[delivery.status.toLowerCase()] += 1;
+    return summary;
+  }, { total: 0, sent: 0, pending: 0, processing: 0, failed: 0 });
+  return { ...counts, recipientCount: campaign.recipientCount ?? counts.total, reportingStatus: deriveReportingStatus(campaign, counts) };
+};
+
+const campaignRecord = async (campaign) => ({ campaign, delivery: await countCampaignDeliveries(campaign) });
+
+export const listCampaignRecords = async ({ page = 1, limit = 20 } = {}) => {
+  const [total, campaigns] = await Promise.all([
+    prisma.emailCampaign.count(),
+    prisma.emailCampaign.findMany({ orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit, select: campaignSelect }),
+  ]);
+  const records = await Promise.all(campaigns.map(campaignRecord));
+  return { records, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+};
+
+const findCampaign = async (campaignId) => {
+  const campaign = await prisma.emailCampaign.findUnique({ where: { id: campaignId }, select: campaignSelect });
+  if (!campaign) throw Object.assign(new Error('Campaign not found'), { status: 404 });
+  return campaign;
+};
+
+export const getCampaignReport = async (campaignId) => {
+  const campaign = await findCampaign(campaignId);
+  return { campaign, delivery: await countCampaignDeliveries(campaign) };
+};
+
+export const getCampaignDeliveries = async (campaignId) => {
+  const campaign = await findCampaign(campaignId);
+  const deliveries = await prisma.emailDelivery.findMany({ where: campaignDeliveryWhere(campaign.eventKey), orderBy: { createdAt: 'desc' }, select: deliveryReportSelect });
+  return { campaignId: campaign.id, deliveries };
 };

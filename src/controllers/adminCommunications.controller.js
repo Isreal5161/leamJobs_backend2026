@@ -1,6 +1,9 @@
 import {
   createPromotionalCampaign,
   getEligibleCampaignRecipients,
+  getCampaignDeliveries,
+  getCampaignReport,
+  listCampaignRecords,
   listSystemTemplates,
   previewPromotionalCampaign,
   previewSystemTemplate,
@@ -17,3 +20,6 @@ export const updateCampaign = async (req, res, next) => { try { return res.statu
 export const campaignPreview = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await previewPromotionalCampaign(req.params.id) }); } catch (error) { return next(error); } };
 export const campaignRecipients = async (req, res, next) => { try { const recipients = await getEligibleCampaignRecipients(req.validatedSegment); return res.status(200).json({ success: true, data: { recipientCount: recipients.length } }); } catch (error) { return next(error); } };
 export const sendCampaign = async (req, res, next) => { try { return res.status(200).json({ success: true, data: { campaign: await sendPromotionalCampaign(req.params.id) } }); } catch (error) { return next(error); } };
+export const campaignRecords = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await listCampaignRecords(req.validatedQuery) }); } catch (error) { return next(error); } };
+export const campaignReport = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignReport(req.params.id) }); } catch (error) { return next(error); } };
+export const campaignDeliveries = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignDeliveries(req.params.id) }); } catch (error) { return next(error); } };

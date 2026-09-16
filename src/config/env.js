@@ -53,7 +53,7 @@ export const env = {
   EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO || '',
 
   // Frontend URLs
-  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
+  FRONTEND_URL: process.env.FRONTEND_URL || '',
   FRONTEND_URL_PROD: process.env.FRONTEND_URL_PROD || '',
   PASSWORD_RESET_EXPIRE_MINUTES: parseInt(process.env.PASSWORD_RESET_EXPIRE_MINUTES || '30', 10),
 
