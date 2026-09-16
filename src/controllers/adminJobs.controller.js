@@ -4,6 +4,7 @@ import {
   createAdminJob,
   getAdminJob,
   listAdminJobs,
+  removeAdminJob,
   rejectAdminJob,
   updateAdminJob,
 } from '../services/adminJobs.service.js';
@@ -140,6 +141,15 @@ export const rejectJob = async (req, res, next) => {
     }
 
     const job = await rejectAdminJob(req.user.sub, req.params.jobId, rejectBodyValidation.rejectionReason);
+    return res.status(200).json({ success: true, data: { job } });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const removeJob = async (req, res, next) => {
+  try {
+    const job = await removeAdminJob(req.user.sub, req.params.jobId);
     return res.status(200).json({ success: true, data: { job } });
   } catch (error) {
     return next(error);

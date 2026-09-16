@@ -5,6 +5,7 @@ import {
   decideJob,
   getJob,
   listJobs,
+  removeJob,
   rejectJob,
   updateJob,
 } from '../controllers/adminJobs.controller.js';
@@ -82,6 +83,7 @@ adminRouter.post('/contracts/:contractId/confirm-completion', authenticate, requ
 adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob);
 adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
 adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
+adminRouter.patch('/jobs/:jobId/remove', authenticate, requireRole('ADMIN'), removeJob);
 adminRouter.patch('/jobs/:jobId/decision', authenticate, requireRole('ADMIN'), decideJob);
 adminRouter.get('/notifications', authenticate, requireRole('ADMIN'), validateNotificationPagination, listNotifications);
 adminRouter.patch('/notifications/read-all', authenticate, requireRole('ADMIN'), readAllNotifications);

@@ -82,29 +82,40 @@ app.post('/api/payments/flutterwave/webhook', flutterwaveWebhook);
 
 // API v1 routes (will be added as features are implemented)
 app.use('/api/v1', (req, res) => {
-  res.status(404).json({ message: 'API endpoint not implemented yet' });
+  res.status(404).json({ message: "We couldn't find what you're looking for.", status: 404 });
 });
 
 // 404 handler
 app.use((req, res) => {
-  res.status(404).json({
-    message: 'Not Found',
-    path: req.originalUrl,
-  });
+  res.status(404).json({ message: "We couldn't find what you're looking for.", status: 404 });
 });
+
+const technicalErrorPattern = /(prisma|sql|database|stack|internal server|econn|enotfound|socket|syntaxerror|typeerror|referenceerror| at \w+\s*\()/i;
+
+const safeErrorMessage = (error, status) => {
+  if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 403) return "You don't have permission to perform this action.";
+  if (status === 404) return "We couldn't find what you're looking for.";
+  if (status === 408) return 'The request took too long to complete. Please try again.';
+
+  const message = String(error?.publicMessage ?? error?.message ?? '').trim();
+  if (error?.publicMessage) return message;
+  if (technicalErrorPattern.test(message)) return status >= 500 ? 'Something went wrong on our side. Please try again shortly.' : 'Something went wrong. Please try again.';
+  if (status >= 500) return 'Something went wrong on our side. Please try again shortly.';
+  return message || 'Something went wrong. Please try again.';
+};
 
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
 
   const status = err.status || err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
+  const message = safeErrorMessage(err, status);
 
   res.status(status).json({
     ...(err.publicCode
       ? { success: false, error: { code: err.publicCode, message } }
       : { message, status }),
-    ...(env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
 

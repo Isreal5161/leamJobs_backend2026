@@ -23,6 +23,11 @@ const mockPrisma = {
     update: jest.fn(),
     create: jest.fn(),
   },
+  notification: {
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    create: jest.fn(),
+  },
   application: {
     count: jest.fn(),
   },
@@ -38,6 +43,14 @@ const mockPrisma = {
 jest.unstable_mockModule('../src/config/database.js', () => ({
   prisma: mockPrisma,
   checkDatabaseHealth: jest.fn(),
+}));
+
+const createNotification = jest.fn();
+jest.unstable_mockModule('../src/services/notification.service.js', () => ({
+  createNotification,
+  listNotificationsForUser: jest.fn(),
+  markAllNotificationsRead: jest.fn(),
+  markNotificationRead: jest.fn(),
 }));
 
 const { default: app } = await import('../src/app.js');
@@ -91,6 +104,7 @@ beforeEach(() => {
   mockPrisma.job.findUnique.mockResolvedValue(null);
   mockPrisma.job.update.mockResolvedValue(null);
   mockPrisma.job.create.mockResolvedValue(null);
+  createNotification.mockResolvedValue(null);
   mockPrisma.application.count.mockResolvedValue(0);
   mockPrisma.contract.count.mockResolvedValue(0);
   mockPrisma.$transaction.mockImplementation(async (callback) => callback({
@@ -488,5 +502,79 @@ describe('Admin job approval routes', () => {
     expect(response.status).toBe(409);
     expect(response.body.message).toContain('Cannot transition a job from CLOSED to REJECTED');
     expect(mockPrisma.job.update).not.toHaveBeenCalled();
+  });
+
+  test('rejects unauthenticated and non-admin job removal', async () => {
+    const unauthenticated = await request(app).patch(`/api/admin/jobs/${jobA}/remove`);
+    expect(unauthenticated.status).toBe(401);
+
+    const nonAdmin = await request(app)
+      .patch(`/api/admin/jobs/${jobA}/remove`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+    expect(nonAdmin.status).toBe(403);
+    expect(mockPrisma.job.update).not.toHaveBeenCalled();
+  });
+
+  test('closes an approved job without deleting history and notifies the employer once', async () => {
+    const approved = jobRecord({ status: 'APPROVED', reviewedById: adminId, reviewedAt: new Date('2026-09-11T00:00:00.000Z') });
+    const closed = jobRecord({ status: 'CLOSED', closedAt: new Date('2026-09-12T00:00:00.000Z') });
+    mockPrisma.job.findFirst.mockResolvedValue(approved);
+    mockPrisma.job.update.mockResolvedValue(closed);
+
+    const response = await request(app)
+      .patch(`/api/admin/jobs/${jobA}/remove`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.job.status).toBe('CLOSED');
+    expect(response.body.data.job.closedAt).toBeTruthy();
+    expect(mockPrisma.job.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: jobA },
+      data: { status: 'CLOSED', closedAt: expect.any(Date) },
+    }));
+    expect(createNotification).toHaveBeenCalledTimes(1);
+    expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+      recipientUserId: employerA,
+      eventKey: `job:removed:${jobA}`,
+      title: 'Job no longer available',
+    }));
+  });
+
+  test('treats an already closed job removal as idempotent without updating or notifying again', async () => {
+    mockPrisma.job.findFirst.mockResolvedValue(jobRecord({ status: 'CLOSED', closedAt: new Date('2026-09-12T00:00:00.000Z') }));
+
+    const response = await request(app)
+      .patch(`/api/admin/jobs/${jobA}/remove`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.job.status).toBe('CLOSED');
+    expect(mockPrisma.job.update).not.toHaveBeenCalled();
+    expect(createNotification).not.toHaveBeenCalled();
+  });
+
+  test('does not remove a pending job', async () => {
+    mockPrisma.job.findFirst.mockResolvedValue(jobRecord({ status: 'PENDING' }));
+
+    const response = await request(app)
+      .patch(`/api/admin/jobs/${jobA}/remove`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(409);
+    expect(mockPrisma.job.update).not.toHaveBeenCalled();
+    expect(createNotification).not.toHaveBeenCalled();
+  });
+
+  test('does not expose technical backend errors to clients', async () => {
+    mockPrisma.job.findMany.mockRejectedValueOnce(new Error('PrismaClientKnownRequestError: SQL database connection failed'));
+
+    const response = await request(app)
+      .get('/api/admin/jobs')
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(500);
+    expect(response.body.message).toBe('Something went wrong on our side. Please try again shortly.');
+    expect(response.body.message).not.toContain('Prisma');
+    expect(response.body.message).not.toContain('SQL');
   });
 });

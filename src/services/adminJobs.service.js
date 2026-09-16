@@ -388,6 +388,40 @@ export const rejectAdminJob = async (adminId, jobId, rejectionReason) => {
   return mapAdminJob(updated);
 };
 
+export const removeAdminJob = async (adminId, jobId) => {
+  const existing = await loadJobForAdmin(jobId);
+
+  if (existing.status === 'CLOSED') {
+    return mapAdminJob(existing);
+  }
+
+  if (existing.status !== 'APPROVED') {
+    throw new AdminInvalidTransitionError(existing.status, 'CLOSED');
+  }
+
+  const updated = await prisma.job.update({
+    where: { id: jobId },
+    data: {
+      status: 'CLOSED',
+      closedAt: new Date(),
+    },
+    select: jobSelect,
+  });
+
+  await createNotification({
+    recipientUserId: existing.employerId,
+    actorUserId: adminId,
+    type: 'WARNING',
+    category: 'JOB',
+    eventKey: `job:removed:${updated.id}`,
+    title: 'Job no longer available',
+    message: `Your job posting "${updated.title}" is no longer available on LeamJobs.`,
+    link: `/employer/jobs/${updated.id}`,
+  }).catch(() => undefined);
+
+  return mapAdminJob(updated);
+};
+
 export const approveOrRejectJob = async (adminId, jobId, { status, rejectionReason }) => {
   if (status === 'APPROVED') {
     return approveAdminJob(adminId, jobId);
