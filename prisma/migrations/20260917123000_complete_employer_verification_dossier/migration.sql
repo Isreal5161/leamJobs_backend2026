@@ -17,5 +17,22 @@ ALTER TABLE "EmployerVerification"
 ALTER TABLE "EmployerVerificationDocument"
     ADD COLUMN "fileSize" INTEGER;
 
-ALTER TYPE "EmployerVerificationDocumentKind"
-    ADD VALUE IF NOT EXISTS 'IDENTITY_SUPPORTING';
+-- Recreate the enum instead of altering its values in place. Some PostgreSQL
+-- deployments reject that operation when Prisma executes the migration
+-- transaction as a multi-command statement.
+ALTER TYPE "EmployerVerificationDocumentKind" RENAME TO "EmployerVerificationDocumentKind_old";
+
+CREATE TYPE "EmployerVerificationDocumentKind" AS ENUM (
+    'CAC',
+    'TRADE_LICENSE',
+    'TAX_CERTIFICATE',
+    'UTILITY_BILL',
+    'IDENTITY_SUPPORTING',
+    'OTHER'
+);
+
+ALTER TABLE "EmployerVerificationDocument"
+    ALTER COLUMN "kind" TYPE "EmployerVerificationDocumentKind"
+    USING ("kind"::text::"EmployerVerificationDocumentKind");
+
+DROP TYPE "EmployerVerificationDocumentKind_old";
