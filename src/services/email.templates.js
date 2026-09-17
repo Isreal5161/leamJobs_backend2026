@@ -51,6 +51,29 @@ const generic = ({ title, heading = title, message, link, linkLabel = 'Open Leam
 export const renderEmailTemplate = (emailType, context = {}) => {
   const title = context.title || 'LeamJobs notification';
   const message = context.message || 'There is new activity on your LeamJobs account.';
+
+  if (emailType === 'EMPLOYER_VERIFICATION_APPROVED') {
+    return generic({
+      title: title || 'Company verification approved',
+      heading: 'Company verification approved',
+      message: message || 'Your company documents have been approved and your employer account is now verified.',
+      link: context.link || '/employer/verification',
+      linkLabel: 'View verification status',
+      ...({ unsubscribeUrl: context.unsubscribeUrl, isMarketing: false }),
+    });
+  }
+
+  if (emailType === 'EMPLOYER_VERIFICATION_DECLINED') {
+    return generic({
+      title: title || 'Company verification needs attention',
+      heading: 'Company verification needs attention',
+      message: message || 'Your verification request requires a few updates before it can be approved.',
+      link: context.link || '/employer/verification',
+      linkLabel: 'Review feedback',
+      ...({ unsubscribeUrl: context.unsubscribeUrl, isMarketing: false }),
+    });
+  }
+
   return generic({
     title,
     heading: context.heading,

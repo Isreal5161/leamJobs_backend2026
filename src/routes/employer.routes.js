@@ -39,12 +39,25 @@ import { createInvitation } from '../controllers/jobInvitation.controller.js';
 import { validateCreateJobInvitation } from '../validators/jobInvitation.validation.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
+import { validateSubmitEmployerVerification } from '../validators/employerVerification.validation.js';
+import {
+  deleteVerificationDocument,
+  fetchVerificationDocument,
+  getEmployerVerification,
+  submitVerification,
+  uploadVerificationDocument,
+} from '../controllers/employerVerification.controller.js';
 
 const employerRouter = Router();
 
 employerRouter.get('/me', authenticate, requireRole('EMPLOYER'), getEmployerMe);
 employerRouter.get('/profile', authenticate, requireRole('EMPLOYER'), getProfile);
 employerRouter.patch('/profile', authenticate, requireRole('EMPLOYER'), validateEmployerProfileUpdate, updateProfile);
+employerRouter.get('/verification', authenticate, requireRole('EMPLOYER'), getEmployerVerification);
+employerRouter.post('/verification', authenticate, requireRole('EMPLOYER'), validateSubmitEmployerVerification, submitVerification);
+employerRouter.post('/verification/documents', authenticate, requireRole('EMPLOYER'), singleUpload('file'), uploadVerificationDocument);
+employerRouter.get('/verification/documents/:documentId', authenticate, requireRole('EMPLOYER'), fetchVerificationDocument);
+employerRouter.delete('/verification/documents/:documentId', authenticate, requireRole('EMPLOYER'), deleteVerificationDocument);
 employerRouter.post('/profile/logo', authenticate, requireRole('EMPLOYER'), singleUpload('file'), uploadLogo);
 employerRouter.delete('/profile/logo', authenticate, requireRole('EMPLOYER'), deleteLogo);
 employerRouter.get('/profile/logo', authenticate, requireRole('EMPLOYER'), getLogo);

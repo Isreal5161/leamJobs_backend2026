@@ -10,12 +10,19 @@ const profileSelect = {
   industry: true,
   companySize: true,
   location: true,
+  address: true,
+  state: true,
+  country: true,
+  linkedinUrl: true,
+  twitterUrl: true,
+  facebookUrl: true,
   companyLogoUrl: true,
   companyLogoKey: true,
 };
 
 const userSelect = {
   email: true,
+  phone: true,
   employerProfile: { select: profileSelect },
 };
 
@@ -35,12 +42,18 @@ const mapProfile = (profile) => profile ? {
   industry: profile.industry,
   companySize: profile.companySize,
   location: profile.location,
+  address: profile.address,
+  state: profile.state,
+  country: profile.country,
+  linkedinUrl: profile.linkedinUrl,
+  twitterUrl: profile.twitterUrl,
+  facebookUrl: profile.facebookUrl,
   companyLogoUrl: profile.companyLogoUrl,
 } : null;
 
 const mapResponse = (user, profile = user.employerProfile) => ({
   profile: mapProfile(profile),
-  account: { email: user.email },
+  account: { email: user.email, ...(user.phone !== undefined ? { phone: user.phone } : {}) },
 });
 
 const getEmployerUser = (employerId) => prisma.user.findUnique({
@@ -62,7 +75,7 @@ export const updateEmployerProfile = async (employerId, payload) => {
   }
 
   const profileData = Object.fromEntries(
-    Object.entries(payload).filter(([, value]) => value !== undefined),
+    Object.entries(payload).filter(([key, value]) => key !== 'phone' && value !== undefined),
   );
 
   const profile = await prisma.employerProfile.upsert({
@@ -72,7 +85,11 @@ export const updateEmployerProfile = async (employerId, payload) => {
     select: profileSelect,
   });
 
-  return mapResponse(user, profile);
+  if (payload.phone !== undefined) {
+    await prisma.user.update({ where: { id: employerId }, data: { phone: payload.phone } });
+  }
+
+  return mapResponse({ ...user, ...(payload.phone !== undefined ? { phone: payload.phone } : {}) }, profile);
 };
 
 export const updateEmployerCompanyLogoForUser = async (employerId, file, extension) => {

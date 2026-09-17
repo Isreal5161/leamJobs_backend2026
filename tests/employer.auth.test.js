@@ -80,6 +80,26 @@ describe('Employer authentication and authorization', () => {
     expect(result.token).toBeTruthy();
   });
 
+  test.each([
+    ['SEEKER', 'EMPLOYER', 'You are not registered as an employer.'],
+    ['EMPLOYER', 'SEEKER', 'You are not registered as a seeker.'],
+  ])('%s account is rejected by the %s login flow with a useful message', async (actualRole, expectedRole, message) => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'role-user-123',
+      email: 'role@example.com',
+      passwordHash: bcrypt.hashSync('Password1!', 12),
+      role: actualRole,
+      isActive: true,
+    });
+
+    await expect(loginUser({ email: 'role@example.com', password: 'Password1!', role: expectedRole })).rejects.toThrow(message);
+    await expect(loginUser({ email: 'role@example.com', password: 'Password1!', role: expectedRole })).rejects.toMatchObject({
+      status: 403,
+      publicCode: 'ROLE_MISMATCH',
+    });
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
   test('invalid credentials fail', async () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
 

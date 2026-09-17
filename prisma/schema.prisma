@@ -23,6 +23,8 @@ model User {
 
   seekerProfile   SeekerProfile?
   employerProfile EmployerProfile?
+  employerVerification EmployerVerification?
+  reviewedEmployerVerifications EmployerVerification[] @relation("EmployerVerificationReviewers")
 
   jobs             Job[]         @relation("EmployerJobs")
   reviewedJobs     Job[]         @relation("JobReviewers")
@@ -273,6 +275,12 @@ model EmployerProfile {
   industry          String?
   companySize       String?
   location          String?
+  address           String?
+  state             String?
+  country           String?
+  linkedinUrl       String?
+  twitterUrl        String?
+  facebookUrl       String?
   companyLogoUrl    String?
   companyLogoKey    String?
   createdAt         DateTime @default(now())
@@ -282,6 +290,43 @@ model EmployerProfile {
 
   @@index([location])
   @@index([industry])
+}
+
+model EmployerVerification {
+  id              String                      @id @default(uuid())
+  userId          String                      @unique
+  status          EmployerVerificationStatus  @default(PENDING)
+  submittedAt     DateTime?
+  reviewedById    String?
+  reviewedAt      DateTime?
+  declineReason   String?
+  registrationNumber String?
+  registrationType   String?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("EmployerVerificationReviewers", fields: [reviewedById], references: [id], onDelete: SetNull)
+  documents EmployerVerificationDocument[]
+
+  @@index([status, submittedAt])
+  @@index([reviewedById, reviewedAt])
+}
+
+model EmployerVerificationDocument {
+  id             String                              @id @default(uuid())
+  verificationId String
+  kind           EmployerVerificationDocumentKind
+  fileName       String
+  contentType    String
+  fileSize       Int?
+  objectKey      String
+  uploadedAt     DateTime                            @default(now())
+  createdAt      DateTime                            @default(now())
+
+  verification EmployerVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+
+  @@index([verificationId, uploadedAt])
 }
 
 model Job {
@@ -904,6 +949,21 @@ enum Role {
   SEEKER
   EMPLOYER
   ADMIN
+}
+
+enum EmployerVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EmployerVerificationDocumentKind {
+  CAC
+  TRADE_LICENSE
+  TAX_CERTIFICATE
+  UTILITY_BILL
+  IDENTITY_SUPPORTING
+  OTHER
 }
 
 enum JobType {

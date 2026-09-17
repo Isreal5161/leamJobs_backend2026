@@ -96,13 +96,18 @@ const technicalErrorPattern = /(prisma|sql|database|stack|internal server|econn|
 
 const safeErrorMessage = (error, status) => {
   if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 403 && ['ROLE_MISMATCH', 'EMPLOYER_NOT_VERIFIED'].includes(error?.publicCode)) {
+    const message = String(error?.publicMessage ?? error?.message ?? '').trim();
+    if (message && !technicalErrorPattern.test(message)) return message;
+  }
   if (status === 403) return "You don't have permission to perform this action.";
-  if (status === 404) return "We couldn't find what you're looking for.";
   if (status === 408) return 'The request took too long to complete. Please try again.';
 
   const message = String(error?.publicMessage ?? error?.message ?? '').trim();
   if (error?.publicMessage) return message;
   if (technicalErrorPattern.test(message)) return status >= 500 ? 'Something went wrong on our side. Please try again shortly.' : 'Something went wrong. Please try again.';
+  if (status === 404 && message) return message;
+  if (status === 404) return "We couldn't find what you're looking for.";
   if (status >= 500) return 'Something went wrong on our side. Please try again shortly.';
   return message || 'Something went wrong. Please try again.';
 };

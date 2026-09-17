@@ -48,12 +48,24 @@ import { listNotifications, readAllNotifications, readNotification } from '../co
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { campaignDeliveries, campaignPreview, campaignRecipients, campaignRecords, campaignReport, createCampaign, previewTemplate, sendCampaign, templates, updateCampaign, updateTemplate } from '../controllers/adminCommunications.controller.js';
 import { validateCampaignCreate, validateCampaignRecordsQuery, validateCampaignRecipientQuery, validateCampaignUpdate, validateTemplateKey, validateTemplateUpdate } from '../validators/adminCommunications.validation.js';
+import {
+  approveEmployerVerification,
+  fetchVerificationDocumentForAdmin,
+  listEmployerVerifications,
+  rejectEmployerVerification,
+  viewEmployerVerification,
+} from '../controllers/adminEmployerVerification.controller.js';
 
 const adminRouter = Router();
 
 adminRouter.get('/companies', authenticate, requireRole('ADMIN'), validateAdminCompaniesQuery, listCompanies);
 adminRouter.get('/companies/leamjobs', authenticate, requireRole('ADMIN'), getLeamJobsEmployer);
 adminRouter.get('/companies/:userId/logo', authenticate, requireRole('ADMIN'), getCompanyLogo);
+adminRouter.get('/verification-submissions', authenticate, requireRole('ADMIN'), listEmployerVerifications);
+adminRouter.get('/verification-submissions/:verificationId', authenticate, requireRole('ADMIN'), viewEmployerVerification);
+adminRouter.get('/verification-documents/:documentId', authenticate, requireRole('ADMIN'), fetchVerificationDocumentForAdmin);
+adminRouter.patch('/verification-submissions/:verificationId/approve', authenticate, requireRole('ADMIN'), approveEmployerVerification);
+adminRouter.patch('/verification-submissions/:verificationId/reject', authenticate, requireRole('ADMIN'), rejectEmployerVerification);
 adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);

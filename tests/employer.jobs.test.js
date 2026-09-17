@@ -15,6 +15,9 @@ const mockPrisma = {
     update: jest.fn(),
     updateMany: jest.fn(),
   },
+  employerVerification: {
+    findUnique: jest.fn(),
+  },
   employmentCompensation: { deleteMany: jest.fn() },
   contractCompensation: { deleteMany: jest.fn() },
   freelanceCompensation: { deleteMany: jest.fn() },
@@ -90,6 +93,7 @@ beforeEach(() => {
   mockPrisma.job.findMany.mockResolvedValue([]);
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.job.updateMany.mockResolvedValue({ count: 0 });
+  mockPrisma.employerVerification.findUnique.mockResolvedValue({ status: 'APPROVED' });
   mockPrisma.employmentCompensation.deleteMany.mockResolvedValue({ count: 0 });
   mockPrisma.contractCompensation.deleteMany.mockResolvedValue({ count: 0 });
   mockPrisma.freelanceCompensation.deleteMany.mockResolvedValue({ count: 0 });
@@ -197,6 +201,50 @@ describe('Employer Jobs creation and compensation', () => {
 
     expect(response.status).toBe(400);
     expect(mockPrisma.job.create).not.toHaveBeenCalled();
+  });
+
+  test('blocks unverified employers from creating jobs', async () => {
+    mockPrisma.employerVerification.findUnique.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post('/api/employer/jobs')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send(payload());
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.job.create).not.toHaveBeenCalled();
+  });
+
+  test.each(['PENDING', 'REJECTED'])('%s employers cannot create jobs', async (status) => {
+    mockPrisma.employerVerification.findUnique.mockResolvedValue({ status });
+
+    const response = await request(app)
+      .post('/api/employer/jobs')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send(payload());
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toEqual(expect.objectContaining({ code: 'EMPLOYER_NOT_VERIFIED' }));
+    expect(response.body.error.message).toMatch(status === 'PENDING' ? /under review/i : /declined/i);
+    expect(mockPrisma.job.create).not.toHaveBeenCalled();
+  });
+
+  test('allows approved employers to create jobs', async () => {
+    mockPrisma.employerVerification.findUnique.mockResolvedValue({ status: 'APPROVED' });
+    mockPrisma.job.create.mockImplementation(async ({ data }) => jobRecord({
+      ...data,
+      id: jobA,
+      applicationDeadline: data.applicationDeadline,
+      employmentCompensation: data.employmentCompensation.create,
+    }));
+
+    const response = await request(app)
+      .post('/api/employer/jobs')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send(payload());
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.job.create).toHaveBeenCalled();
   });
 
   test('persists contract compensation and duration', async () => {

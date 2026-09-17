@@ -5,6 +5,11 @@ const nullableText = (label, max) => z.preprocess(
   z.string().trim().max(max, `${label} must be ${max} characters or fewer`).nullable().optional(),
 );
 
+const nullableUrl = (label) => z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? null : value,
+  z.string().trim().url(`${label} must be a valid URL`).max(500, `${label} must be 500 characters or fewer`).nullable().optional(),
+);
+
 const employerProfileSchema = z.object({
   companyName: z.string().trim().min(1, 'Company name is required').max(160, 'Company name must be 160 characters or fewer').optional(),
   companyDescription: nullableText('Company description', 5000),
@@ -15,6 +20,13 @@ const employerProfileSchema = z.object({
   industry: nullableText('Industry', 120),
   companySize: nullableText('Company size', 100),
   location: nullableText('Location', 160),
+  address: nullableText('Company address', 240),
+  state: nullableText('State', 120),
+  country: nullableText('Country', 120),
+  linkedinUrl: nullableUrl('LinkedIn URL'),
+  twitterUrl: nullableUrl('X/Twitter URL'),
+  facebookUrl: nullableUrl('Facebook URL'),
+  phone: nullableText('Company phone', 40),
 }).strict();
 
 export const validateEmployerProfileUpdate = (req, res, next) => {

@@ -2,6 +2,25 @@ import { prisma } from '../config/database.js';
 import { createNotification } from './notification.service.js';
 import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 
+const ensureEmployerIsVerified = async (employerId) => {
+  const verification = await prisma.employerVerification.findUnique({
+    where: { userId: employerId },
+    select: { status: true },
+  });
+
+  if (!verification || verification.status !== 'APPROVED') {
+    const message = !verification
+      ? 'Company verification is required before you can post a job.'
+      : verification.status === 'REJECTED'
+        ? 'Your company verification was declined. Please review the reason and resubmit.'
+        : 'Your company verification is currently under review.';
+    const error = new Error(message);
+    error.status = 403;
+    error.publicCode = 'EMPLOYER_NOT_VERIFIED';
+    throw error;
+  }
+};
+
 const employerProfileSelect = {
   companyName: true,
   companyDescription: true,
@@ -203,6 +222,8 @@ export const listEmployerJobs = async (employerId) => {
 };
 
 export const createEmployerJob = async (employerId, payload) => {
+  await ensureEmployerIsVerified(employerId);
+
   const job = await prisma.job.create({
     data: {
       ...jobData(employerId, payload),

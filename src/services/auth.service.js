@@ -38,6 +38,18 @@ export class AuthenticationRequiredError extends Error {
   }
 }
 
+export class RoleMismatchError extends Error {
+  constructor(expectedRole, actualRole) {
+    const roleLabel = expectedRole === 'SEEKER' ? 'seeker' : 'employer';
+    super(`You are not registered as ${roleLabel === 'employer' ? 'an' : 'a'} ${roleLabel}.`);
+    this.name = 'RoleMismatchError';
+    this.status = 403;
+    this.publicCode = 'ROLE_MISMATCH';
+    this.actualRole = actualRole;
+    this.expectedRole = expectedRole;
+  }
+}
+
 export const registerUser = async ({ firstName, lastName, email, password, phone, role }) => {
   const normalizedFirstName = firstName.trim();
   const normalizedLastName = lastName.trim();
@@ -66,7 +78,7 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
   }
 };
 
-export const loginUser = async ({ email, password }) => {
+export const loginUser = async ({ email, password, role }) => {
   const normalizedEmail = email.trim().toLowerCase();
   const user = await prisma.user.findUnique({
     where: { email: normalizedEmail },
@@ -84,6 +96,10 @@ export const loginUser = async ({ email, password }) => {
 
   if (!user.isActive) {
     throw new InactiveAccountError();
+  }
+
+  if (role && user.role !== role) {
+    throw new RoleMismatchError(role, user.role);
   }
 
   const updatedUser = await prisma.user.update({

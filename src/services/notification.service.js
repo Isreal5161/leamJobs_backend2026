@@ -66,6 +66,8 @@ const emailTypeForNotification = (notification) => {
   if (eventKey.startsWith('job:submitted:')) return EMAIL_TYPES.ADMIN_JOB_REVIEW_REQUIRED;
   if (eventKey.startsWith('job:approved:')) return link?.startsWith('/seeker/') ? EMAIL_TYPES.NEW_JOB_MATCH : EMAIL_TYPES.JOB_APPROVED;
   if (eventKey.startsWith('job:rejected:')) return EMAIL_TYPES.JOB_REJECTED;
+  if (eventKey.startsWith('employerVerification:approved:')) return EMAIL_TYPES.EMPLOYER_VERIFICATION_APPROVED;
+  if (eventKey.startsWith('employerVerification:declined:')) return EMAIL_TYPES.EMPLOYER_VERIFICATION_DECLINED;
   if (eventKey.startsWith('application:submitted:')) return EMAIL_TYPES.APPLICATION_SUBMITTED;
   if (eventKey.startsWith('application:status:') || eventKey.startsWith('application:accepted:') || eventKey.startsWith('application:selected:')) return EMAIL_TYPES.APPLICATION_STATUS_CHANGED;
   if (eventKey.startsWith('invitation:pending:')) return EMAIL_TYPES.JOB_INVITATION_RECEIVED;
