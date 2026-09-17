@@ -9,6 +9,8 @@ const documentId = '44444444-4444-4444-8444-444444444444';
 
 const mockPrisma = {
   user: { findUnique: jest.fn() },
+  employerProfile: { upsert: jest.fn() },
+  $transaction: jest.fn(async (callback) => callback(mockPrisma)),
   employerVerification: {
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -88,12 +90,35 @@ const file = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.user.findUnique.mockResolvedValue({ employerProfile: { companyName: 'Example Ltd' } });
   mockPrisma.employerVerification.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.employerVerificationDocument.delete.mockResolvedValue({ id: documentId });
 });
 
 describe('Employer verification lifecycle', () => {
+  test('returns the submitted company snapshot separately from the current public profile', async () => {
+    mockPrisma.employerVerification.findUnique.mockResolvedValue(fullVerification({
+      companyName: 'Submitted Company',
+      companyDescription: 'Submitted description',
+      website: 'https://submitted.example.com',
+      user: {
+        ...fullVerification().user,
+        employerProfile: { ...fullVerification().user.employerProfile, companyName: 'Current Public Company' },
+      },
+    }));
+
+    const result = await getEmployerVerification(employerId);
+
+    expect(result.verification.submittedCompany).toMatchObject({
+      companyName: 'Submitted Company',
+      companyDescription: 'Submitted description',
+      website: 'https://submitted.example.com',
+    });
+    expect(result.verification.submittedCompanySource).toBe('SUBMITTED');
+    expect(result.verification.employer.company.companyName).toBe('Current Public Company');
+  });
+
   test('creates a first submission with a submission timestamp', async () => {
     mockPrisma.employerVerification.findUnique
       .mockResolvedValueOnce(null)
@@ -170,6 +195,26 @@ describe('Employer verification lifecycle', () => {
     expect(mockPrisma.employerVerification.updateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } } }));
     expect(mockPrisma.employerVerification.updateMany).toHaveBeenNthCalledWith(2, expect.objectContaining({ where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } } }));
     expect(createNotification).toHaveBeenCalledTimes(2);
+  });
+
+  test('approval keeps profile sync and verification transition inside one transaction', async () => {
+    const transactionError = new Error('verification transition failed');
+    mockPrisma.employerVerification.findUnique.mockResolvedValue({
+      id: verificationId,
+      userId: employerId,
+      status: 'PENDING',
+      submittedAt: new Date(),
+      companyName: 'Submitted Company',
+      user: { email: 'employer@example.com' },
+    });
+    mockPrisma.employerProfile.upsert.mockResolvedValue({ id: 'profile-1' });
+    mockPrisma.employerVerification.updateMany.mockRejectedValue(transactionError);
+
+    await expect(approveEmployerVerification(adminId, verificationId)).rejects.toBe(transactionError);
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.employerProfile.upsert).toHaveBeenCalledTimes(1);
+    expect(createNotification).not.toHaveBeenCalled();
   });
 
   test('a repeated approval does not create a second notification', async () => {

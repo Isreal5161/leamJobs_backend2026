@@ -22,6 +22,18 @@ const verificationSelect = {
   declineReason: true,
   registrationNumber: true,
   registrationType: true,
+  companyName: true,
+  companyDescription: true,
+  website: true,
+  industry: true,
+  companySize: true,
+  location: true,
+  address: true,
+  state: true,
+  country: true,
+  linkedinUrl: true,
+  twitterUrl: true,
+  facebookUrl: true,
   createdAt: true,
   updatedAt: true,
   user: {
@@ -105,7 +117,24 @@ const validateVerificationDocumentFile = (file) => {
   }
 };
 
-const mapVerification = (verification) => ({
+const mapVerification = (verification) => {
+  const hasSubmittedCompany = Boolean(
+    verification.companyName
+    || verification.companyDescription
+    || verification.website
+    || verification.industry
+    || verification.companySize
+    || verification.location
+    || verification.address
+    || verification.state
+    || verification.country
+    || verification.linkedinUrl
+    || verification.twitterUrl
+    || verification.facebookUrl,
+  );
+  const currentPublicProfile = verification.user?.employerProfile ?? null;
+
+  return {
   id: verification.id,
   userId: verification.userId,
   status: verification.status,
@@ -115,27 +144,28 @@ const mapVerification = (verification) => ({
   declineReason: verification.declineReason ?? null,
   registrationNumber: verification.registrationNumber ?? null,
   registrationType: verification.registrationType ?? null,
+  submittedCompany: hasSubmittedCompany ? {
+    companyName: verification.companyName ?? null,
+    companyDescription: verification.companyDescription ?? null,
+    website: verification.website ?? null,
+    industry: verification.industry ?? null,
+    companySize: verification.companySize ?? null,
+    location: verification.location ?? null,
+    address: verification.address ?? null,
+    state: verification.state ?? null,
+    country: verification.country ?? null,
+    linkedinUrl: verification.linkedinUrl ?? null,
+    twitterUrl: verification.twitterUrl ?? null,
+    facebookUrl: verification.facebookUrl ?? null,
+  } : null,
+  submittedCompanySource: hasSubmittedCompany ? 'SUBMITTED' : currentPublicProfile ? 'LEGACY_PROFILE_FALLBACK' : 'NONE',
   employer: verification.user ? {
     id: verification.user.id,
     email: verification.user.email,
     phone: verification.user.phone,
     firstName: verification.user.firstName,
     lastName: verification.user.lastName,
-    company: verification.user.employerProfile ? {
-      companyName: verification.user.employerProfile.companyName,
-      companyDescription: verification.user.employerProfile.companyDescription,
-      website: verification.user.employerProfile.website,
-      industry: verification.user.employerProfile.industry,
-      companySize: verification.user.employerProfile.companySize,
-      location: verification.user.employerProfile.location,
-      address: verification.user.employerProfile.address,
-      state: verification.user.employerProfile.state,
-      country: verification.user.employerProfile.country,
-      linkedinUrl: verification.user.employerProfile.linkedinUrl,
-      twitterUrl: verification.user.employerProfile.twitterUrl,
-      facebookUrl: verification.user.employerProfile.facebookUrl,
-      companyLogoUrl: verification.user.employerProfile.companyLogoUrl,
-    } : null,
+    company: currentPublicProfile,
   } : null,
   documents: (verification.documents ?? []).map((document) => ({
     id: document.id,
@@ -147,7 +177,8 @@ const mapVerification = (verification) => ({
   })),
   createdAt: verification.createdAt,
   updatedAt: verification.updatedAt,
-});
+  };
+};
 
 const ensureVerificationRecord = async (employerId) => {
   const existing = await prisma.employerVerification.findUnique({
@@ -210,7 +241,7 @@ export const getEmployerVerification = async (employerId) => {
   return { verification: mapVerification(verification) };
 };
 
-export const submitEmployerVerification = async (employerId, { registrationNumber, registrationType = 'CAC' } = {}) => {
+export const submitEmployerVerification = async (employerId, { registrationNumber, registrationType = 'CAC', company = {} } = {}) => {
   const normalizedRegistrationNumber = String(registrationNumber ?? '').trim();
   const normalizedRegistrationType = String(registrationType ?? '').trim().toUpperCase();
   if (!normalizedRegistrationNumber) {
@@ -226,10 +257,28 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
 
   const employer = await prisma.user.findUnique({
     where: { id: employerId },
-    select: { employerProfile: { select: { companyName: true } } },
+    select: {
+      employerProfile: {
+        select: {
+          companyName: true,
+          companyDescription: true,
+          website: true,
+          industry: true,
+          companySize: true,
+          location: true,
+          address: true,
+          state: true,
+          country: true,
+          linkedinUrl: true,
+          twitterUrl: true,
+          facebookUrl: true,
+        },
+      },
+    },
   });
-  if (!employer?.employerProfile?.companyName?.trim()) {
-    const error = new Error('Complete your company profile before submitting verification');
+  const companyData = Object.fromEntries(Object.entries({ ...(employer?.employerProfile ?? {}), ...company }).map(([key, value]) => [key, value === undefined ? null : value]));
+  if (!companyData.companyName?.trim()) {
+    const error = new Error('Company name is required');
     error.status = 400;
     throw error;
   }
@@ -250,6 +299,7 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
           submittedAt,
           registrationNumber: normalizedRegistrationNumber,
           registrationType: normalizedRegistrationType,
+          ...companyData,
         },
         select: { id: true, userId: true, status: true, submittedAt: true },
       });
@@ -278,6 +328,7 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
         submittedAt,
         registrationNumber: normalizedRegistrationNumber,
         registrationType: normalizedRegistrationType,
+        ...companyData,
       },
     });
     if (result.count !== 1) throw new VerificationStateError('Your verification changed while it was being submitted. Please review the current status and try again.');
@@ -296,6 +347,18 @@ export const listEmployerVerifications = async () => {
       submittedAt: true,
       reviewedAt: true,
       declineReason: true,
+      companyName: true,
+      companyDescription: true,
+      website: true,
+      industry: true,
+      companySize: true,
+      location: true,
+      address: true,
+      state: true,
+      country: true,
+      linkedinUrl: true,
+      twitterUrl: true,
+      facebookUrl: true,
       user: {
         select: {
           id: true,
@@ -339,6 +402,23 @@ export const listEmployerVerifications = async () => {
         companyName: row.user.employerProfile?.companyName ?? null,
         company: row.user.employerProfile ?? null,
       } : null,
+      submittedCompany: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl ? {
+        companyName: row.companyName ?? null,
+        companyDescription: row.companyDescription ?? null,
+        website: row.website ?? null,
+        industry: row.industry ?? null,
+        companySize: row.companySize ?? null,
+        location: row.location ?? null,
+        address: row.address ?? null,
+        state: row.state ?? null,
+        country: row.country ?? null,
+        linkedinUrl: row.linkedinUrl ?? null,
+        twitterUrl: row.twitterUrl ?? null,
+        facebookUrl: row.facebookUrl ?? null,
+      } : null,
+      submittedCompanySource: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl
+        ? 'SUBMITTED'
+        : row.user?.employerProfile ? 'LEGACY_PROFILE_FALLBACK' : 'NONE',
       documentCount: row.documents.length,
     })),
   };
@@ -362,7 +442,7 @@ export const getEmployerVerificationForAdmin = async (verificationId) => {
 export const approveEmployerVerification = async (adminId, verificationId) => {
   const verification = await prisma.employerVerification.findUnique({
     where: { id: verificationId },
-    select: { id: true, userId: true, status: true, submittedAt: true, user: { select: { email: true, firstName: true, lastName: true } } },
+    select: { id: true, userId: true, status: true, submittedAt: true, companyName: true, companyDescription: true, website: true, industry: true, companySize: true, location: true, address: true, state: true, country: true, linkedinUrl: true, twitterUrl: true, facebookUrl: true, user: { select: { email: true, firstName: true, lastName: true } } },
   });
 
   if (!verification) {
@@ -372,16 +452,53 @@ export const approveEmployerVerification = async (adminId, verificationId) => {
   }
 
   assertReviewableVerification(verification);
-  const updateResult = await prisma.employerVerification.updateMany({
-    where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } },
-    data: {
-      status: 'APPROVED',
-      reviewedById: adminId,
-      reviewedAt: new Date(),
-      declineReason: null,
-    },
+  await prisma.$transaction(async (transaction) => {
+    if (transaction.employerProfile?.upsert && verification.companyName) {
+      await transaction.employerProfile.upsert({
+        where: { userId: verification.userId },
+        update: {
+          companyName: verification.companyName,
+          companyDescription: verification.companyDescription,
+          website: verification.website,
+          industry: verification.industry,
+          companySize: verification.companySize,
+          location: verification.location,
+          address: verification.address,
+          state: verification.state,
+          country: verification.country,
+          linkedinUrl: verification.linkedinUrl,
+          twitterUrl: verification.twitterUrl,
+          facebookUrl: verification.facebookUrl,
+        },
+        create: {
+          userId: verification.userId,
+          companyName: verification.companyName,
+          companyDescription: verification.companyDescription,
+          website: verification.website,
+          industry: verification.industry,
+          companySize: verification.companySize,
+          location: verification.location,
+          address: verification.address,
+          state: verification.state,
+          country: verification.country,
+          linkedinUrl: verification.linkedinUrl,
+          twitterUrl: verification.twitterUrl,
+          facebookUrl: verification.facebookUrl,
+        },
+      });
+    }
+
+    const updateResult = await transaction.employerVerification.updateMany({
+      where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } },
+      data: {
+        status: 'APPROVED',
+        reviewedById: adminId,
+        reviewedAt: new Date(),
+        declineReason: null,
+      },
+    });
+    if (updateResult.count !== 1) throw new VerificationStateError('This verification was already reviewed.');
   });
-  if (updateResult.count !== 1) throw new VerificationStateError('This verification was already reviewed.');
   const updated = await loadVerificationById(verificationId);
 
   await createNotification({

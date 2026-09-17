@@ -302,6 +302,18 @@ model EmployerVerification {
   declineReason   String?
   registrationNumber String?
   registrationType   String?
+  companyName       String?
+  companyDescription String?
+  website           String?
+  industry          String?
+  companySize       String?
+  location          String?
+  address           String?
+  state             String?
+  country           String?
+  linkedinUrl       String?
+  twitterUrl        String?
+  facebookUrl       String?
   createdAt       DateTime                    @default(now())
   updatedAt       DateTime                    @updatedAt
 
