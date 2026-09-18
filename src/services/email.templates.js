@@ -18,14 +18,19 @@ const renderMessage = (message) => escapeHtml(message)
   })
   .join('');
 
+const frontendBaseUrl = () => (process.env.FRONTEND_URL || process.env.FRONTEND_URL_PROD || 'https://leamjobs.com').replace(/\/$/, '');
+const logoUrl = () => `${frontendBaseUrl()}/leamjobs-2.png`;
+
 const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing }) => `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)}</title></head>
 <body style="margin:0;background:#f4f7f5;color:#1d2924;font-family:Arial,sans-serif;line-height:1.6">
-  <div style="max-width:620px;width:calc(100% - 32px);margin:24px auto">
-    <div style="background:#0B1F3A;color:#fff;padding:22px 26px;border-radius:10px 10px 0 0;font-size:22px;font-weight:700;box-sizing:border-box;width:100%">LeamJobs</div>
-    <main style="background:#fff;padding:30px 26px;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
-      <h1 style="margin:0 0 18px;font-size:24px;line-height:1.25;color:#17352b">${escapeHtml(heading)}</h1>
+  <div style="max-width:620px;width:100%;margin:0 auto;background:transparent">
+    <div style="background:#0B1F3A;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
+      <img src="${escapeHtml(logoUrl())}" alt="LeamJobs" style="display:block;width:auto;height:28px;border:0;max-width:160px;" />
+    </div>
+    <main style="background:#fff;padding:20px 26px 30px;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
+      <h1 style="margin:8px 0 18px;font-size:24px;line-height:1.25;color:#17352b">${escapeHtml(heading)}</h1>
       ${body}
       ${ctaLabel && ctaUrl ? `<p style="margin:26px 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d79a3d;color:#1d2924;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:6px">${escapeHtml(ctaLabel)}</a></p>` : ''}
       <p style="margin:28px 0 0;color:#63736c;font-size:13px">${isMarketing ? 'You are receiving this optional LeamJobs job-update email.' : 'You are receiving this important LeamJobs account or service message.'}</p>

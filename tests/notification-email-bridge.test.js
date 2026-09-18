@@ -71,3 +71,10 @@ test('keeps trusted absolute URLs and resolves relative CTA fallbacks to product
   expect(fallback.html).toContain('https://leamjobs.com/employer/verification');
   expect(fallback.text).toContain('https://leamjobs.com/employer/verification');
 });
+
+test('uses the LeamJobs logo in the email header and removes the full-width margin gap on mobile', () => {
+  const email = renderEmailTemplate('EMPLOYER_VERIFICATION_APPROVED', { title: 'Approved', message: 'Your verification is approved.' });
+  expect(email.html).toContain('https://leamjobs.com/leamjobs-2.png');
+  expect(email.html).toContain('width:100%');
+  expect(email.html).toContain('margin:8px 0 18px');
+});
