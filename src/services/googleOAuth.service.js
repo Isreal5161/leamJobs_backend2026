@@ -268,6 +268,37 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
 
     if (existingOAuthAccount) {
       const existingUser = existingOAuthAccount.user;
+      const storedEmail = String(existingOAuthAccount.email || existingUser?.email || '').trim().toLowerCase();
+      const storedSubject = String(existingOAuthAccount.providerSubject || '').trim();
+
+      if (!existingUser) {
+        const identityMismatch = new Error('This Google account is linked to a missing LeamJobs user.');
+        identityMismatch.status = 409;
+        identityMismatch.publicMessage = 'This Google account is linked to an invalid LeamJobs identity. Please sign in with your existing account or start again.';
+        throw identityMismatch;
+      }
+
+      if (existingOAuthAccount.provider !== GOOGLE_PROVIDER || storedSubject !== providerSubject) {
+        const identityMismatch = new Error('This Google account identity does not match the stored LeamJobs identity.');
+        identityMismatch.status = 409;
+        identityMismatch.publicMessage = 'This Google account identity is invalid. Please start again.';
+        throw identityMismatch;
+      }
+
+      if (storedEmail && storedEmail !== normalizedEmail) {
+        const identityMismatch = new Error('This Google account email does not match the associated LeamJobs identity.');
+        identityMismatch.status = 409;
+        identityMismatch.publicMessage = 'This Google account is already linked to a different email address.';
+        throw identityMismatch;
+      }
+
+      if (existingUser.email && String(existingUser.email).trim().toLowerCase() !== normalizedEmail) {
+        const identityMismatch = new Error('This Google account is linked to a different LeamJobs email.');
+        identityMismatch.status = 409;
+        identityMismatch.publicMessage = 'This Google account is already linked to a different email address.';
+        throw identityMismatch;
+      }
+
       if (existingUser.role !== pending.intendedRole) {
         const roleMismatch = new Error('This Google account is already linked to a different LeamJobs role.');
         roleMismatch.status = 409;

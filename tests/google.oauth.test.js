@@ -227,6 +227,78 @@ test('existing same-email password accounts are not auto-linked during Google ca
   });
 });
 
+test('existing Google identity with mismatched stored email is rejected without reassigning the OAuth account', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-1',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'SEEKER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oauthAccount.findUnique.mockResolvedValue({
+    id: 'oauth-1',
+    provider: 'GOOGLE',
+    providerSubject: 'google-subject-123',
+    email: 'alice+other@example.com',
+    userId: 'existing-user',
+    user: {
+      id: 'existing-user',
+      email: 'alice@example.com',
+      role: 'SEEKER',
+      isActive: true,
+      isVerified: true,
+    },
+  });
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
+    status: 409,
+  });
+});
+
+test('existing Google identity with a missing linked user is rejected safely', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-1',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'SEEKER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oauthAccount.findUnique.mockResolvedValue({
+    id: 'oauth-1',
+    provider: 'GOOGLE',
+    providerSubject: 'google-subject-123',
+    email: 'alice@example.com',
+    userId: 'missing-user',
+    user: null,
+  });
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
+    status: 409,
+  });
+});
+
+test('same-email password account with opposite requested role is rejected without auto-linking', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-1',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'EMPLOYER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oauthAccount.findUnique.mockResolvedValue(null);
+  mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user', email: 'alice@example.com', role: 'SEEKER' });
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
+    status: 409,
+  });
+});
+
 test('completeGoogleRegistration requires email verification before JWT issuance', async () => {
   mockPrisma.pendingOAuthRegistration.findUnique.mockResolvedValue({
     id: 'pending-1',
