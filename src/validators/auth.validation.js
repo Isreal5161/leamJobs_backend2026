@@ -30,6 +30,18 @@ const resendEmailVerificationSchema = z.object({
   email: z.string().trim().email('A valid email is required'),
 }).strict();
 
+const googleStartSchema = z.object({
+  role: z.enum(['SEEKER', 'EMPLOYER']).default('SEEKER'),
+}).strict();
+
+const googleCompleteSchema = z.object({
+  pendingId: z.string().trim().min(1, 'Pending registration is required'),
+  continuationToken: z.string().trim().min(1, 'Google registration session is required'),
+  email: z.string().trim().email('A valid email is required'),
+  companyName: z.string().trim().optional(),
+  phone: z.string().trim().optional(),
+}).strict();
+
 export const validateRegistration = (req, res, next) => {
   const result = registrationSchema.safeParse(req.body);
 
@@ -83,6 +95,42 @@ export const validateVerifyEmail = (req, res, next) => {
 
 export const validateResendEmailVerification = (req, res, next) => {
   const result = resendEmailVerificationSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
+export const validateGoogleStart = (req, res, next) => {
+  const result = googleStartSchema.safeParse({
+    role: req.query?.role ?? 'SEEKER',
+  });
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.query.role = result.data.role;
+  return next();
+};
+
+export const validateGoogleComplete = (req, res, next) => {
+  const result = googleCompleteSchema.safeParse(req.body);
 
   if (!result.success) {
     return res.status(400).json({

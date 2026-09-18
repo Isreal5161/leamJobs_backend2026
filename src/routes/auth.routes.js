@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { forgotPassword, login, me, register, resendEmailVerificationController, resetPasswordController, verifyEmailController } from '../controllers/auth.controller.js';
+import { forgotPassword, googleCallbackController, googleCompleteController, googleStartController, login, me, register, resendEmailVerificationController, resetPasswordController, verifyEmailController } from '../controllers/auth.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
-import { validateLogin, validateRegistration, validateResendEmailVerification, validateVerifyEmail } from '../validators/auth.validation.js';
+import { validateGoogleComplete, validateGoogleStart, validateLogin, validateRegistration, validateResendEmailVerification, validateVerifyEmail } from '../validators/auth.validation.js';
 import { validateForgotPassword, validateResetPassword } from '../validators/passwordReset.validation.js';
 import { getPreferences, unsubscribe, updatePreferences } from '../controllers/emailPreference.controller.js';
 import { validateEmailPreferenceUpdate } from '../validators/emailPreference.validation.js';
@@ -9,6 +9,9 @@ import { validateEmailPreferenceUpdate } from '../validators/emailPreference.val
 const authRouter = Router();
 
 authRouter.post('/register', validateRegistration, register);
+authRouter.get('/google/start', validateGoogleStart, googleStartController);
+authRouter.get('/google/callback', googleCallbackController);
+authRouter.post('/google/complete', validateGoogleComplete, googleCompleteController);
 authRouter.post('/verify-email', validateVerifyEmail, verifyEmailController);
 authRouter.post('/verify-email/resend', validateResendEmailVerification, resendEmailVerificationController);
 authRouter.post('/login', validateLogin, login);

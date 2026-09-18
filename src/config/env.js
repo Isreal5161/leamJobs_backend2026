@@ -57,6 +57,12 @@ export const env = {
   FRONTEND_URL_PROD: process.env.FRONTEND_URL_PROD || '',
   PASSWORD_RESET_EXPIRE_MINUTES: parseInt(process.env.PASSWORD_RESET_EXPIRE_MINUTES || '30', 10),
 
+  // Google OAuth
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
+  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || '',
+  GOOGLE_ISSUER: process.env.GOOGLE_ISSUER || 'https://accounts.google.com',
+
   // Flutterwave contract funding (kept server-side; never expose these to clients)
   FLUTTERWAVE_SECRET_KEY: process.env.FLW_SECRET_KEY || process.env.FLUTTERWAVE_SECRET_KEY || '',
   FLUTTERWAVE_SECRET_HASH: process.env.FLW_SECRET_HASH || process.env.FLUTTERWAVE_SECRET_HASH || '',
