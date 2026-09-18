@@ -307,6 +307,7 @@ model EmployerVerification {
   website           String?
   industry          String?
   companySize       String?
+  phoneNumber       String?
   location          String?
   address           String?
   state             String?

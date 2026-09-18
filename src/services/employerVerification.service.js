@@ -27,6 +27,7 @@ const verificationSelect = {
   website: true,
   industry: true,
   companySize: true,
+  phoneNumber: true,
   location: true,
   address: true,
   state: true,
@@ -124,6 +125,7 @@ const mapVerification = (verification) => {
     || verification.website
     || verification.industry
     || verification.companySize
+    || verification.phoneNumber
     || verification.location
     || verification.address
     || verification.state
@@ -150,6 +152,7 @@ const mapVerification = (verification) => {
     website: verification.website ?? null,
     industry: verification.industry ?? null,
     companySize: verification.companySize ?? null,
+    phoneNumber: verification.phoneNumber ?? null,
     location: verification.location ?? null,
     address: verification.address ?? null,
     state: verification.state ?? null,
@@ -244,6 +247,10 @@ export const getEmployerVerification = async (employerId) => {
 export const submitEmployerVerification = async (employerId, { registrationNumber, registrationType = 'CAC', company = {} } = {}) => {
   const normalizedRegistrationNumber = String(registrationNumber ?? '').trim();
   const normalizedRegistrationType = String(registrationType ?? '').trim().toUpperCase();
+  const normalizedCompany = {
+    ...company,
+    ...(company.phoneNumber === undefined && company.phone !== undefined ? { phoneNumber: company.phone } : {}),
+  };
   if (!normalizedRegistrationNumber) {
     const error = new Error('CAC, BN, or business registration number is required');
     error.status = 400;
@@ -276,7 +283,7 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
       },
     },
   });
-  const companyData = Object.fromEntries(Object.entries({ ...(employer?.employerProfile ?? {}), ...company }).map(([key, value]) => [key, value === undefined ? null : value]));
+  const companyData = Object.fromEntries(Object.entries({ ...(employer?.employerProfile ?? {}), ...normalizedCompany }).map(([key, value]) => [key, value === undefined ? null : value]));
   if (!companyData.companyName?.trim()) {
     const error = new Error('Company name is required');
     error.status = 400;
@@ -352,6 +359,7 @@ export const listEmployerVerifications = async () => {
       website: true,
       industry: true,
       companySize: true,
+      phoneNumber: true,
       location: true,
       address: true,
       state: true,
@@ -402,12 +410,13 @@ export const listEmployerVerifications = async () => {
         companyName: row.user.employerProfile?.companyName ?? null,
         company: row.user.employerProfile ?? null,
       } : null,
-      submittedCompany: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl ? {
+      submittedCompany: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.phoneNumber || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl ? {
         companyName: row.companyName ?? null,
         companyDescription: row.companyDescription ?? null,
         website: row.website ?? null,
         industry: row.industry ?? null,
         companySize: row.companySize ?? null,
+        phoneNumber: row.phoneNumber ?? null,
         location: row.location ?? null,
         address: row.address ?? null,
         state: row.state ?? null,
@@ -416,7 +425,7 @@ export const listEmployerVerifications = async () => {
         twitterUrl: row.twitterUrl ?? null,
         facebookUrl: row.facebookUrl ?? null,
       } : null,
-      submittedCompanySource: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl
+      submittedCompanySource: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.phoneNumber || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl
         ? 'SUBMITTED'
         : row.user?.employerProfile ? 'LEGACY_PROFILE_FALLBACK' : 'NONE',
       documentCount: row.documents.length,
@@ -442,7 +451,7 @@ export const getEmployerVerificationForAdmin = async (verificationId) => {
 export const approveEmployerVerification = async (adminId, verificationId) => {
   const verification = await prisma.employerVerification.findUnique({
     where: { id: verificationId },
-    select: { id: true, userId: true, status: true, submittedAt: true, companyName: true, companyDescription: true, website: true, industry: true, companySize: true, location: true, address: true, state: true, country: true, linkedinUrl: true, twitterUrl: true, facebookUrl: true, user: { select: { email: true, firstName: true, lastName: true } } },
+    select: { id: true, userId: true, status: true, submittedAt: true, companyName: true, companyDescription: true, website: true, industry: true, companySize: true, phoneNumber: true, location: true, address: true, state: true, country: true, linkedinUrl: true, twitterUrl: true, facebookUrl: true, user: { select: { email: true, firstName: true, lastName: true } } },
   });
 
   if (!verification) {
@@ -485,6 +494,13 @@ export const approveEmployerVerification = async (adminId, verificationId) => {
           twitterUrl: verification.twitterUrl,
           facebookUrl: verification.facebookUrl,
         },
+      });
+    }
+
+    if (verification.phoneNumber) {
+      await transaction.user.update({
+        where: { id: verification.userId },
+        data: { phone: verification.phoneNumber },
       });
     }
 

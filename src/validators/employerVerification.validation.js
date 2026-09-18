@@ -18,6 +18,7 @@ const submitVerificationSchema = z.object({
     website: nullableUrl('Website'),
     industry: nullableText('Industry', 120),
     companySize: nullableText('Company size', 100),
+    phoneNumber: nullableText('Phone number', 40),
     location: nullableText('Location', 160),
     address: nullableText('Company address', 240),
     state: nullableText('State', 120),

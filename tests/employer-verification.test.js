@@ -133,6 +133,24 @@ describe('Employer verification lifecycle', () => {
     }));
   });
 
+  test('accepts a company phone number in the verification payload', async () => {
+    mockPrisma.employerVerification.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(fullVerification({ phoneNumber: '+2348000000000' }));
+    mockPrisma.employerVerification.create.mockResolvedValue({ id: verificationId, userId: employerId, status: 'PENDING', submittedAt: new Date() });
+
+    const result = await submitEmployerVerification(employerId, {
+      registrationNumber: 'RC123456',
+      registrationType: 'CAC',
+      company: { ...fullVerification().user.employerProfile, companyName: 'Example Ltd', phoneNumber: '+2348000000000' },
+    });
+
+    expect(result.verification.submittedCompany).toMatchObject({ phoneNumber: '+2348000000000' });
+    expect(mockPrisma.employerVerification.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ phoneNumber: '+2348000000000' }),
+    }));
+  });
+
   test('rejects duplicate pending submissions', async () => {
     mockPrisma.employerVerification.findUnique.mockResolvedValue({
       id: verificationId, userId: employerId, status: 'PENDING', submittedAt: new Date(),
