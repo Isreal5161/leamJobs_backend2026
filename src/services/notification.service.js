@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import { publicUrl } from './adminCommunications.service.js';
 import { createMarketingUnsubscribeToken, EMAIL_TYPES, queueEmail } from './email.service.js';
 
 export class NotificationNotFoundError extends Error {
@@ -86,6 +87,15 @@ const emailTypeForNotification = (notification) => {
   return null;
 };
 
+const normalizeFrontendNotificationLink = (link) => {
+  if (!link) return null;
+  const value = String(link).trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/api/')) return value;
+  return publicUrl(value);
+};
+
 const queueNotificationEmail = async (notification, recipientEmail) => {
   const emailType = emailTypeForNotification(notification);
   if (!emailType) return;
@@ -103,8 +113,8 @@ const queueNotificationEmail = async (notification, recipientEmail) => {
     context: {
       title: notification.title,
       message: notification.message,
-      link: notification.link,
-      ...(emailType === EMAIL_TYPES.NEW_JOB_MATCH ? { isMarketing: true, unsubscribeUrl: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/unsubscribe-marketing?token=${encodeURIComponent(createMarketingUnsubscribeToken(notification.recipientUserId))}` } : {}),
+      link: normalizeFrontendNotificationLink(notification.link),
+      ...(emailType === EMAIL_TYPES.NEW_JOB_MATCH ? { isMarketing: true, unsubscribeUrl: `${process.env.FRONTEND_URL || process.env.FRONTEND_URL_PROD || 'http://localhost:5173'}/unsubscribe-marketing?token=${encodeURIComponent(createMarketingUnsubscribeToken(notification.recipientUserId))}` } : {}),
     },
   });
 };

@@ -8,7 +8,7 @@ const verificationId = '33333333-3333-4333-8333-333333333333';
 const documentId = '44444444-4444-4444-8444-444444444444';
 
 const mockPrisma = {
-  user: { findUnique: jest.fn() },
+  user: { findUnique: jest.fn(), findMany: jest.fn() },
   employerProfile: { upsert: jest.fn() },
   $transaction: jest.fn(async (callback) => callback(mockPrisma)),
   employerVerification: {
@@ -92,6 +92,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.user.findUnique.mockResolvedValue({ employerProfile: { companyName: 'Example Ltd' } });
+  mockPrisma.user.findMany.mockResolvedValue([{ id: adminId }]);
   mockPrisma.employerVerification.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.employerVerificationDocument.delete.mockResolvedValue({ id: documentId });
 });
@@ -149,6 +150,42 @@ describe('Employer verification lifecycle', () => {
     expect(mockPrisma.employerVerification.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ phoneNumber: '+2348000000000' }),
     }));
+  });
+
+  test('submits verification and notifies active admins for review', async () => {
+    const submissionDate = new Date('2026-09-18T08:00:00.000Z');
+    mockPrisma.employerVerification.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(fullVerification({ status: 'PENDING', submittedAt: submissionDate }));
+    mockPrisma.employerVerification.create.mockResolvedValue({ id: verificationId, userId: employerId, status: 'PENDING', submittedAt: submissionDate });
+
+    await submitEmployerVerification(employerId, { registrationNumber: 'RC123456', registrationType: 'CAC' });
+
+    expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { role: 'ADMIN', isActive: true } }));
+    expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+      recipientUserId: adminId,
+      actorUserId: employerId,
+      category: 'ADMIN',
+      eventKey: expect.stringMatching(/^employerVerification:submitted:/),
+      title: 'New employer verification pending review',
+      message: expect.stringContaining('pending review'),
+      link: '/admin/verifications',
+    }));
+    expect(createNotification).not.toHaveBeenCalledWith(expect.objectContaining({ recipientUserId: employerId }));
+  });
+
+  test('resubmitting a declined verification creates a fresh admin notification', async () => {
+    const firstSubmittedAt = new Date('2026-09-10T08:00:00.000Z');
+    const secondSubmittedAt = new Date('2026-09-18T08:00:00.000Z');
+    mockPrisma.employerVerification.findUnique
+      .mockResolvedValueOnce({ id: verificationId, userId: employerId, status: 'REJECTED', submittedAt: firstSubmittedAt })
+      .mockResolvedValueOnce(fullVerification({ status: 'PENDING', submittedAt: secondSubmittedAt }));
+    mockPrisma.employerVerification.updateMany.mockResolvedValue({ count: 1 });
+
+    await submitEmployerVerification(employerId, { registrationNumber: 'RC123456', registrationType: 'CAC' });
+
+    const adminNotifications = createNotification.mock.calls.filter(([payload]) => payload?.recipientUserId === adminId);
+    expect(adminNotifications).toHaveLength(1);
+    expect(adminNotifications[0][0].eventKey).toMatch(/^employerVerification:submitted:/);
+    expect(adminNotifications[0][0].eventKey).not.toBe(`employerVerification:submitted:${verificationId}:${firstSubmittedAt.toISOString()}`);
   });
 
   test('rejects duplicate pending submissions', async () => {
@@ -213,6 +250,23 @@ describe('Employer verification lifecycle', () => {
     expect(mockPrisma.employerVerification.updateMany).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } } }));
     expect(mockPrisma.employerVerification.updateMany).toHaveBeenNthCalledWith(2, expect.objectContaining({ where: { id: verificationId, status: 'PENDING', submittedAt: { not: null } } }));
     expect(createNotification).toHaveBeenCalledTimes(2);
+  });
+
+  test('admin approval creates the employer approval notification and email mapping key', async () => {
+    mockPrisma.employerVerification.findUnique
+      .mockResolvedValueOnce({ id: verificationId, userId: employerId, status: 'PENDING', submittedAt: new Date(), companyName: 'Submitted Company', user: { email: 'employer@example.com' } })
+      .mockResolvedValueOnce(fullVerification({ status: 'APPROVED' }));
+
+    await approveEmployerVerification(adminId, verificationId);
+
+    expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+      recipientUserId: employerId,
+      recipientEmail: 'employer@example.com',
+      actorUserId: adminId,
+      eventKey: `employerVerification:approved:${verificationId}`,
+      title: 'Company verification approved',
+      link: '/employer/verification',
+    }));
   });
 
   test('approval keeps profile sync and verification transition inside one transaction', async () => {

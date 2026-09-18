@@ -35,18 +35,31 @@ const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing }
 </body>
 </html>`;
 
-const generic = ({ title, heading = title, message, link, linkLabel = 'Open LeamJobs', unsubscribeUrl, isMarketing }) => ({
-  subject: title,
-  text: `${title}\n\n${message}${link ? `\n\n${linkLabel}: ${link}` : ''}\n\nLeamJobs support: support@leamjobs.com${unsubscribeUrl ? `\nUnsubscribe from marketing emails: ${unsubscribeUrl}` : ''}`,
-  html: layout({
-    heading,
-    body: renderMessage(message),
-    ctaLabel: link ? linkLabel : null,
-    ctaUrl: link,
-    unsubscribeUrl,
-    isMarketing,
-  }),
-});
+const normalizeTemplateLink = (link) => {
+  if (!link) return null;
+  const value = String(link).trim();
+  if (!value) return null;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (value.startsWith('/api/')) return value;
+  const baseUrl = process.env.FRONTEND_URL || process.env.FRONTEND_URL_PROD || 'http://localhost:5173';
+  return `${baseUrl.replace(/\/$/, '')}${value.startsWith('/') ? value : `/${value}`}`;
+};
+
+const generic = ({ title, heading = title, message, link, linkLabel = 'Open LeamJobs', unsubscribeUrl, isMarketing }) => {
+  const normalizedLink = normalizeTemplateLink(link);
+  return {
+    subject: title,
+    text: `${title}\n\n${message}${normalizedLink ? `\n\n${linkLabel}: ${normalizedLink}` : ''}\n\nLeamJobs support: support@leamjobs.com${unsubscribeUrl ? `\nUnsubscribe from marketing emails: ${unsubscribeUrl}` : ''}`,
+    html: layout({
+      heading,
+      body: renderMessage(message),
+      ctaLabel: normalizedLink ? linkLabel : null,
+      ctaUrl: normalizedLink,
+      unsubscribeUrl,
+      isMarketing,
+    }),
+  };
+};
 
 export const renderEmailTemplate = (emailType, context = {}) => {
   const title = context.title || 'LeamJobs notification';

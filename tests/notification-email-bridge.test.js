@@ -2,6 +2,8 @@ import { jest } from '@jest/globals';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'bridge-test-secret';
+process.env.FRONTEND_URL = 'https://leamjobs.com';
+process.env.FRONTEND_URL_PROD = 'https://leamjobs.com';
 
 const mockPrisma = {
   notification: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(), findUnique: jest.fn() },
@@ -13,6 +15,7 @@ const EMAIL_TYPES = {
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
 jest.unstable_mockModule('../src/services/email.service.js', () => ({ EMAIL_TYPES, queueEmail, createMarketingUnsubscribeToken: jest.fn(() => 'marketing-token') }));
 const { createNotification } = await import('../src/services/notification.service.js');
+const { renderEmailTemplate } = await import('../src/services/email.templates.js');
 
 const notification = (eventKey, link = '/seeker/dashboard') => ({ id: eventKey, recipientUserId: 'user-1', actorUserId: null, type: 'INFO', category: 'GENERAL', eventKey, title: 'Event', message: 'Message', link, metadata: null, isRead: false, readAt: null, createdAt: new Date(), updatedAt: new Date(), actor: null });
 
@@ -44,4 +47,27 @@ test.each([
   await new Promise((resolve) => setImmediate(resolve));
   expect(queueEmail).toHaveBeenCalledWith(expect.objectContaining({ emailType, eventKey, recipientEmail: 'user@example.com' }));
   queueEmail.mockClear();
+});
+
+test('normalizes frontend notification links to absolute URLs and preserves query strings', async () => {
+  process.env.FRONTEND_URL = 'https://leamjobs.com';
+  const eventKey = 'application:status:abc:REJECTED';
+  const link = '/seeker/applications?jobId=job-123&apply=true';
+  mockPrisma.notification.create.mockResolvedValue(notification(eventKey, link));
+  await createNotification({ recipientUserId: 'user-1', recipientEmail: 'user@example.com', eventKey, title: 'Event', message: 'Message', link });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(queueEmail).toHaveBeenCalledWith(expect.objectContaining({
+    eventKey,
+    recipientEmail: 'user@example.com',
+    context: expect.objectContaining({ link: 'https://leamjobs.com/seeker/applications?jobId=job-123&apply=true' }),
+  }));
+});
+
+test('keeps trusted absolute URLs and resolves relative CTA fallbacks to production URLs', () => {
+  const approved = renderEmailTemplate('EMPLOYER_VERIFICATION_APPROVED', { title: 'Approved', message: 'Your verification is approved.', link: 'https://example.com/employer/verification?tab=details' });
+  expect(approved.html).toContain('https://example.com/employer/verification?tab=details');
+
+  const fallback = renderEmailTemplate('EMPLOYER_VERIFICATION_DECLINED', { title: 'Declined', message: 'Please resubmit.' });
+  expect(fallback.html).toContain('https://leamjobs.com/employer/verification');
+  expect(fallback.text).toContain('https://leamjobs.com/employer/verification');
 });

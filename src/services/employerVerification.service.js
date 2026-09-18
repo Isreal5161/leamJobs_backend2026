@@ -66,6 +66,36 @@ const verificationSelect = {
   documents: { select: verificationDocumentSelect },
 };
 
+const notifyAdminVerificationSubmitted = async (verificationId, employerId, submittedAt) => {
+  const admins = await prisma.user.findMany({
+    where: { role: 'ADMIN', isActive: true },
+    select: { id: true },
+  });
+
+  if (!admins.length) return;
+
+  const eventKey = `employerVerification:submitted:${verificationId}:${new Date(submittedAt).toISOString()}`;
+
+  await Promise.all(admins.map((admin) => createNotification({
+    recipientUserId: admin.id,
+    actorUserId: employerId,
+    type: 'INFO',
+    category: 'ADMIN',
+    eventKey,
+    title: 'New employer verification pending review',
+    message: 'A new employer verification submission is pending review.',
+    link: '/admin/verifications',
+  }).catch((error) => {
+    console.error('Employer verification admin notification failed:', {
+      verificationId,
+      employerId,
+      adminId: admin.id,
+      eventKey,
+      message: error?.message,
+    });
+  })));
+};
+
 const normalizeKind = (value) => {
   const normalized = String(value ?? '').trim().toUpperCase();
   const allowedKinds = ['CAC', 'TRADE_LICENSE', 'TAX_CERTIFICATE', 'UTILITY_BILL', 'IDENTITY_SUPPORTING', 'OTHER'];
@@ -341,6 +371,14 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
     if (result.count !== 1) throw new VerificationStateError('Your verification changed while it was being submitted. Please review the current status and try again.');
   }
 
+  await notifyAdminVerificationSubmitted(verification.id, employerId, submittedAt).catch((error) => {
+    console.error('Employer verification admin notification dispatch failed:', {
+      verificationId: verification.id,
+      employerId,
+      message: error?.message,
+    });
+  });
+
   return getEmployerVerification(employerId);
 };
 
@@ -527,7 +565,15 @@ export const approveEmployerVerification = async (adminId, verificationId) => {
     title: 'Company verification approved',
     message: `Your company verification has been approved. You can now post jobs on LeamJobs.`,
     link: '/employer/verification',
-  }).catch(() => undefined);
+  }).catch((error) => {
+    console.error('Employer verification approval notification failed:', {
+      verificationId,
+      employerId: verification.userId,
+      adminId,
+      eventKey: `employerVerification:approved:${verificationId}`,
+      message: error?.message,
+    });
+  });
 
   return { verification: mapVerification(updated) };
 };
@@ -574,7 +620,15 @@ export const rejectEmployerVerification = async (adminId, verificationId, reason
     title: 'Company verification needs attention',
     message: `Your company verification was not approved. ${trimmedReason}`,
     link: '/employer/verification',
-  }).catch(() => undefined);
+  }).catch((error) => {
+    console.error('Employer verification decline notification failed:', {
+      verificationId,
+      employerId: verification.userId,
+      adminId,
+      eventKey: `employerVerification:declined:${verificationId}`,
+      message: error?.message,
+    });
+  });
 
   return { verification: mapVerification(updated) };
 };

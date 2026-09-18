@@ -26,9 +26,12 @@ const assertFields = (fields) => {
   if (fields.ctaUrl && !/^\/(?!\/)/.test(fields.ctaUrl) && !/^https:\/\//.test(fields.ctaUrl)) throw Object.assign(new Error('CTA URL must be a trusted path or HTTPS URL'), { status: 400 });
 };
 export const publicUrl = (path) => {
-  if (/^https?:\/\//i.test(path)) return path;
-  if (!env.FRONTEND_URL) throw Object.assign(new Error('FRONTEND_URL must be configured to build relative URLs'), { status: 500 });
-  return `${env.FRONTEND_URL}${path}`;
+  if (!path) return path;
+  const value = String(path).trim();
+  if (/^https?:\/\//i.test(value)) return value;
+  const baseUrl = env.FRONTEND_URL || env.FRONTEND_URL_PROD || '';
+  if (!baseUrl) throw Object.assign(new Error('FRONTEND_URL must be configured to build relative URLs'), { status: 500 });
+  return `${baseUrl.replace(/\/$/, '')}${value.startsWith('/') ? value : `/${value}`}`;
 };
 
 export const getOrCreateSystemTemplate = async (key, client = prisma) => {
