@@ -22,6 +22,8 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   emailVerificationCodes        EmailVerificationCode[]
+  oauthAccounts                 OAuthAccount[]
+  pendingOAuthRegistrations     PendingOAuthRegistration[]
   seekerProfile                 SeekerProfile?
   employerProfile               EmployerProfile?
   employerVerification          EmployerVerification?
@@ -78,6 +80,49 @@ model EmailVerificationCode {
 
   @@index([userId, expiresAt])
   @@index([userId, usedAt, expiresAt])
+}
+
+model OAuthAccount {
+  id             String   @id @default(uuid())
+  provider       String
+  providerSubject String
+  email          String
+  userId         String
+  firstName      String?
+  lastName       String?
+  pictureUrl     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubject])
+  @@index([userId])
+  @@index([email])
+}
+
+model PendingOAuthRegistration {
+  id             String    @id @default(uuid())
+  provider       String
+  providerSubject String?
+  email          String
+  intendedRole   String
+  nonce          String
+  stateHash      String    @unique
+  codeVerifier   String?
+  status         String    @default("PENDING")
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  userId         String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([provider, providerSubject])
+  @@index([email])
+  @@index([status, expiresAt])
+  @@index([userId])
 }
 
 model SubscriptionPlan {
