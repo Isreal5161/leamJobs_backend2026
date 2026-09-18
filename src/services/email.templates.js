@@ -92,6 +92,23 @@ export const renderEmailTemplate = (emailType, context = {}) => {
     });
   }
 
+  if (emailType === 'EMAIL_VERIFICATION_CODE') {
+    const verificationCode = context.code || '123456';
+    const textBody = `${message}\n\nVerification code: ${verificationCode}\nThis code expires in 15 minutes. Do not share it.`;
+    return {
+      subject: title || 'Verify your LeamJobs email',
+      text: textBody,
+      html: layout({
+        heading: context.heading || 'Verify your email address',
+        body: renderMessage(message + `\n\n<strong>Verification code:</strong> ${verificationCode}\nThis code expires in 15 minutes. Do not share it.`),
+        ctaLabel: null,
+        ctaUrl: null,
+        unsubscribeUrl: context.unsubscribeUrl,
+        isMarketing: false,
+      }),
+    };
+  }
+
   return generic({
     title,
     heading: context.heading,

@@ -1,5 +1,6 @@
 import { getCurrentUser, loginUser, registerUser } from '../services/auth.service.js';
 import { requestPasswordReset, resetPassword } from '../services/passwordReset.service.js';
+import { resendEmailVerification, verifyEmailWithCode } from '../services/emailVerification.service.js';
 import { toUserResponse } from '../utils/userResponse.js';
 
 export const register = async (req, res, next) => {
@@ -45,6 +46,24 @@ export const forgotPassword = async (req, res, next) => {
 export const resetPasswordController = async (req, res, next) => {
   try {
     return res.status(200).json(await resetPassword(req.body));
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const verifyEmailController = async (req, res, next) => {
+  try {
+    const result = await verifyEmailWithCode(req.body);
+    return res.status(200).json(result);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const resendEmailVerificationController = async (req, res, next) => {
+  try {
+    const result = await resendEmailVerification(req.body);
+    return res.status(200).json(result);
   } catch (error) {
     return next(error);
   }

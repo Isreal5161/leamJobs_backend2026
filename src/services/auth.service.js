@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { queueWelcomeEmail } from './adminCommunications.service.js';
+import { registerEmailVerificationOnUser } from './emailVerification.service.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -65,8 +66,12 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
         passwordHash,
         phone,
         role,
+        isActive: false,
+        isVerified: false,
       },
     });
+
+    await registerEmailVerificationOnUser(user);
     void queueWelcomeEmail(user).catch((error) => console.error('Welcome email queue failed:', { message: error.message }));
     return user;
   } catch (error) {
@@ -94,8 +99,22 @@ export const loginUser = async ({ email, password, role }) => {
     throw new AuthenticationError();
   }
 
-  if (!user.isActive) {
-    throw new InactiveAccountError();
+  const legacyUserWithoutVerificationRecord = user.isActive && user.isVerified === false
+    && !(await prisma.emailVerificationCode.findUnique({
+      where: { userId: user.id },
+      select: { id: true },
+    }));
+
+  if (user.isVerified === false && !legacyUserWithoutVerificationRecord) {
+    const error = new InactiveAccountError();
+    error.publicMessage = 'Please verify your email address before signing in.';
+    throw error;
+  }
+
+  if (user.isActive === false) {
+    const error = new InactiveAccountError();
+    error.publicMessage = 'Please verify your email address before signing in.';
+    throw error;
   }
 
   if (role && user.role !== role) {
