@@ -102,7 +102,7 @@ const verifyPendingContinuation = (token) => {
 const getGoogleClient = async () => {
   ensureGoogleConfig();
 
-  const issuer = await discovery(env.GOOGLE_ISSUER || 'https://accounts.google.com');
+  const issuer = await discovery(new URL(env.GOOGLE_ISSUER || 'https://accounts.google.com'));
   return new issuer.Client({
     client_id: env.GOOGLE_CLIENT_ID,
     client_secret: env.GOOGLE_CLIENT_SECRET,
