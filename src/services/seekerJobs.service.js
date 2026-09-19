@@ -19,7 +19,7 @@ const companySelect = {
   companyLogoUrl: true,
 };
 
-const jobSelect = {
+export const publicJobSelect = {
   id: true,
   employerId: true,
   title: true,
@@ -121,6 +121,7 @@ const mapCompensation = (job) => {
 
 export const mapSeekerJob = (job) => ({
   id: job.id,
+  employerId: job.employerId,
   title: job.title,
   description: job.description,
   location: job.location,
@@ -158,7 +159,7 @@ export const listApprovedJobs = async ({ search, location, jobType, skills, limi
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    select: jobSelect,
+    select: publicJobSelect,
   });
 
   const hasNextPage = jobs.length > limit;
@@ -172,7 +173,7 @@ export const listApprovedJobs = async ({ search, location, jobType, skills, limi
 export const findApprovedJob = async (jobId, seekerId) => {
   const job = await prisma.job.findFirst({
     where: { id: jobId, status: 'APPROVED' },
-    select: jobSelect,
+    select: publicJobSelect,
   });
 
   if (!job) {
