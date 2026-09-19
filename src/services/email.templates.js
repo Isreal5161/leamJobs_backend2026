@@ -29,11 +29,13 @@ const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing }
     <div style="background:#0B1F3A;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
       <img src="${escapeHtml(logoUrl())}" alt="LeamJobs" style="display:block;width:auto;height:28px;border:0;max-width:160px;" />
     </div>
-    <main style="background:#fff;padding:20px 26px 30px;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
+    <main style="background:#fff;padding:0;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
+      <div style="padding:28px 32px 34px;box-sizing:border-box;width:100%">
       <h1 style="margin:8px 0 18px;font-size:24px;line-height:1.25;color:#17352b">${escapeHtml(heading)}</h1>
       ${body}
       ${ctaLabel && ctaUrl ? `<p style="margin:26px 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d79a3d;color:#1d2924;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:6px">${escapeHtml(ctaLabel)}</a></p>` : ''}
       <p style="margin:28px 0 0;color:#63736c;font-size:13px">${isMarketing ? 'You are receiving this optional LeamJobs job-update email.' : 'You are receiving this important LeamJobs account or service message.'}</p>
+      </div>
     </main>
     <p style="padding:16px 8px;color:#718078;font-size:12px">LeamJobs support: support@leamjobs.com${unsubscribeUrl ? ` · <a href="${escapeHtml(unsubscribeUrl)}">Unsubscribe from marketing emails</a>` : ''}</p>
   </div>
@@ -94,13 +96,13 @@ export const renderEmailTemplate = (emailType, context = {}) => {
 
   if (emailType === 'EMAIL_VERIFICATION_CODE') {
     const verificationCode = context.code || '123456';
-    const textBody = `${message}\n\nVerification code: ${verificationCode}\nThis code expires in 15 minutes. Do not share it.`;
+    const textBody = `${message}\n\nVerification code: ${verificationCode}`;
     return {
       subject: title || 'Verify your LeamJobs email',
       text: textBody,
       html: layout({
         heading: context.heading || 'Verify your email address',
-        body: renderMessage(message + `\n\n<strong>Verification code:</strong> ${verificationCode}\nThis code expires in 15 minutes. Do not share it.`),
+        body: renderMessage(message + `\n\nVerification code: ${verificationCode}`),
         ctaLabel: null,
         ctaUrl: null,
         unsubscribeUrl: context.unsubscribeUrl,

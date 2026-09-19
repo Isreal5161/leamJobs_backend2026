@@ -25,7 +25,8 @@ const buildVerificationEventKey = (userId) => `email-verification:${userId}:${Da
 const buildVerificationEmailContext = (code) => ({
   title: 'Verify your LeamJobs email',
   heading: 'Verify your email address',
-  message: `Use the verification code below to confirm your email address. This code expires in ${getCodeExpiryMinutes()} minutes. Do not share it with anyone.\n\nYour verification code: ${code}`,
+  message: `Use the verification code below to confirm your email address. This code expires in ${getCodeExpiryMinutes()} minutes. Do not share it with anyone.`,
+  code,
   link: null,
   linkLabel: null,
 });
