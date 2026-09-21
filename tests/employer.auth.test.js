@@ -1,5 +1,4 @@
 import { jest } from '@jest/globals';
-import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 
@@ -7,6 +6,8 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+
+const validPasswordHash = '$2b$12$sNpkk72oSrd6qBz8m8PQp.kR0/4D8N.gWbZ13kVnTSS7e1S1sxZ3O';
 
 const mockPrisma = {
   user: {
@@ -40,7 +41,7 @@ describe('Employer authentication and authorization', () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'seeker-123',
       email: 'seeker@example.com',
-      passwordHash: bcrypt.hashSync('Password1!', 12),
+      passwordHash: validPasswordHash,
       role: 'SEEKER',
       isActive: true,
     });
@@ -62,7 +63,7 @@ describe('Employer authentication and authorization', () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'employer-123',
       email: 'employer@example.com',
-      passwordHash: bcrypt.hashSync('Password1!', 12),
+      passwordHash: validPasswordHash,
       role: 'EMPLOYER',
       isActive: true,
     });
@@ -87,7 +88,7 @@ describe('Employer authentication and authorization', () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'role-user-123',
       email: 'role@example.com',
-      passwordHash: bcrypt.hashSync('Password1!', 12),
+      passwordHash: validPasswordHash,
       role: actualRole,
       isActive: true,
     });

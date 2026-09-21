@@ -14,6 +14,10 @@ const campaignRecordsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 }).strict();
+const campaignDeliveriesQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+}).strict();
 
 export const validateTemplateKey = (req, res, next) => {
   const result = templateKey.safeParse(req.params.key);
@@ -50,6 +54,13 @@ export const validateCampaignRecipientQuery = (req, res, next) => {
 
 export const validateCampaignRecordsQuery = (req, res, next) => {
   const result = campaignRecordsQuery.safeParse(req.query);
+  if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
+  req.validatedQuery = result.data;
+  return next();
+};
+
+export const validateCampaignDeliveriesQuery = (req, res, next) => {
+  const result = campaignDeliveriesQuery.safeParse(req.query);
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
   req.validatedQuery = result.data;
   return next();

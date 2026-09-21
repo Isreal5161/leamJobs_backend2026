@@ -47,7 +47,7 @@ import { executeWithdrawalController, reconcileWithdrawalController } from '../c
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { campaignDeliveries, campaignPreview, campaignRecipients, campaignRecords, campaignReport, createCampaign, previewTemplate, sendCampaign, templates, updateCampaign, updateTemplate } from '../controllers/adminCommunications.controller.js';
-import { validateCampaignCreate, validateCampaignRecordsQuery, validateCampaignRecipientQuery, validateCampaignUpdate, validateTemplateKey, validateTemplateUpdate } from '../validators/adminCommunications.validation.js';
+import { validateCampaignCreate, validateCampaignDeliveriesQuery, validateCampaignRecordsQuery, validateCampaignRecipientQuery, validateCampaignUpdate, validateTemplateKey, validateTemplateUpdate } from '../validators/adminCommunications.validation.js';
 import {
   approveEmployerVerification,
   fetchVerificationDocumentForAdmin,
@@ -55,13 +55,14 @@ import {
   rejectEmployerVerification,
   viewEmployerVerification,
 } from '../controllers/adminEmployerVerification.controller.js';
+import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
 
 const adminRouter = Router();
 
 adminRouter.get('/companies', authenticate, requireRole('ADMIN'), validateAdminCompaniesQuery, listCompanies);
 adminRouter.get('/companies/leamjobs', authenticate, requireRole('ADMIN'), getLeamJobsEmployer);
 adminRouter.get('/companies/:userId/logo', authenticate, requireRole('ADMIN'), getCompanyLogo);
-adminRouter.get('/verification-submissions', authenticate, requireRole('ADMIN'), listEmployerVerifications);
+adminRouter.get('/verification-submissions', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listEmployerVerifications);
 adminRouter.get('/verification-submissions/:verificationId', authenticate, requireRole('ADMIN'), viewEmployerVerification);
 adminRouter.get('/verification-documents/:documentId', authenticate, requireRole('ADMIN'), fetchVerificationDocumentForAdmin);
 adminRouter.patch('/verification-submissions/:verificationId/approve', authenticate, requireRole('ADMIN'), approveEmployerVerification);
@@ -80,15 +81,15 @@ adminRouter.get('/subscriptions', authenticate, requireRole('ADMIN'), validateAd
 adminRouter.get('/subscriptions/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, subscription);
 adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
 adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
-adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), listJobs);
+adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listJobs);
 adminRouter.get('/jobs/:jobId', authenticate, requireRole('ADMIN'), getJob);
-adminRouter.get('/jobs/:jobId/applications', authenticate, requireRole('ADMIN'), listAdminApplicationController);
+adminRouter.get('/jobs/:jobId/applications', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listAdminApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requireRole('ADMIN'), getAdminApplicationController);
 adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
 adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', authenticate, requireRole('ADMIN'), getAdminApplicationProfilePictureController);
-adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), listReleaseCandidates);
+adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listReleaseCandidates);
 adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
 adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);
 adminRouter.post('/contracts/:contractId/payment', authenticate, requireRole('ADMIN'), validateContractPayment, initializeAdminContractPayment);
@@ -110,7 +111,7 @@ adminRouter.get('/communications/campaigns', authenticate, requireRole('ADMIN'),
 adminRouter.patch('/communications/campaigns/:id', authenticate, requireRole('ADMIN'), validateCampaignUpdate, updateCampaign);
 adminRouter.get('/communications/campaigns/:id/preview', authenticate, requireRole('ADMIN'), campaignPreview);
 adminRouter.get('/communications/campaigns/:id/report', authenticate, requireRole('ADMIN'), campaignReport);
-adminRouter.get('/communications/campaigns/:id/deliveries', authenticate, requireRole('ADMIN'), campaignDeliveries);
+adminRouter.get('/communications/campaigns/:id/deliveries', authenticate, requireRole('ADMIN'), validateCampaignDeliveriesQuery, campaignDeliveries);
 adminRouter.get('/communications/recipients/count', authenticate, requireRole('ADMIN'), validateCampaignRecipientQuery, campaignRecipients);
 adminRouter.post('/communications/campaigns/:id/send', authenticate, requireRole('ADMIN'), sendCampaign);
 adminRouter.post('/contracts/:contractId/release', authenticate, requireRole('ADMIN'), releaseContract);

@@ -16,6 +16,7 @@ const mockPrisma = {
     create: jest.fn(),
     updateMany: jest.fn(),
     findMany: jest.fn(),
+    count: jest.fn(),
   },
   employerVerificationDocument: {
     create: jest.fn(),
@@ -40,7 +41,7 @@ jest.unstable_mockModule('../src/services/storage/storage.service.js', () => ({
   uploadObject,
 }));
 
-const { approveEmployerVerification, deleteVerificationDocumentForUser, getEmployerVerification, readVerificationDocumentForAdmin, readVerificationDocumentForUser, rejectEmployerVerification, submitEmployerVerification, uploadVerificationDocument } = await import('../src/services/employerVerification.service.js');
+const { approveEmployerVerification, deleteVerificationDocumentForUser, getEmployerVerification, listEmployerVerifications, readVerificationDocumentForAdmin, readVerificationDocumentForUser, rejectEmployerVerification, submitEmployerVerification, uploadVerificationDocument } = await import('../src/services/employerVerification.service.js');
 
 const fullVerification = (overrides = {}) => ({
   id: verificationId,
@@ -94,10 +95,29 @@ beforeEach(() => {
   mockPrisma.user.findUnique.mockResolvedValue({ employerProfile: { companyName: 'Example Ltd' } });
   mockPrisma.user.findMany.mockResolvedValue([{ id: adminId }]);
   mockPrisma.employerVerification.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.employerVerification.count.mockResolvedValue(0);
   mockPrisma.employerVerificationDocument.delete.mockResolvedValue({ id: documentId });
 });
 
 describe('Employer verification lifecycle', () => {
+  test('lists document counts without loading individual document rows', async () => {
+    mockPrisma.employerVerification.findMany.mockResolvedValue([
+      fullVerification({ _count: { documents: 3 } }),
+      fullVerification({ id: '55555555-5555-4555-8555-555555555555', _count: { documents: 0 } }),
+    ]);
+    mockPrisma.employerVerification.count.mockResolvedValue(2);
+
+    const result = await listEmployerVerifications({ page: 2, limit: 2 });
+    const query = mockPrisma.employerVerification.findMany.mock.calls[0][0];
+
+    expect(result.verificationSubmissions.map(({ documentCount }) => documentCount)).toEqual([3, 0]);
+    expect(result.pagination).toMatchObject({ page: 2, limit: 2, total: 2, totalPages: 1 });
+    expect(query.skip).toBe(2);
+    expect(query.take).toBe(2);
+    expect(query.select._count).toEqual({ select: { documents: true } });
+    expect(query.select.documents).toBeUndefined();
+  });
+
   test('returns the submitted company snapshot separately from the current public profile', async () => {
     mockPrisma.employerVerification.findUnique.mockResolvedValue(fullVerification({
       companyName: 'Submitted Company',

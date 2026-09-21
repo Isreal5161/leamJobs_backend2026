@@ -22,4 +22,4 @@ export const campaignRecipients = async (req, res, next) => { try { const recipi
 export const sendCampaign = async (req, res, next) => { try { return res.status(200).json({ success: true, data: { campaign: await sendPromotionalCampaign(req.params.id) } }); } catch (error) { return next(error); } };
 export const campaignRecords = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await listCampaignRecords(req.validatedQuery) }); } catch (error) { return next(error); } };
 export const campaignReport = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignReport(req.params.id) }); } catch (error) { return next(error); } };
-export const campaignDeliveries = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignDeliveries(req.params.id) }); } catch (error) { return next(error); } };
+export const campaignDeliveries = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignDeliveries(req.params.id, req.validatedQuery) }); } catch (error) { return next(error); } };

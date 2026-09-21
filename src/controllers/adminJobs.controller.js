@@ -58,7 +58,7 @@ export const listJobs = async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid status filter' });
     }
 
-    const data = await listAdminJobs({ status });
+    const data = await listAdminJobs({ status, ...req.validatedPagination });
     return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);

@@ -89,17 +89,18 @@ const mapReleaseCandidate = (contract) => ({
   },
 });
 
-export const listReleaseEligibleContracts = async () => {
-  const contracts = await prisma.contract.findMany({
-    where: {
+export const listReleaseEligibleContracts = async ({ page = 1, limit = 50 } = {}) => {
+  const where = {
       type: { in: ['FREELANCE_PROJECT', 'CONTRACT_PROJECT'] },
       freelanceDetails: { escrow: { status: 'RELEASE_ELIGIBLE' } },
-    },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: releaseCandidateSelect,
-  });
+  };
+  const [contracts, total] = await Promise.all([
+    prisma.contract.findMany({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: (page - 1) * limit, take: limit, select: releaseCandidateSelect }),
+    prisma.contract.count({ where }),
+  ]);
 
-  return { contracts: contracts.map(mapReleaseCandidate) };
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return { contracts: contracts.map(mapReleaseCandidate), pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 } };
 };
 
 const lockEscrow = async (transaction, contractId) => {

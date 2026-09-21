@@ -10,6 +10,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const mockPrisma = {
   conversation: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -21,6 +22,7 @@ const mockPrisma = {
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     count: jest.fn(),
+    groupBy: jest.fn(),
     updateMany: jest.fn(),
   },
   $transaction: jest.fn(),
@@ -50,6 +52,8 @@ const message = { id: messageId, conversationId, senderId: seekerId, body: 'Hell
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.message.count.mockResolvedValue(0);
+  mockPrisma.message.groupBy.mockResolvedValue([]);
+  mockPrisma.conversation.count.mockResolvedValue(0);
   mockPrisma.conversation.findMany.mockResolvedValue([]);
   mockPrisma.conversation.findFirst.mockResolvedValue(conversation);
   mockPrisma.conversation.findUnique.mockResolvedValue(null);
@@ -76,6 +80,21 @@ describe('seeker messaging endpoints', () => {
     expect(response.body.data.conversations[0].employer.companyName).toBe('Example Ltd');
     expect(mockPrisma.conversation.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { seekerId } }));
     expect(JSON.stringify(response.body)).not.toContain('passwordHash');
+  });
+
+  test('aggregates unread counts for multiple conversations without per-conversation counts', async () => {
+    const secondConversation = { ...conversation, id: '88888888-8888-4888-8888-888888888888' };
+    mockPrisma.conversation.findMany.mockResolvedValue([conversation, secondConversation]);
+    mockPrisma.message.groupBy.mockResolvedValue([{ conversationId, _count: { _all: 3 } }]);
+
+    const response = await request(app)
+      .get('/api/seeker/conversations?limit=2')
+      .set('Authorization', `Bearer ${token()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.conversations.map(({ unreadCount }) => unreadCount)).toEqual([3, 0]);
+    expect(mockPrisma.message.groupBy).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.message.count).not.toHaveBeenCalled();
   });
 
   test('creates a conversation only from the authenticated seeker application', async () => {

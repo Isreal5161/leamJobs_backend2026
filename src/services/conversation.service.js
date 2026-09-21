@@ -118,38 +118,60 @@ const getUnreadCount = (conversationId, seekerId) => prisma.message.count({
   where: { conversationId, senderId: { not: seekerId }, readAt: null },
 });
 
-export const getSeekerConversations = async (seekerId) => {
-  const conversations = await prisma.conversation.findMany({
-    where: { seekerId },
-    orderBy: [{ lastMessageAt: 'desc' }, { id: 'asc' }],
-    include: {
-      ...conversationInclude,
-      messages: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
+const getUnreadCounts = async (conversations, userId) => {
+  if (!conversations.length) return new Map();
+
+  const counts = await prisma.message.groupBy({
+    by: ['conversationId'],
+    where: {
+      conversationId: { in: conversations.map((conversation) => conversation.id) },
+      senderId: { not: userId },
+      readAt: null,
     },
+    _count: { _all: true },
   });
 
-  const unreadCounts = await Promise.all(conversations.map((conversation) => getUnreadCount(conversation.id, seekerId)));
-  return conversations.map((conversation, index) => ({
-    ...mapConversation(conversation),
-    unreadCount: unreadCounts[index],
-  }));
+  return new Map(counts.map((row) => [row.conversationId, row._count._all]));
 };
 
-export const getEmployerConversations = async (employerId) => {
-  const conversations = await prisma.conversation.findMany({
-    where: { employerId },
+export const getSeekerConversations = async (seekerId, { page = 1, limit = 50 } = {}) => {
+  const where = { seekerId };
+  const [conversations, total] = await Promise.all([
+    prisma.conversation.findMany({
+    where,
     orderBy: [{ lastMessageAt: 'desc' }, { id: 'asc' }],
+    skip: (page - 1) * limit,
+    take: limit,
     include: {
       ...conversationInclude,
       messages: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
     },
-  });
+    }),
+    prisma.conversation.count({ where }),
+  ]);
 
-  const unreadCounts = await Promise.all(conversations.map((conversation) => getUnreadCountForUser(conversation.id, employerId)));
-  return conversations.map((conversation, index) => ({
-    ...mapConversation(conversation),
-    unreadCount: unreadCounts[index],
-  }));
+  const unreadCounts = await getUnreadCounts(conversations, seekerId);
+  return { conversations: conversations.map((conversation) => ({ ...mapConversation(conversation), unreadCount: unreadCounts.get(conversation.id) ?? 0 })), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasNextPage: page < Math.max(1, Math.ceil(total / limit)), hasPreviousPage: page > 1 } };
+};
+
+export const getEmployerConversations = async (employerId, { page = 1, limit = 50 } = {}) => {
+  const where = { employerId };
+  const [conversations, total] = await Promise.all([
+    prisma.conversation.findMany({
+    where,
+    orderBy: [{ lastMessageAt: 'desc' }, { id: 'asc' }],
+    skip: (page - 1) * limit,
+    take: limit,
+    include: {
+      ...conversationInclude,
+      messages: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1 },
+    },
+    }),
+    prisma.conversation.count({ where }),
+  ]);
+
+  const unreadCounts = await getUnreadCounts(conversations, employerId);
+  return { conversations: conversations.map((conversation) => ({ ...mapConversation(conversation), unreadCount: unreadCounts.get(conversation.id) ?? 0 })), pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasNextPage: page < Math.max(1, Math.ceil(total / limit)), hasPreviousPage: page > 1 } };
 };
 
 export const getSeekerConversation = async (seekerId, conversationId) => {

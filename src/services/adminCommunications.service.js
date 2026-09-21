@@ -157,24 +157,44 @@ const deriveReportingStatus = (campaign, counts) => {
   return 'IN_PROGRESS';
 };
 
-const countCampaignDeliveries = async (campaign) => {
-  const deliveries = await prisma.emailDelivery.findMany({ where: campaignDeliveryWhere(campaign.eventKey), select: { status: true } });
+const countsFromGroupedDeliveries = (deliveries) => {
   const counts = deliveries.reduce((summary, delivery) => {
-    summary.total += 1;
-    summary[delivery.status.toLowerCase()] += 1;
+    const count = delivery._count._all;
+    summary.total += count;
+    summary[delivery.status.toLowerCase()] += count;
     return summary;
   }, { total: 0, sent: 0, pending: 0, processing: 0, failed: 0 });
-  return { ...counts, recipientCount: campaign.recipientCount ?? counts.total, reportingStatus: deriveReportingStatus(campaign, counts) };
+  return counts;
 };
 
-const campaignRecord = async (campaign) => ({ campaign, delivery: await countCampaignDeliveries(campaign) });
+const countCampaignDeliveries = async (campaign) => {
+  const deliveries = await prisma.emailDelivery.groupBy({
+    by: ['status'],
+    where: campaignDeliveryWhere(campaign.eventKey),
+    _count: { _all: true },
+  });
+  const counts = countsFromGroupedDeliveries(deliveries);
+  return { ...counts, recipientCount: campaign.recipientCount ?? counts.total, reportingStatus: deriveReportingStatus(campaign, counts) };
+};
 
 export const listCampaignRecords = async ({ page = 1, limit = 20 } = {}) => {
   const [total, campaigns] = await Promise.all([
     prisma.emailCampaign.count(),
     prisma.emailCampaign.findMany({ orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit, select: campaignSelect }),
   ]);
-  const records = await Promise.all(campaigns.map(campaignRecord));
+  const deliveries = campaigns.length === 0 ? [] : await prisma.emailDelivery.groupBy({
+    by: ['eventKey', 'status'],
+    where: {
+      emailType: EMAIL_TYPES.PROMOTIONAL_CAMPAIGN,
+      OR: campaigns.map((campaign) => ({ eventKey: { startsWith: `${campaign.eventKey}:` } })),
+    },
+    _count: { _all: true },
+  });
+  const records = campaigns.map((campaign) => {
+    const campaignDeliveries = deliveries.filter((delivery) => delivery.eventKey.startsWith(`${campaign.eventKey}:`));
+    const counts = countsFromGroupedDeliveries(campaignDeliveries);
+    return { campaign, delivery: { ...counts, recipientCount: campaign.recipientCount ?? counts.total, reportingStatus: deriveReportingStatus(campaign, counts) } };
+  });
   return { records, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
 };
 
@@ -189,8 +209,13 @@ export const getCampaignReport = async (campaignId) => {
   return { campaign, delivery: await countCampaignDeliveries(campaign) };
 };
 
-export const getCampaignDeliveries = async (campaignId) => {
+export const getCampaignDeliveries = async (campaignId, { page = 1, limit = 50 } = {}) => {
   const campaign = await findCampaign(campaignId);
-  const deliveries = await prisma.emailDelivery.findMany({ where: campaignDeliveryWhere(campaign.eventKey), orderBy: { createdAt: 'desc' }, select: deliveryReportSelect });
-  return { campaignId: campaign.id, deliveries };
+  const where = campaignDeliveryWhere(campaign.eventKey);
+  const [deliveries, total] = await Promise.all([
+    prisma.emailDelivery.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * limit, take: limit, select: deliveryReportSelect }),
+    prisma.emailDelivery.count({ where }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return { campaignId: campaign.id, deliveries, pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 } };
 };

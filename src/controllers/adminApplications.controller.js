@@ -9,7 +9,7 @@ import {
 
 export const listAdminApplicationController = async (req, res, next) => {
   try {
-    const data = await listAdminApplications(req.params.jobId);
+    const data = await listAdminApplications(req.params.jobId, req.validatedPagination);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);

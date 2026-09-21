@@ -11,6 +11,7 @@ const mockPrisma = {
   seekerProfile: { findUnique: jest.fn() },
   job: { findMany: jest.fn() },
   subscription: { findFirst: jest.fn() },
+  $queryRaw: jest.fn(),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
@@ -32,6 +33,11 @@ beforeEach(() => {
     job('33333333-3333-4333-8333-333333333333', ['Python']),
     job('44444444-4444-4444-8444-444444444444', []),
   ]);
+  mockPrisma.$queryRaw.mockResolvedValue([
+    { id: '22222222-2222-4222-8222-222222222222', matchScore: 50, recommendationRank: 1 },
+    { id: '33333333-3333-4333-8333-333333333333', matchScore: 0, recommendationRank: 2 },
+    { id: '44444444-4444-4444-8444-444444444444', matchScore: 0, recommendationRank: 3 },
+  ]);
 });
 
 describe('GET /api/seeker/recommendations', () => {
@@ -40,7 +46,15 @@ describe('GET /api/seeker/recommendations', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.recommendations[0]).toMatchObject({ matchScore: 50, matchedSkills: ['REACT', 'Node.js'], totalJobSkills: 4 });
     expect(response.body.data.recommendations[2]).toMatchObject({ matchScore: 0, matchedSkills: [], totalJobSkills: 0 });
-    expect(mockPrisma.job.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: 'APPROVED', OR: [{ applicationDeadline: null }, { applicationDeadline: { gt: expect.any(Date) } }] } }));
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.$queryRaw.mock.calls[0][0].strings.join(' ')).toEqual(expect.stringContaining('job.status = \'APPROVED\''));
+    expect(mockPrisma.$queryRaw.mock.calls[0][0].strings.join(' ')).toEqual(expect.stringContaining('applicationDeadline'));
+    expect(mockPrisma.job.findMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.job.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: expect.arrayContaining([
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444',
+    ]) } } }));
   });
 
   test('returns empty recommendations for a seeker without skills', async () => {
@@ -70,6 +84,7 @@ describe('GET /api/seeker/recommendations', () => {
 
   test('free seekers are capped at six recommendations even when requesting more', async () => {
     mockPrisma.job.findMany.mockResolvedValue(manyJobs());
+    mockPrisma.$queryRaw.mockResolvedValue(manyJobs().slice(0, 6).map((item, index) => ({ id: item.id, matchScore: 100, recommendationRank: index + 1 })));
 
     const response = await request(app)
       .get('/api/seeker/recommendations?limit=50')
@@ -77,11 +92,13 @@ describe('GET /api/seeker/recommendations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.recommendations).toHaveLength(6);
+    expect(mockPrisma.job.findMany.mock.calls[0][0].where.id.in).toHaveLength(6);
     expect(response.body.data.nextCursor).toBeNull();
   });
 
   test('active entitled seekers can receive up to twelve recommendations with unchanged scores', async () => {
     mockPrisma.job.findMany.mockResolvedValue(manyJobs());
+    mockPrisma.$queryRaw.mockResolvedValue(manyJobs().slice(0, 12).map((item, index) => ({ id: item.id, matchScore: 100, recommendationRank: index + 1 })));
     mockPrisma.subscription.findFirst.mockResolvedValue({
       status: 'ACTIVE',
       plan: { entitlements: [{ entitlement: { key: 'RECOMMENDATION_BOOST' } }] },
@@ -107,6 +124,7 @@ describe('GET /api/seeker/recommendations', () => {
     ['active subscription without the entitlement', { status: 'ACTIVE', plan: { entitlements: [{ entitlement: { key: 'PROFILE_ANALYTICS' } }] } }],
   ])('%s receives the free recommendation window', async (_label, subscription) => {
     mockPrisma.job.findMany.mockResolvedValue(manyJobs());
+    mockPrisma.$queryRaw.mockResolvedValue(manyJobs().slice(0, 6).map((item, index) => ({ id: item.id, matchScore: 100, recommendationRank: index + 1 })));
     mockPrisma.subscription.findFirst.mockResolvedValue(subscription);
 
     const response = await request(app)
@@ -119,6 +137,7 @@ describe('GET /api/seeker/recommendations', () => {
 
   test('respects a smaller requested limit for both free and entitled seekers', async () => {
     mockPrisma.job.findMany.mockResolvedValue(manyJobs());
+    mockPrisma.$queryRaw.mockResolvedValue(manyJobs().slice(0, 6).map((item, index) => ({ id: item.id, matchScore: 100, recommendationRank: index + 1 })));
     const freeResponse = await request(app).get('/api/seeker/recommendations?limit=3').set('Authorization', `Bearer ${token()}`);
     expect(freeResponse.body.data.recommendations).toHaveLength(3);
 
@@ -153,6 +172,7 @@ describe('GET /api/seeker/recommendations', () => {
   test('cursor pagination cannot exceed the free recommendation window', async () => {
     const cursorJobs = Array.from({ length: 13 }, (_, index) => job(`10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, ['React'], { createdAt: new Date(createdAt.getTime() - index * 1000) }));
     mockPrisma.job.findMany.mockResolvedValue(cursorJobs);
+    mockPrisma.$queryRaw.mockResolvedValue(cursorJobs.slice(0, 6).map((item, index) => ({ id: item.id, matchScore: 100, recommendationRank: index + 1 })));
     const firstPage = await request(app).get('/api/seeker/recommendations?limit=1').set('Authorization', `Bearer ${token()}`);
     const seen = [...firstPage.body.data.recommendations.map(({ job: item }) => item.id)];
     let nextCursor = firstPage.body.data.nextCursor;

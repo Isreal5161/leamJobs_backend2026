@@ -215,14 +215,24 @@ const findOwnedApplication = (employerId, jobId, applicationId, select = detailS
   select,
 });
 
-export const listEmployerApplications = async (employerId, jobId) => {
-  const applications = await prisma.application.findMany({
-    where: { jobId, job: { employerId } },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    select: listSelect,
-  });
+export const listEmployerApplications = async (employerId, jobId, { page = 1, limit = 50 } = {}) => {
+  const where = { jobId, job: { employerId } };
+  const [applications, total] = await Promise.all([
+    prisma.application.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+      select: listSelect,
+    }),
+    prisma.application.count({ where }),
+  ]);
 
-  return { applications: applications.map(mapApplicationListItem) };
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return {
+    applications: applications.map(mapApplicationListItem),
+    pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
+  };
 };
 
 export const getEmployerApplication = async (employerId, jobId, applicationId) => {

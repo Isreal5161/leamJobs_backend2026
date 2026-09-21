@@ -205,7 +205,9 @@ describe('seeker job and application endpoints', () => {
     });
     expect(mockPrisma.application.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { seekerId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: 0,
+      take: 20,
     }));
     expect(mockPrisma.application.count).toHaveBeenCalledWith({
       where: { seekerId, status: 'INTERVIEW' },
@@ -221,7 +223,11 @@ describe('seeker job and application endpoints', () => {
       .set('Authorization', `Bearer ${createToken()}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data).toEqual({ applications: [], summary: { total: 0, interviews: 0 } });
+    expect(response.body.data).toEqual({
+      applications: [],
+      summary: { total: 0, interviews: 0 },
+      pagination: { page: 1, limit: 20, total: 0, totalPages: 1, hasNextPage: false, hasPreviousPage: false },
+    });
   });
 
   test('creates an application using the JWT seeker and safe request fields', async () => {

@@ -2,7 +2,7 @@ import { createSeekerApplication, getSeekerApplications } from '../services/seek
 
 export const listApplications = async (req, res, next) => {
   try {
-    const data = await getSeekerApplications(req.user.sub);
+    const data = await getSeekerApplications(req.user.sub, req.validatedPagination);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);

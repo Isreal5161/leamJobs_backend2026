@@ -11,13 +11,16 @@ const mockPrisma = {
   emailCampaign: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), count: jest.fn(), findMany: jest.fn() },
   user: { findMany: jest.fn() },
   publicJobSubscriber: { findMany: jest.fn() },
-  emailDelivery: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
+  emailDelivery: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
 };
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
 const { env } = await import('../src/config/env.js');
 const { publicUrl, getOrCreateSystemTemplate, queueWelcomeEmail, getEligibleCampaignRecipients, sendPromotionalCampaign, listCampaignRecords, getCampaignReport, getCampaignDeliveries } = await import('../src/services/adminCommunications.service.js');
 
-afterEach(() => jest.clearAllMocks());
+afterEach(() => {
+  jest.clearAllMocks();
+  mockPrisma.emailDelivery.groupBy.mockResolvedValue([]);
+});
 
 test('preserves absolute CTA URLs and prefixes relative paths', () => {
   expect(publicUrl('https://leamjobs.com')).toBe('https://leamjobs.com');
@@ -88,14 +91,18 @@ test('lists campaign records newest first with real delivery counts', async () =
   const older = campaignRecord({ id: 'campaign-old', eventKey: 'campaign:old' });
   mockPrisma.emailCampaign.count.mockResolvedValue(2);
   mockPrisma.emailCampaign.findMany.mockResolvedValue([newest, older]);
-  mockPrisma.emailDelivery.findMany
-    .mockResolvedValueOnce([{ status: 'SENT' }, { status: 'FAILED' }])
-    .mockResolvedValueOnce([{ status: 'SENT' }]);
+  mockPrisma.emailDelivery.groupBy.mockResolvedValue([
+    { eventKey: 'campaign:new:user-1', status: 'SENT', _count: { _all: 1 } },
+    { eventKey: 'campaign:new:user-2', status: 'FAILED', _count: { _all: 1 } },
+    { eventKey: 'campaign:old:user-3', status: 'SENT', _count: { _all: 1 } },
+  ]);
   const result = await listCampaignRecords({ page: 1, limit: 20 });
   expect(result.pagination).toEqual({ page: 1, limit: 20, total: 2, pages: 1 });
   expect(result.records[0].campaign.id).toBe('campaign-new');
   expect(result.records[0].delivery).toMatchObject({ recipientCount: 2, total: 2, sent: 1, failed: 1, reportingStatus: 'PARTIALLY_FAILED' });
   expect(mockPrisma.emailCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ orderBy: { createdAt: 'desc' }, skip: 0, take: 20 }));
+  expect(mockPrisma.emailDelivery.groupBy).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.emailDelivery.findMany).not.toHaveBeenCalled();
 });
 
 test.each([
@@ -106,7 +113,7 @@ test.each([
 ])('derives %s delivery reporting state as %s', async (statuses, expected) => {
   const campaign = campaignRecord({ recipientCount: statuses.length });
   mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
-  mockPrisma.emailDelivery.findMany.mockResolvedValue(statuses.map((status) => ({ status })));
+  mockPrisma.emailDelivery.groupBy.mockResolvedValue(statuses.map((status) => ({ status, _count: { _all: 1 } })));
   const result = await getCampaignReport(campaign.id);
   expect(result.delivery.reportingStatus).toBe(expected);
 });
@@ -115,7 +122,22 @@ test('returns only deliveries belonging to the campaign event-key prefix', async
   const campaign = campaignRecord();
   mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
   mockPrisma.emailDelivery.findMany.mockResolvedValue([{ id: 'delivery-1', recipientEmail: 'a@example.com', status: 'FAILED' }]);
+  mockPrisma.emailDelivery.count.mockResolvedValue(3);
   const result = await getCampaignDeliveries(campaign.id);
   expect(result.deliveries).toHaveLength(1);
+  expect(result.pagination).toEqual({ page: 1, limit: 50, total: 3, totalPages: 1, hasNextPage: false, hasPreviousPage: false });
   expect(mockPrisma.emailDelivery.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { emailType: 'PROMOTIONAL_CAMPAIGN', eventKey: { startsWith: 'campaign:event-1:' } } }));
+});
+
+test('bounds campaign delivery listings at the database query', async () => {
+  const campaign = campaignRecord();
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([]);
+  mockPrisma.emailDelivery.count.mockResolvedValue(101);
+
+  const result = await getCampaignDeliveries(campaign.id, { page: 3, limit: 50 });
+
+  expect(result.deliveries).toEqual([]);
+  expect(result.pagination).toMatchObject({ page: 3, limit: 50, total: 101, totalPages: 3, hasNextPage: false, hasPreviousPage: true });
+  expect(mockPrisma.emailDelivery.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 100, take: 50, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }));
 });

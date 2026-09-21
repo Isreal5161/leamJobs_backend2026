@@ -2,7 +2,7 @@ import { listReleaseEligibleContracts, releaseContractFunds } from '../services/
 
 export const listReleaseCandidates = async (req, res, next) => {
   try {
-    return res.status(200).json({ success: true, data: await listReleaseEligibleContracts() });
+    return res.status(200).json({ success: true, data: await listReleaseEligibleContracts(req.validatedPagination) });
   } catch (error) {
     return next(error);
   }

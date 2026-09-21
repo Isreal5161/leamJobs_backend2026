@@ -52,6 +52,7 @@ import { validateProfileAssistant, validateCvOptimizer, validateApplicationAssis
 import { requireEntitlement } from '../middleware/entitlement.middleware.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
+import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
 
 const seekerRouter = Router();
 
@@ -94,9 +95,9 @@ seekerRouter.get('/dashboard', authenticate, requireRole('SEEKER'), dashboard);
 seekerRouter.get('/jobs', authenticate, requireRole('SEEKER'), validateSeekerJobsQuery, listJobs);
 seekerRouter.get('/recommendations', authenticate, requireRole('SEEKER'), validateSeekerRecommendationsQuery, listSeekerRecommendations);
 seekerRouter.get('/jobs/:jobId', authenticate, requireRole('SEEKER'), getJob);
-seekerRouter.get('/applications', authenticate, requireRole('SEEKER'), listApplications);
+seekerRouter.get('/applications', authenticate, requireRole('SEEKER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listApplications);
 seekerRouter.post('/applications', authenticate, requireRole('SEEKER'), validateCreateApplication, createApplication);
-seekerRouter.get('/conversations', authenticate, requireRole('SEEKER'), listConversations);
+seekerRouter.get('/conversations', authenticate, requireRole('SEEKER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listConversations);
 seekerRouter.post('/conversations/from-application/:applicationId', authenticate, requireRole('SEEKER'), createConversationFromApplication);
 seekerRouter.get('/conversations/:conversationId', authenticate, requireRole('SEEKER'), getConversation);
 seekerRouter.get('/conversations/:conversationId/messages', authenticate, requireRole('SEEKER'), validateMessagePagination, listMessages);

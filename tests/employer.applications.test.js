@@ -14,6 +14,7 @@ process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 const mockPrisma = {
   application: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
@@ -21,11 +22,12 @@ const mockPrisma = {
   job: { findFirst: jest.fn() },
   conversation: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     create: jest.fn(),
   },
-  message: { count: jest.fn(), updateMany: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
+  message: { count: jest.fn(), groupBy: jest.fn(), updateMany: jest.fn(), findMany: jest.fn(), findUnique: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -118,14 +120,17 @@ const conversation = (overrides = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.application.findMany.mockResolvedValue([]);
+  mockPrisma.application.count.mockResolvedValue(0);
   mockPrisma.application.findFirst.mockResolvedValue(null);
   mockPrisma.application.findUnique.mockResolvedValue(null);
   mockPrisma.application.update.mockResolvedValue(detailApplication({ status: 'REVIEWING' }));
   mockPrisma.conversation.findMany.mockResolvedValue([]);
+  mockPrisma.conversation.count.mockResolvedValue(0);
   mockPrisma.conversation.findFirst.mockResolvedValue(null);
   mockPrisma.conversation.findUnique.mockResolvedValue(null);
   mockPrisma.conversation.create.mockResolvedValue(conversation());
   mockPrisma.message.count.mockResolvedValue(0);
+  mockPrisma.message.groupBy.mockResolvedValue([]);
   mockPrisma.message.updateMany.mockResolvedValue({ count: 0 });
 
   // Reset S3 mock
@@ -322,7 +327,7 @@ describe('Employer application conversations', () => {
 
   test('lists only conversations scoped to the authenticated employer', async () => {
     mockPrisma.conversation.findMany.mockResolvedValue([conversation()]);
-    mockPrisma.message.count.mockResolvedValue(2);
+    mockPrisma.message.groupBy.mockResolvedValue([{ conversationId: conversationA, _count: { _all: 2 } }]);
 
     const response = await request(app)
       .get('/api/employer/conversations?employerId=' + employerB)
@@ -331,7 +336,10 @@ describe('Employer application conversations', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.conversations).toHaveLength(1);
     expect(response.body.data.conversations[0].seeker.profilePictureUrl).toBe('/api/seeker/profile/picture');
+    expect(response.body.data.conversations[0].unreadCount).toBe(2);
     expect(mockPrisma.conversation.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { employerId: employerA } }));
+    expect(mockPrisma.message.groupBy).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.message.count).not.toHaveBeenCalled();
   });
 
   test('cannot access another employer conversation', async () => {

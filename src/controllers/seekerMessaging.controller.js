@@ -8,7 +8,7 @@ import { getSeekerMessages, sendSeekerMessage } from '../services/message.servic
 
 export const listConversations = async (req, res, next) => {
   try {
-    return res.status(200).json({ success: true, data: { conversations: await getSeekerConversations(req.user.sub) } });
+    return res.status(200).json({ success: true, data: await getSeekerConversations(req.user.sub, req.validatedPagination) });
   } catch (error) {
     return next(error);
   }

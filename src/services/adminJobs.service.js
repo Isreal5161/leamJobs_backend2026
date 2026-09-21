@@ -244,14 +244,21 @@ const assertAllowedTransition = (currentStatus, requestedStatus) => {
   throw new AdminInvalidTransitionError(currentStatus, requestedStatus);
 };
 
-export const listAdminJobs = async ({ status } = {}) => {
-  const jobs = await prisma.job.findMany({
-    where: status ? { status } : undefined,
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    select: jobSelect,
-  });
+export const listAdminJobs = async ({ status, page = 1, limit = 50 } = {}) => {
+  const where = status ? { status } : undefined;
+  const [jobs, total] = await Promise.all([
+    prisma.job.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+      select: jobSelect,
+    }),
+    prisma.job.count({ where }),
+  ]);
 
-  return { jobs: jobs.map(mapAdminJob) };
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return { jobs: jobs.map(mapAdminJob), pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 } };
 };
 
 export const getAdminJob = async (jobId) => {

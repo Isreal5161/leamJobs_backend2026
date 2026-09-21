@@ -211,14 +211,23 @@ const findOwnedJob = (employerId, jobId) => prisma.job.findFirst({
   select: jobSelect,
 });
 
-export const listEmployerJobs = async (employerId) => {
-  const jobs = await prisma.job.findMany({
-    where: { employerId },
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    select: jobSelect,
-  });
+export const listEmployerJobs = async (employerId, { page = 1, limit = 50 } = {}) => {
+  const [jobs, total] = await Promise.all([
+    prisma.job.findMany({
+      where: { employerId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+      select: jobSelect,
+    }),
+    prisma.job.count({ where: { employerId } }),
+  ]);
 
-  return { jobs: jobs.map(mapEmployerJob) };
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  return {
+    jobs: jobs.map(mapEmployerJob),
+    pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
+  };
 };
 
 export const createEmployerJob = async (employerId, payload) => {

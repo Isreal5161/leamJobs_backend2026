@@ -49,9 +49,9 @@ export const assertAdminCanMutateLeamJobsApplicants = async (jobId) => {
   return employerId;
 };
 
-export const listAdminApplications = async (jobId) => {
+export const listAdminApplications = async (jobId, pagination) => {
   const { employerId, adminCanManageApplicants } = await assertAdminCanReadJobApplicants(jobId);
-  const data = await listEmployerApplications(employerId, jobId);
+  const data = await listEmployerApplications(employerId, jobId, pagination);
   return { ...data, adminCanManageApplicants };
 };
 

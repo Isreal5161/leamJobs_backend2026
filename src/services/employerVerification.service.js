@@ -382,11 +382,15 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
   return getEmployerVerification(employerId);
 };
 
-export const listEmployerVerifications = async () => {
-  const rows = await prisma.employerVerification.findMany({
-    where: { submittedAt: { not: null } },
-    orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
-    select: {
+export const listEmployerVerifications = async ({ page = 1, limit = 50 } = {}) => {
+  const where = { submittedAt: { not: null } };
+  const [rows, total] = await Promise.all([
+    prisma.employerVerification.findMany({
+      where,
+      orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
       id: true,
       status: true,
       submittedAt: true,
@@ -429,10 +433,13 @@ export const listEmployerVerifications = async () => {
           },
         },
       },
-      documents: { select: { id: true, kind: true, fileName: true } },
-    },
-  });
+        _count: { select: { documents: true } },
+      },
+    }),
+    prisma.employerVerification.count({ where }),
+  ]);
 
+  const totalPages = Math.max(1, Math.ceil(total / limit));
   return {
     verificationSubmissions: rows.map((row) => ({
       id: row.id,
@@ -466,8 +473,9 @@ export const listEmployerVerifications = async () => {
       submittedCompanySource: row.companyName || row.companyDescription || row.website || row.industry || row.companySize || row.phoneNumber || row.location || row.address || row.state || row.country || row.linkedinUrl || row.twitterUrl || row.facebookUrl
         ? 'SUBMITTED'
         : row.user?.employerProfile ? 'LEGACY_PROFILE_FALLBACK' : 'NONE',
-      documentCount: row.documents.length,
+      documentCount: row._count.documents,
     })),
+    pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
   };
 };
 

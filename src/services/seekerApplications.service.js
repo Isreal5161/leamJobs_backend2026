@@ -180,13 +180,17 @@ const resolveAuthorizedUploadedCv = (seekerProfile, requestedResumeUrl, requeste
   };
 };
 
-export const getSeekerApplications = async (seekerId) => {
-  const [applications, interviews] = await Promise.all([
+export const getSeekerApplications = async (seekerId, { page = 1, limit = 50 } = {}) => {
+  const where = { seekerId };
+  const [applications, total, interviews] = await Promise.all([
     prisma.application.findMany({
-      where: { seekerId },
-      orderBy: { createdAt: 'desc' },
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
       select: applicationSelect,
     }),
+    prisma.application.count({ where }),
     prisma.application.count({
       where: { seekerId, status: 'INTERVIEW' },
     }),
@@ -195,9 +199,10 @@ export const getSeekerApplications = async (seekerId) => {
   return {
     applications: applications.map(mapApplication),
     summary: {
-      total: applications.length,
+      total,
       interviews,
     },
+    pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)), hasNextPage: page < Math.max(1, Math.ceil(total / limit)), hasPreviousPage: page > 1 },
   };
 };
 

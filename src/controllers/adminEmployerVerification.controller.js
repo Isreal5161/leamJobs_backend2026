@@ -8,7 +8,7 @@ import {
 
 export const listEmployerVerificationSubmissions = async (req, res, next) => {
   try {
-    const data = await listVerificationSubmissions();
+    const data = await listVerificationSubmissions(req.validatedPagination);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);

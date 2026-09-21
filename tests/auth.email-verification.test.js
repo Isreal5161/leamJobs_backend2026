@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { jest } from '@jest/globals';
-import bcrypt from 'bcrypt';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
@@ -10,6 +9,8 @@ process.env.FRONTEND_URL = 'https://leamjobs.com';
 process.env.EMAIL_VERIFICATION_EXPIRE_MINUTES = '15';
 process.env.EMAIL_VERIFICATION_MAX_ATTEMPTS = '5';
 process.env.EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS = '60';
+
+const validPasswordHash = '$2b$12$nhfTVb9Q68D9Ba7lekU84OktU/FXE2WcEd5//HUWj.mi0SN8Fk11K';
 
 const mockPrisma = {
   user: {
@@ -54,7 +55,7 @@ test('registration creates a pending unverified user and queues an email verific
     firstName: 'Ada',
     lastName: 'Lovelace',
     email: 'ada@example.com',
-    passwordHash: bcrypt.hashSync('ValidPassword1!', 12),
+    passwordHash: validPasswordHash,
     phone: '+2348000000000',
     role: 'SEEKER',
     isActive: false,
@@ -92,7 +93,7 @@ test('newly registered users cannot log in before verification', async () => {
   mockPrisma.user.findUnique.mockResolvedValue({
     id: 'user-2',
     email: 'pending@example.com',
-    passwordHash: bcrypt.hashSync('ValidPassword1!', 12),
+    passwordHash: validPasswordHash,
     role: 'EMPLOYER',
     isActive: false,
     isVerified: false,
@@ -109,7 +110,7 @@ test('legacy active users without a verification record can still log in', async
   mockPrisma.user.findUnique.mockResolvedValue({
     id: 'legacy-user',
     email: 'legacy@example.com',
-    passwordHash: bcrypt.hashSync('ValidPassword1!', 12),
+    passwordHash: validPasswordHash,
     role: 'SEEKER',
     isActive: true,
     isVerified: false,

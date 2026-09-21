@@ -10,6 +10,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const mockPrisma = {
   job: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
@@ -91,6 +92,7 @@ const jobRecord = (overrides = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.job.findMany.mockResolvedValue([]);
+  mockPrisma.job.count.mockResolvedValue(0);
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.job.updateMany.mockResolvedValue({ count: 0 });
   mockPrisma.employerVerification.findUnique.mockResolvedValue({ status: 'APPROVED' });

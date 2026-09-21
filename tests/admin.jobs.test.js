@@ -18,6 +18,7 @@ const mockPrisma = {
   },
   job: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
@@ -100,6 +101,7 @@ beforeEach(() => {
   mockPrisma.user.create.mockResolvedValue(null);
   mockPrisma.employerProfile.upsert.mockResolvedValue(null);
   mockPrisma.job.findMany.mockResolvedValue([]);
+  mockPrisma.job.count.mockResolvedValue(0);
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.job.findUnique.mockResolvedValue(null);
   mockPrisma.job.update.mockResolvedValue(null);

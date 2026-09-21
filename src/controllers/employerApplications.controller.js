@@ -10,7 +10,7 @@ import { getOrCreateEmployerConversationForApplication } from '../services/conve
 
 export const listApplications = async (req, res, next) => {
   try {
-    const data = await listEmployerApplications(req.user.sub, req.params.jobId);
+    const data = await listEmployerApplications(req.user.sub, req.params.jobId, req.validatedPagination);
     return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);

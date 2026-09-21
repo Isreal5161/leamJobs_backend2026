@@ -10,7 +10,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const mockPrisma = {
   user: { findUnique: jest.fn() },
   employerProfile: { upsert: jest.fn() },
-  job: { findMany: jest.fn() },
+  job: { findMany: jest.fn(), count: jest.fn() },
   employmentCompensation: { deleteMany: jest.fn() },
   contractCompensation: { deleteMany: jest.fn() },
   freelanceCompensation: { deleteMany: jest.fn() },

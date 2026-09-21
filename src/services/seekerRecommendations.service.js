@@ -1,4 +1,5 @@
 import { prisma } from '../config/database.js';
+import { Prisma } from '@prisma/client';
 import { mapSeekerJob } from './seekerJobs.service.js';
 import { normalizeSkills } from '../utils/skillNormalization.js';
 import { hasEntitlement } from './subscriptionEntitlement.service.js';
@@ -33,24 +34,52 @@ const jobRecommendationSelect = {
   freelanceCompensation: { select: { projectAmount: true, currency: true } },
 };
 
-const rankRecommendations = (jobs, seekerSkills) => jobs.map((job) => {
-  const jobSkills = normalizeSkills(job.skills);
-  const seekerSkillKeys = new Set(seekerSkills.map((skill) => skill.key));
-  const matchedSkills = jobSkills.filter((skill) => seekerSkillKeys.has(skill.key)).map((skill) => skill.display);
-  const matchScore = jobSkills.length === 0 ? 0 : Math.round((matchedSkills.length / jobSkills.length) * 100);
-  return {
-    job,
-    matchScore,
-    matchedSkills,
-    totalJobSkills: jobSkills.length,
-  };
-}).sort((first, second) => {
-  const scoreDifference = second.matchScore - first.matchScore;
-  if (scoreDifference !== 0) return scoreDifference;
-  const dateDifference = new Date(second.job.createdAt).getTime() - new Date(first.job.createdAt).getTime();
-  if (dateDifference !== 0) return dateDifference;
-  return first.job.id.localeCompare(second.job.id);
-});
+const findRankedRecommendationIds = async (seekerSkills, recommendationWindow, cursor) => {
+  const seekerSkillKeys = seekerSkills.map((skill) => skill.key);
+  const cursorRow = cursor ? Prisma.sql`OR id = ${cursor}` : Prisma.empty;
+
+  return prisma.$queryRaw(Prisma.sql`
+    WITH normalized_job_skills AS (
+      SELECT
+        job.id,
+        job."createdAt",
+        lower(trim(skill.value)) AS skill_key
+      FROM "Job" AS job
+      LEFT JOIN LATERAL unnest(job.skills) AS skill(value) ON TRUE
+      WHERE trim(skill.value) <> ''
+      GROUP BY job.id, job."createdAt", lower(trim(skill.value))
+    ),
+    scored_jobs AS (
+      SELECT
+        job.id,
+        job."createdAt",
+        CASE
+          WHEN COUNT(normalized.skill_key) = 0 THEN 0
+          ELSE ROUND(
+            100.0 * COUNT(*) FILTER (WHERE normalized.skill_key IN (${Prisma.join(seekerSkillKeys)}))
+            / COUNT(normalized.skill_key)
+          )::int
+        END AS match_score
+      FROM "Job" AS job
+      LEFT JOIN normalized_job_skills AS normalized ON normalized.id = job.id
+      WHERE job.status = 'APPROVED'
+        AND (job."applicationDeadline" IS NULL OR job."applicationDeadline" > CURRENT_TIMESTAMP)
+      GROUP BY job.id, job."createdAt"
+    ),
+    ranked_jobs AS (
+      SELECT
+        id,
+        match_score,
+        ROW_NUMBER() OVER (ORDER BY match_score DESC, "createdAt" DESC, id ASC) AS recommendation_rank
+      FROM scored_jobs
+    )
+    SELECT id, match_score AS "matchScore", recommendation_rank AS "recommendationRank"
+    FROM ranked_jobs
+    WHERE recommendation_rank <= ${recommendationWindow}
+      ${cursorRow}
+    ORDER BY recommendation_rank
+  `);
+};
 
 export const findRelevantSeekerIdsForJob = async (jobSkills, client = prisma) => {
   const seekers = await findRelevantSeekersForJob(jobSkills, client);
@@ -78,8 +107,26 @@ export const getSeekerRecommendations = async (seekerId, { limit, cursor }) => {
   const hasBoost = await hasEntitlement(seekerId, 'RECOMMENDATION_BOOST');
   const recommendationWindow = hasBoost ? PAID_RECOMMENDATION_WINDOW : FREE_RECOMMENDATION_WINDOW;
   const effectiveLimit = Math.min(limit, recommendationWindow);
-  const jobs = await prisma.job.findMany({ where: { status: 'APPROVED', OR: [{ applicationDeadline: null }, { applicationDeadline: { gt: new Date() } }] }, select: jobRecommendationSelect });
-  const ranked = rankRecommendations(jobs, seekerSkills);
+  const rankedIds = await findRankedRecommendationIds(seekerSkills, recommendationWindow, cursor);
+  const jobs = await prisma.job.findMany({
+    where: { id: { in: rankedIds.map(({ id }) => id) } },
+    select: jobRecommendationSelect,
+  });
+  const jobsById = new Map(jobs.map((job) => [job.id, job]));
+  const ranked = rankedIds
+    .map((rankedJob) => {
+      const job = jobsById.get(rankedJob.id);
+      if (!job) return null;
+      const jobSkills = normalizeSkills(job.skills);
+      const seekerSkillKeys = new Set(seekerSkills.map((skill) => skill.key));
+      return {
+        job,
+        matchScore: Number(rankedJob.matchScore),
+        matchedSkills: jobSkills.filter((skill) => seekerSkillKeys.has(skill.key)).map((skill) => skill.display),
+        totalJobSkills: jobSkills.length,
+      };
+    })
+    .filter(Boolean);
   const startIndex = cursor ? Math.max(0, ranked.findIndex((item) => item.job.id === cursor) + 1) : 0;
   const windowEnd = Math.min(recommendationWindow, ranked.length);
   const page = ranked.slice(startIndex, Math.min(startIndex + effectiveLimit, windowEnd));
