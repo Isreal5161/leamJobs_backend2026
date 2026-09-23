@@ -77,12 +77,12 @@ export const listEmployerCandidates = async ({ limit, cursor, search, location, 
       SELECT
         s."userId",
         MAX(CASE
-          WHEN e."key" = 'FEATURED_CANDIDATE' THEN 2
+            WHEN e."key" = 'PROFILE_VISIBILITY_BOOST' THEN 2
           WHEN e."key" = 'PROFILE_VISIBILITY_BOOST' THEN 1
           ELSE 0
         END)::int AS "priority",
-        BOOL_OR(e."key" = 'FEATURED_CANDIDATE') AS "featured",
-        BOOL_OR(e."key" = 'PROFILE_VISIBILITY_BOOST') AS "visibilityBoosted"
+          BOOL_OR(e."key" = 'PROFILE_VISIBILITY_BOOST') AS "featured",
+          BOOL_OR(e."key" = 'PROFILE_VISIBILITY_BOOST') AS "visibilityBoosted"
       FROM "Subscription" s
       INNER JOIN "SubscriptionPlan" spn ON spn."id" = s."planId"
       INNER JOIN "PlanEntitlement" pe ON pe."planId" = spn."id"
@@ -93,7 +93,7 @@ export const listEmployerCandidates = async ({ limit, cursor, search, location, 
         AND s."endDate" IS NOT NULL
         AND s."endDate" > CURRENT_TIMESTAMP
         AND e."isActive" = true
-        AND e."key" IN ('FEATURED_CANDIDATE', 'PROFILE_VISIBILITY_BOOST')
+          AND e."key" IN ('PROFILE_VISIBILITY_BOOST')
       GROUP BY s."userId"
     )
     SELECT

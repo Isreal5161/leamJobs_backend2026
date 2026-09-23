@@ -156,9 +156,7 @@ export const getSeekerProfileForUser = async (userId) => {
     cvTemplate: profile.cvTemplate ?? null,
     linkedinUrl: profile.linkedinUrl ?? null,
     resumeUrl: profile.resumeUrl ?? null,
-    resumeObjectKey: profile.resumeObjectKey ?? null,
     profilePictureUrl: profile.profilePictureUrl ?? null,
-    profilePictureKey: profile.profilePictureKey ?? null,
   } : {
     id: null,
     country: null,
@@ -176,9 +174,7 @@ export const getSeekerProfileForUser = async (userId) => {
     cvTemplate: null,
     linkedinUrl: null,
     resumeUrl: null,
-    resumeObjectKey: null,
     profilePictureUrl: null,
-    profilePictureKey: null,
   };
 
   return {
@@ -256,9 +252,7 @@ export const upsertSeekerProfileForUser = async (userId, payload) => {
     cvTemplate: profile.cvTemplate ?? null,
     linkedinUrl: profile.linkedinUrl ?? null,
     resumeUrl: profile.resumeUrl ?? null,
-    resumeObjectKey: profile.resumeObjectKey ?? null,
     profilePictureUrl: profile.profilePictureUrl ?? null,
-    profilePictureKey: profile.profilePictureKey ?? null,
   };
 };
 

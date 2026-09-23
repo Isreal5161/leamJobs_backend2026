@@ -41,8 +41,8 @@ import { validateEmployerApplicationStatus } from '../validators/employerApplica
 import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
 import { validateAdminPaymentsQuery } from '../validators/adminPayments.validation.js';
 import { listAdminPaymentsController } from '../controllers/adminPayments.controller.js';
-import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription } from '../controllers/adminSubscriptions.controller.js';
-import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId } from '../validators/adminSubscriptions.validation.js';
+import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription, trialSettings, updateTrialSettings } from '../controllers/adminSubscriptions.controller.js';
+import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId, validateAdminSubscriptionTrialSettings } from '../validators/adminSubscriptions.validation.js';
 import { executeWithdrawalController, reconcileWithdrawalController } from '../controllers/withdrawal.controller.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
@@ -76,6 +76,8 @@ adminRouter.post('/withdrawals/:id/reconcile', authenticate, requireRole('ADMIN'
 adminRouter.get('/subscription-plans', authenticate, requireRole('ADMIN'), listPlans);
 adminRouter.post('/subscription-plans', authenticate, requireRole('ADMIN'), validateAdminSubscriptionPlanCreate, createPlan);
 adminRouter.patch('/subscription-plans/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);
+adminRouter.get('/subscription-trial-settings', authenticate, requireRole('ADMIN'), trialSettings);
+adminRouter.patch('/subscription-trial-settings', authenticate, requireRole('ADMIN'), validateAdminSubscriptionTrialSettings, updateTrialSettings);
 adminRouter.get('/subscriptions/summary', authenticate, requireRole('ADMIN'), subscriptionSummary);
 adminRouter.get('/subscriptions', authenticate, requireRole('ADMIN'), validateAdminSubscriptionsQuery, subscriptions);
 adminRouter.get('/subscriptions/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, subscription);

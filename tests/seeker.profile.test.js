@@ -218,9 +218,7 @@ describe('seeker profile onboarding endpoints', () => {
       cvTemplate: null,
       linkedinUrl: null,
       resumeUrl: null,
-      resumeObjectKey: null,
       profilePictureUrl: null,
-      profilePictureKey: null,
     });
   });
 

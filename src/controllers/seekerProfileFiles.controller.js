@@ -34,7 +34,6 @@ export const uploadProfilePicture = async (req, res, next) => {
       success: true,
       data: {
         profilePictureUrl: profile.profilePictureUrl,
-        profilePictureKey: profile.profilePictureKey,
       },
     });
   } catch (error) {
@@ -67,7 +66,6 @@ export const uploadResume = async (req, res, next) => {
       success: true,
       data: {
         resumeUrl: profile.resumeUrl,
-        resumeObjectKey: profile.resumeObjectKey,
       },
     });
   } catch (error) {

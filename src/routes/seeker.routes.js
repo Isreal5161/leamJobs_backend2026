@@ -47,8 +47,8 @@ import { checkoutSubscription, listSeekerPlanOptionsController, listSubscription
 import { validateSeekerSubscriptionCheckout, validateSeekerSubscriptionVerification } from '../validators/seekerSubscriptions.validation.js';
 import { respondToInvitation } from '../controllers/jobInvitation.controller.js';
 import { validateInvitationResponse } from '../validators/jobInvitation.validation.js';
-import { profileAssistant, cvOptimizer, applicationAssistance } from '../controllers/ai.controller.js';
-import { validateProfileAssistant, validateCvOptimizer, validateApplicationAssistance } from '../validators/ai.validation.js';
+import { profileAssistant, cvOptimizer, applicationAssistance, generateApplicationCoverLetter } from '../controllers/ai.controller.js';
+import { validateProfileAssistant, validateCvOptimizer, validateApplicationAssistance, validateGenerateCoverLetter } from '../validators/ai.validation.js';
 import { requireEntitlement } from '../middleware/entitlement.middleware.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
@@ -118,6 +118,7 @@ seekerRouter.post('/subscriptions/verify', authenticate, requireRole('SEEKER'), 
 seekerRouter.post('/ai/profile-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_PROFILE_ASSISTANT'), validateProfileAssistant, profileAssistant);
 seekerRouter.post('/ai/cv-optimizer', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CV_OPTIMIZER'), validateCvOptimizer, cvOptimizer);
 seekerRouter.post('/ai/application-assistance', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_APPLICATION_ASSISTANCE'), validateApplicationAssistance, applicationAssistance);
+seekerRouter.post('/applications/cover-letter/generate', authenticate, requireRole('SEEKER'), aiLimiter, validateGenerateCoverLetter, generateApplicationCoverLetter);
 seekerRouter.get('/payout-accounts', authenticate, requireRole('SEEKER'), listSeekerPayoutAccounts);
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);

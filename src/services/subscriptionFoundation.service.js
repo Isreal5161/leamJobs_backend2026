@@ -1,17 +1,22 @@
 import { prisma } from '../config/database.js';
+import { subscriptionEntitlements } from './subscriptionFeatureCatalog.js';
 
-export const subscriptionEntitlements = [
-  { key: 'RECOMMENDATION_BOOST', displayName: 'Recommendation boost', description: 'Allows a future server-side recommendation boost.' },
-  { key: 'PROFILE_VISIBILITY_BOOST', displayName: 'Profile visibility boost', description: 'Allows a future profile visibility enhancement.' },
-  { key: 'PROFILE_ANALYTICS', displayName: 'Profile analytics', description: 'Allows future profile analytics access.' },
-  { key: 'FEATURED_CANDIDATE', displayName: 'Featured candidate', description: 'Allows future featured candidate placement.' },
-  { key: 'ADVANCED_CV', displayName: 'Advanced CV', description: 'Allows future advanced CV capabilities.' },
-  { key: 'AI_PROFILE_ASSISTANT', displayName: 'AI profile assistant', description: 'Reserved for a future AI profile assistant.' },
-  { key: 'AI_CV_OPTIMIZER', displayName: 'AI CV optimizer', description: 'Reserved for a future AI CV optimizer.' },
-  { key: 'AI_APPLICATION_ASSISTANCE', displayName: 'AI application assistance', description: 'Reserved for future AI application assistance.' },
-];
+export { subscriptionEntitlements } from './subscriptionFeatureCatalog.js';
 
 export const subscriptionPlans = [
+  {
+    key: 'BASIC',
+    displayName: 'Basic',
+    description: 'Free access with limited AI usage and core job features.',
+    price: null,
+    currency: null,
+    billingInterval: 'MONTHLY',
+    aiAllowance: 5,
+    aiUnlimited: false,
+    featureConfig: { free: true },
+    benefits: ['Browse jobs', 'Search & filters', 'Apply for jobs', 'Application tracking'],
+    entitlementKeys: ['BROWSE_JOBS', 'SEARCH_FILTERS', 'APPLY_FOR_JOBS', 'SAVED_JOBS', 'JOB_ALERTS', 'BASIC_PROFILE', 'CV_UPLOAD', 'APPLICATION_TRACKING', 'PROFILE_STRENGTH'],
+  },
   {
     key: 'PROFESSIONAL',
     displayName: 'Professional',
@@ -19,18 +24,24 @@ export const subscriptionPlans = [
     price: null,
     currency: null,
     billingInterval: 'MONTHLY',
-    benefits: ['Recommendation boost', 'Profile visibility boost', 'Professional badge', 'Profile analytics', 'Additional CV capabilities'],
-    entitlementKeys: ['RECOMMENDATION_BOOST', 'PROFILE_VISIBILITY_BOOST', 'PROFILE_ANALYTICS', 'ADVANCED_CV'],
+    aiAllowance: 20,
+    aiUnlimited: false,
+    featureConfig: { tier: 'professional' },
+    benefits: ['Advanced job filters', 'Career matching', 'AI CV review', 'AI cover letter', 'Application insights'],
+    entitlementKeys: ['BROWSE_JOBS', 'SEARCH_FILTERS', 'APPLY_FOR_JOBS', 'SAVED_JOBS', 'JOB_ALERTS', 'BASIC_PROFILE', 'CV_UPLOAD', 'APPLICATION_TRACKING', 'PROFILE_STRENGTH', 'AI_CV_REVIEW', 'AI_CV_IMPROVEMENT', 'AI_COVER_LETTER', 'AI_JOB_MATCHING', 'APPLICATION_INSIGHTS', 'CAREER_RECOMMENDATIONS', 'PRIORITY_RECOMMENDATIONS', 'SALARY_CAREER_INSIGHTS'],
   },
   {
     key: 'PREMIUM',
     displayName: 'Premium',
-    description: 'The strongest career visibility and future advanced capabilities.',
+    description: 'The strongest career visibility and advanced AI support.',
     price: null,
     currency: null,
     billingInterval: 'MONTHLY',
-    benefits: ['Stronger recommendation boost', 'Stronger profile visibility', 'Featured candidate eligibility', 'Advanced profile analytics', 'Advanced CV capabilities', 'Future AI capabilities'],
-    entitlementKeys: ['RECOMMENDATION_BOOST', 'PROFILE_VISIBILITY_BOOST', 'PROFILE_ANALYTICS', 'FEATURED_CANDIDATE', 'ADVANCED_CV', 'AI_PROFILE_ASSISTANT', 'AI_CV_OPTIMIZER', 'AI_APPLICATION_ASSISTANCE'],
+    aiAllowance: 50,
+    aiUnlimited: false,
+    featureConfig: { tier: 'premium' },
+    benefits: ['Priority recommendations', 'AI career assistant', 'Interview prep', 'Skills gap analysis', 'Premium matching'],
+    entitlementKeys: ['BROWSE_JOBS', 'SEARCH_FILTERS', 'APPLY_FOR_JOBS', 'SAVED_JOBS', 'JOB_ALERTS', 'BASIC_PROFILE', 'CV_UPLOAD', 'APPLICATION_TRACKING', 'PROFILE_STRENGTH', 'AI_CV_REVIEW', 'AI_CV_IMPROVEMENT', 'AI_COVER_LETTER', 'AI_JOB_MATCHING', 'AI_INTERVIEW_PREPARATION', 'AI_CAREER_ASSISTANT', 'SKILLS_GAP_ANALYSIS', 'APPLICATION_INSIGHTS', 'CAREER_RECOMMENDATIONS', 'PRIORITY_RECOMMENDATIONS', 'SALARY_CAREER_INSIGHTS', 'PROFILE_VISIBILITY_BOOST', 'PREMIUM_SUPPORT'],
   },
 ];
 
@@ -53,6 +64,9 @@ export const ensureDefaultSubscriptionFoundation = async (client = prisma) => {
         description: plan.description,
         billingInterval: plan.billingInterval,
         benefits: plan.benefits,
+        aiAllowance: plan.aiAllowance,
+        aiUnlimited: plan.aiUnlimited,
+        featureConfig: plan.featureConfig,
         isActive: true,
         isPublic: true,
         displayOrder,
@@ -65,6 +79,9 @@ export const ensureDefaultSubscriptionFoundation = async (client = prisma) => {
         currency: plan.currency,
         billingInterval: plan.billingInterval,
         benefits: plan.benefits,
+        aiAllowance: plan.aiAllowance,
+        aiUnlimited: plan.aiUnlimited,
+        featureConfig: plan.featureConfig,
         isActive: true,
         isPublic: true,
         displayOrder,

@@ -39,6 +39,8 @@ model User {
   sentMessages          Message[]       @relation("MessageSenders")
   subscriptions         Subscription[]
   payments              Payment[]
+  subscriptionTrials    UserSubscriptionTrial[]
+  aiUsageRecords        AiUsageRecord[]
 
   employerContracts Contract[] @relation("EmployerContracts")
   seekerContracts   Contract[] @relation("SeekerContracts")
@@ -137,6 +139,9 @@ model SubscriptionPlan {
   isPublic        Boolean         @default(true)
   displayOrder    Int             @default(0)
   benefits        Json?
+  featureConfig   Json?
+  aiAllowance     Int?
+  aiUnlimited     Boolean         @default(false)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
@@ -146,12 +151,22 @@ model SubscriptionPlan {
   @@index([isActive, isPublic, displayOrder])
 }
 
+model SubscriptionSettings {
+  id               String   @id @default("default")
+  trialEnabled     Boolean  @default(true)
+  trialDurationDays Int      @default(7)
+  trialPlanKey     String   @default("PREMIUM")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
 model Entitlement {
   id          String   @id @default(uuid())
   key         String   @unique
   displayName String
   description String?
   isActive    Boolean  @default(true)
+  usageLimit  Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -168,6 +183,51 @@ model PlanEntitlement {
 
   @@id([planId, entitlementId])
   @@index([entitlementId])
+}
+
+enum TrialStatus {
+  ACTIVE
+  EXPIRED
+  ENDED
+  CANCELLED
+}
+
+model UserSubscriptionTrial {
+  id             String       @id @default(uuid())
+  userId         String
+  grantedPlanKey String
+  status         TrialStatus  @default(ACTIVE)
+  durationDays   Int          @default(7)
+  startAt        DateTime     @default(now())
+  endAt          DateTime
+  endedAt        DateTime?
+  source         String?
+  description    String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, endAt])
+  @@index([status, endAt])
+}
+
+model AiUsageRecord {
+  id          String   @id @default(uuid())
+  userId      String
+  featureKey  String
+  planKey     String
+  amount      Int      @default(1)
+  periodStart DateTime
+  periodEnd   DateTime
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, planKey, periodStart])
+  @@index([userId, featureKey, createdAt])
 }
 
 model SiteContent {

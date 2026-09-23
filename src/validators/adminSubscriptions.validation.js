@@ -5,6 +5,7 @@ const planKey = z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_]{2,49}$/, 
 const currency = z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/, 'Currency must be a three-letter code');
 const benefits = z.array(z.string().trim().min(1).max(300)).max(50);
 const entitlementKeys = z.array(z.string().trim().toUpperCase().regex(/^[A-Z][A-Z0-9_]{2,80}$/)).max(50);
+const featureConfig = z.record(z.string(), z.unknown());
 
 const planFields = {
   key: planKey,
@@ -18,6 +19,9 @@ const planFields = {
   displayOrder: z.coerce.number().int().min(0).max(100000),
   benefits,
   entitlementKeys,
+  aiAllowance: z.coerce.number().int().min(0).max(100000).optional(),
+  aiUnlimited: z.boolean().optional(),
+  featureConfig: featureConfig.optional(),
 };
 
 export const validateAdminSubscriptionPlanCreate = (req, res, next) => {
@@ -31,6 +35,17 @@ export const validateAdminSubscriptionPlanUpdate = (req, res, next) => {
   const result = z.object(planFields).partial().strict().safeParse(req.body);
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })) });
   req.validatedPlan = result.data;
+  return next();
+};
+
+export const validateAdminSubscriptionTrialSettings = (req, res, next) => {
+  const result = z.object({
+    trialEnabled: z.boolean(),
+    trialDurationDays: z.coerce.number().int().min(1).max(365),
+    trialPlanKey: planKey,
+  }).strict().safeParse(req.body);
+  if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })) });
+  req.validatedTrialSettings = result.data;
   return next();
 };
 

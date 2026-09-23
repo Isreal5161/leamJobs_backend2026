@@ -24,7 +24,7 @@ const corsOptions = {
   origin: [
     env.FRONTEND_URL,
     env.FRONTEND_URL_PROD,
-    'http://localhost:5173', // Vite default
+    ...(env.NODE_ENV === 'development' || env.NODE_ENV === 'test' ? ['http://localhost:5173'] : []),
   ].filter(Boolean),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],

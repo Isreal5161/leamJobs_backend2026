@@ -104,7 +104,7 @@ export const getSeekerRecommendations = async (seekerId, { limit, cursor }) => {
   const seekerSkills = normalizeSkills(profile?.skills ?? []);
   if (seekerSkills.length === 0) return { recommendations: [], nextCursor: null };
 
-  const hasBoost = await hasEntitlement(seekerId, 'RECOMMENDATION_BOOST');
+    const hasBoost = await hasEntitlement(seekerId, 'PRIORITY_RECOMMENDATIONS');
   const recommendationWindow = hasBoost ? PAID_RECOMMENDATION_WINDOW : FREE_RECOMMENDATION_WINDOW;
   const effectiveLimit = Math.min(limit, recommendationWindow);
   const rankedIds = await findRankedRecommendationIds(seekerSkills, recommendationWindow, cursor);

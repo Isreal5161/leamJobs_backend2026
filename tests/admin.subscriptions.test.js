@@ -11,6 +11,7 @@ const model = () => ({ findMany: jest.fn(), findUnique: jest.fn(), count: jest.f
 const mockPrisma = {
   subscriptionPlan: model(), entitlement: model(), planEntitlement: model(), subscription: model(), payment: model(),
   subscriptionEvent: model(),
+  subscriptionSettings: model(),
   $transaction: jest.fn(async (callback) => callback(mockPrisma)),
   $queryRaw: jest.fn().mockResolvedValue([]),
 };
@@ -39,14 +40,23 @@ beforeEach(() => {
   mockPrisma.payment.groupBy.mockResolvedValue([{ currency: 'NGN', _sum: { amount: '100.00' } }]);
   mockPrisma.subscription.findMany.mockResolvedValue([]);
   mockPrisma.subscription.findUnique.mockResolvedValue(null);
+  mockPrisma.subscriptionSettings.upsert.mockResolvedValue({ id: 'default', trialEnabled: true, trialDurationDays: 7, trialPlanKey: 'PREMIUM', updatedAt: new Date() });
 });
 
 test('protects all Admin Subscription endpoints', async () => {
   expect((await request(app).get('/api/admin/subscription-plans')).status).toBe(401);
   expect((await request(app).get('/api/admin/subscriptions/summary')).status).toBe(401);
+  expect((await request(app).get('/api/admin/subscription-trial-settings')).status).toBe(401);
   for (const role of ['SEEKER', 'EMPLOYER']) {
     expect((await request(app).get('/api/admin/subscriptions').set('Authorization', `Bearer ${token(role, seekerId)}`)).status).toBe(403);
+    expect((await request(app).patch('/api/admin/subscription-trial-settings').set('Authorization', `Bearer ${token(role, seekerId)}`).send({ trialEnabled: false, trialDurationDays: 7, trialPlanKey: 'PREMIUM' })).status).toBe(403);
   }
+});
+
+test('admin can read and update persisted trial settings', async () => {
+  const response = await request(app).patch('/api/admin/subscription-trial-settings').set('Authorization', `Bearer ${token('ADMIN', adminId)}`).send({ trialEnabled: false, trialDurationDays: 14, trialPlanKey: 'PREMIUM' });
+  expect(response.status).toBe(200);
+  expect(mockPrisma.subscriptionSettings.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { trialEnabled: false, trialDurationDays: 14, trialPlanKey: 'PREMIUM' } }));
 });
 
 test('admin can list and create plans with known entitlements', async () => {

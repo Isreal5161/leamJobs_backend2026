@@ -19,16 +19,16 @@ beforeEach(() => {
   mockPrisma.subscriptionEvent.create.mockResolvedValue({ id: 'event-1' });
 });
 
-test('defines unique monthly Professional and Premium plans with stable entitlement keys', async () => {
+test('defines unique monthly Basic, Professional, and Premium plans with stable entitlement keys', async () => {
   const result = await ensureDefaultSubscriptionFoundation(mockPrisma);
 
-  expect(subscriptionPlans.map((plan) => plan.key)).toEqual(['PROFESSIONAL', 'PREMIUM']);
+  expect(subscriptionPlans.map((plan) => plan.key)).toEqual(['BASIC', 'PROFESSIONAL', 'PREMIUM']);
   expect(new Set(subscriptionEntitlements.map((entitlement) => entitlement.key)).size).toBe(subscriptionEntitlements.length);
   expect(subscriptionPlans.every((plan) => plan.billingInterval === 'MONTHLY')).toBe(true);
   expect(subscriptionPlans.every((plan) => plan.price === null && plan.currency === null)).toBe(true);
-  expect(Object.keys(result.plans)).toEqual(['PROFESSIONAL', 'PREMIUM']);
-  expect(mockPrisma.subscriptionPlan.upsert).toHaveBeenCalledTimes(2);
-  expect(mockPrisma.planEntitlement.upsert).toHaveBeenCalledTimes(12);
+  expect(Object.keys(result.plans)).toEqual(['BASIC', 'PROFESSIONAL', 'PREMIUM']);
+  expect(mockPrisma.subscriptionPlan.upsert).toHaveBeenCalledTimes(3);
+  expect(mockPrisma.planEntitlement.upsert).toHaveBeenCalledTimes(48);
 });
 
 test('records subscription lifecycle events without payment or entitlement side effects', async () => {

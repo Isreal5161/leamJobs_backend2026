@@ -6,6 +6,7 @@ import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './fl
 import { recordSubscriptionEvent } from './subscriptionFoundation.service.js';
 import { addBillingInterval, getEffectiveSubscriptionStatus, reconcileExpiredSubscriptionsForUser } from './subscriptionLifecycle.service.js';
 import { createNotification } from './notification.service.js';
+import { getAiUsageState, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
 
 export class SeekerSubscriptionError extends Error {
   constructor(message, status = 400) {
@@ -61,7 +62,7 @@ const subscriptionSelect = {
   nextRenewalAt: true,
   createdAt: true,
   updatedAt: true,
-  plan: { select: { id: true, key: true, displayName: true, description: true, price: true, currency: true, billingInterval: true, isActive: true, isPublic: true, benefits: true, entitlements: { select: { entitlement: { select: { key: true } } } } } },
+  plan: { select: { id: true, key: true, displayName: true, description: true, price: true, currency: true, billingInterval: true, isActive: true, isPublic: true, benefits: true, aiAllowance: true, aiUnlimited: true, featureConfig: true, entitlements: { select: { entitlement: { select: { key: true } } } } } },
   payments: { where: { paymentType: 'SUBSCRIPTION' }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 5, select: paymentSelect },
 };
 
@@ -106,6 +107,9 @@ const serializeSubscription = (subscription) => ({
     active: subscription.plan.isActive,
     public: subscription.plan.isPublic,
     benefits: Array.isArray(subscription.plan.benefits) ? subscription.plan.benefits : [],
+    aiAllowance: subscription.plan.aiAllowance ?? null,
+    aiUnlimited: Boolean(subscription.plan.aiUnlimited),
+    featureConfig: subscription.plan.featureConfig ?? {},
     entitlements: (subscription.plan.entitlements ?? []).map(({ entitlement }) => entitlement.key),
   } : null,
   payments: (subscription.payments ?? []).map(serializePayment),
@@ -125,6 +129,10 @@ const ensureSeekerPlan = async (planId) => {
       isActive: true,
       isPublic: true,
       benefits: true,
+      aiAllowance: true,
+      aiUnlimited: true,
+      featureConfig: true,
+      entitlements: { select: { entitlement: { select: { key: true } } } },
       createdAt: true,
       updatedAt: true,
     },
@@ -483,7 +491,7 @@ export const listSeekerPlanOptions = async () => {
     },
   });
 
-  return plans.map((plan) => ({
+  const catalog = plans.map((plan) => ({
     id: plan.id,
     key: plan.key,
     displayName: plan.displayName,
@@ -493,8 +501,34 @@ export const listSeekerPlanOptions = async () => {
     billingInterval: plan.billingInterval,
     active: plan.isActive,
     public: plan.isPublic,
+    aiAllowance: plan.aiAllowance ?? null,
+    aiUnlimited: Boolean(plan.aiUnlimited),
+    featureConfig: plan.featureConfig ?? {},
     benefits: Array.isArray(plan.benefits) ? plan.benefits : [],
+    entitlements: (plan.entitlements ?? []).map(({ entitlement }) => entitlement.key),
   }));
+
+  const hasBasic = catalog.some((plan) => plan.key === 'BASIC');
+  if (!hasBasic) {
+    catalog.unshift({
+      id: 'basic-free-plan',
+      key: 'BASIC',
+      displayName: 'Basic',
+      description: 'Free access with limited AI usage and core job features.',
+      price: null,
+      currency: null,
+      billingInterval: 'MONTHLY',
+      active: true,
+      public: true,
+      aiAllowance: 5,
+      aiUnlimited: false,
+      featureConfig: { free: true },
+      benefits: ['Browse jobs', 'Search jobs', 'Basic filters', 'Limited AI credits'],
+      entitlements: [],
+    });
+  }
+
+  return catalog;
 };
 
 export const listSeekerSubscriptions = async (userId) => {
@@ -504,10 +538,46 @@ export const listSeekerSubscriptions = async (userId) => {
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: subscriptionSelect,
   });
+  const effectiveState = await resolveEffectiveEntitlements(userId);
+  const aiUsage = await getAiUsageState(userId);
+  const effectivePlan = effectiveState.effectivePlan;
 
   return {
     subscriptions: subscriptions.map((subscription) => serializeSubscription({ ...subscription, status: getEffectiveSubscriptionStatus(subscription) })),
     currentSubscription: subscriptions.find((subscription) => isCurrentSubscription(subscription)) ? serializeSubscription(subscriptions.find((subscription) => isCurrentSubscription(subscription))) : null,
     activeSubscription: subscriptions.find((subscription) => isCurrentSubscription(subscription)) ? serializeSubscription(subscriptions.find((subscription) => isCurrentSubscription(subscription))) : null,
+    activeTrial: effectiveState.trial,
+    aiUsage,
+    currentPlan: effectivePlan ? {
+      id: effectivePlan.id,
+      key: effectiveState.planKey,
+      displayName: effectivePlan.displayName,
+      description: effectivePlan.description,
+      price: effectivePlan.price ? effectivePlan.price.toString() : null,
+      currency: effectivePlan.currency,
+      billingInterval: effectivePlan.billingInterval,
+      active: effectivePlan.isActive,
+      public: effectivePlan.isPublic,
+      aiAllowance: effectiveState.aiAllowance,
+      aiUnlimited: effectiveState.aiUnlimited,
+      featureConfig: effectivePlan.featureConfig ?? {},
+      benefits: Array.isArray(effectivePlan.benefits) ? effectivePlan.benefits : [],
+      entitlements: effectiveState.entitlements,
+    } : {
+      id: 'basic-free-plan',
+      key: effectiveState.planKey,
+      displayName: 'Basic',
+      description: 'Free access with limited AI usage and core job features.',
+      price: null,
+      currency: null,
+      billingInterval: 'MONTHLY',
+      active: true,
+      public: true,
+      aiAllowance: effectiveState.aiAllowance,
+      aiUnlimited: effectiveState.aiUnlimited,
+      featureConfig: {},
+      benefits: ['Browse jobs', 'Search jobs', 'Basic filters', 'Limited AI credits'],
+      entitlements: effectiveState.entitlements,
+    },
   };
 };

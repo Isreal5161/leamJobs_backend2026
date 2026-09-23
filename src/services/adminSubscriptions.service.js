@@ -5,13 +5,20 @@ import {
   getEffectiveExpiredWhere,
   getEffectiveSubscriptionStatus,
 } from './subscriptionLifecycle.service.js';
+import { canonicalizeEntitlementKey, subscriptionEntitlementKeys } from './subscriptionFeatureCatalog.js';
 
 const planInclude = {
   entitlements: { select: { entitlement: { select: { key: true, displayName: true, description: true, isActive: true } } } },
 };
 
 const decimalToString = (value) => value === null || value === undefined ? null : value.toString();
-const mapPlan = (plan) => ({
+const mapEntitlement = (entitlement) => ({
+  key: entitlement.key,
+  displayName: entitlement.displayName,
+  description: entitlement.description,
+  isActive: entitlement.isActive,
+});
+const mapPlan = (plan, availableEntitlements = []) => ({
   id: plan.id,
   key: plan.key,
   name: plan.displayName,
@@ -23,15 +30,21 @@ const mapPlan = (plan) => ({
   public: plan.isPublic,
   displayOrder: plan.displayOrder,
   benefits: Array.isArray(plan.benefits) ? plan.benefits : [],
-  entitlements: (plan.entitlements ?? []).map(({ entitlement }) => entitlement),
+  aiAllowance: plan.aiAllowance ?? null,
+  featureConfig: plan.featureConfig ?? {},
+  entitlements: (plan.entitlements ?? []).map(({ entitlement }) => ({ ...mapEntitlement(entitlement), key: canonicalizeEntitlementKey(entitlement.key) })),
+  aiUnlimited: Boolean(plan.aiUnlimited),
+  availableEntitlements: availableEntitlements.map(mapEntitlement),
   createdAt: plan.createdAt,
   updatedAt: plan.updatedAt,
 });
 
 const assertEntitlements = async (entitlementKeys, client) => {
-  const keys = [...new Set(entitlementKeys ?? [])];
-  const rows = keys.length ? await client.entitlement.findMany({ where: { key: { in: keys }, isActive: true }, select: { id: true, key: true } }) : [];
-  const found = new Set(rows.map((row) => row.key));
+  const requestedKeys = [...new Set(entitlementKeys ?? [])];
+  const keys = [...new Set(requestedKeys.map(canonicalizeEntitlementKey))];
+  const lookupKeys = [...new Set([...requestedKeys, ...keys])];
+  const rows = lookupKeys.length ? await client.entitlement.findMany({ where: { key: { in: lookupKeys }, isActive: true }, select: { id: true, key: true } }) : [];
+  const found = new Set(rows.map((row) => canonicalizeEntitlementKey(row.key)));
   const missing = keys.filter((key) => !found.has(key));
   if (missing.length) {
     const error = new Error(`Unknown or inactive entitlement keys: ${missing.join(', ')}`);
@@ -52,12 +65,20 @@ const planData = (payload) => ({
   ...(payload.isPublic !== undefined ? { isPublic: payload.isPublic } : {}),
   ...(payload.displayOrder !== undefined ? { displayOrder: payload.displayOrder } : {}),
   ...(payload.benefits !== undefined ? { benefits: payload.benefits } : {}),
+  ...(payload.aiAllowance !== undefined ? { aiAllowance: payload.aiAllowance } : {}),
+  ...(payload.aiUnlimited !== undefined ? { aiUnlimited: payload.aiUnlimited } : {}),
+  ...(payload.featureConfig !== undefined ? { featureConfig: payload.featureConfig } : {}),
 });
 
 export const listAdminSubscriptionPlans = async () => {
-  const plans = await prisma.subscriptionPlan.findMany({ orderBy: [{ displayOrder: 'asc' }, { key: 'asc' }], include: planInclude });
-  return { plans: plans.map(mapPlan) };
+  const [plans, availableEntitlements] = await Promise.all([
+    prisma.subscriptionPlan.findMany({ orderBy: [{ displayOrder: 'asc' }, { key: 'asc' }], include: planInclude }),
+    prisma.entitlement.findMany({ where: { key: { in: [...subscriptionEntitlementKeys] }, isActive: true }, orderBy: { key: 'asc' } }),
+  ]);
+  return { plans: plans.map((plan) => mapPlan(plan, availableEntitlements)), availableEntitlements: availableEntitlements.map(mapEntitlement) };
 };
+
+const getAvailableEntitlements = async () => prisma.entitlement.findMany({ where: { key: { in: [...subscriptionEntitlementKeys] }, isActive: true }, orderBy: { key: 'asc' } });
 
 export const createAdminSubscriptionPlan = async (payload) => {
   try {
@@ -66,7 +87,7 @@ export const createAdminSubscriptionPlan = async (payload) => {
       const created = await transaction.subscriptionPlan.create({ data: { ...planData(payload), entitlements: { create: entitlements.map(({ id }) => ({ entitlementId: id })) } }, include: planInclude });
       return created;
     });
-    return mapPlan(plan);
+    return mapPlan(plan, await getAvailableEntitlements());
   } catch (error) {
     if (error?.code === 'P2002') { error.status = 409; error.message = 'A subscription plan with this key already exists'; }
     throw error;
@@ -81,12 +102,53 @@ export const updateAdminSubscriptionPlan = async (planId, payload) => {
       const updated = await transaction.subscriptionPlan.update({ where: { id: planId }, data: { ...planData(payload), ...(entitlements ? { entitlements: { deleteMany: {}, create: entitlements.map(({ id }) => ({ entitlementId: id })) } } : {}) }, include: planInclude });
       return updated;
     });
-    return mapPlan(plan);
+    return mapPlan(plan, await getAvailableEntitlements());
   } catch (error) {
     if (error?.code === 'P2025') { error.status = 404; error.message = 'Subscription plan not found'; }
     if (error?.code === 'P2002') { error.status = 409; error.message = 'A subscription plan with this key already exists'; }
     throw error;
   }
+};
+
+const defaultTrialSettings = {
+  id: 'default',
+  trialEnabled: true,
+  trialDurationDays: 7,
+  trialPlanKey: 'PREMIUM',
+};
+
+const mapTrialSettings = (settings) => ({
+  id: settings.id,
+  trialEnabled: settings.trialEnabled,
+  trialDurationDays: settings.trialDurationDays,
+  trialPlanKey: settings.trialPlanKey,
+  updatedAt: settings.updatedAt,
+});
+
+export const getAdminSubscriptionTrialSettings = async () => {
+  if (!prisma.subscriptionSettings) return defaultTrialSettings;
+  const settings = await prisma.subscriptionSettings.upsert({
+    where: { id: 'default' },
+    update: {},
+    create: defaultTrialSettings,
+  });
+  return mapTrialSettings(settings);
+};
+
+export const updateAdminSubscriptionTrialSettings = async (payload) => {
+  if (!prisma.subscriptionSettings) return { ...defaultTrialSettings, ...payload };
+  const plan = await prisma.subscriptionPlan.findUnique({ where: { key: payload.trialPlanKey }, select: { key: true, isActive: true } });
+  if (!plan || !plan.isActive) {
+    const error = new Error('The selected trial plan is not active.');
+    error.status = 400;
+    throw error;
+  }
+  const settings = await prisma.subscriptionSettings.upsert({
+    where: { id: 'default' },
+    update: payload,
+    create: { ...defaultTrialSettings, ...payload },
+  });
+  return mapTrialSettings(settings);
 };
 
 const paymentSelect = {

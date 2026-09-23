@@ -36,3 +36,9 @@ export const validateApplicationAssistance = (req, res, next) => {
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
   req.validatedAi = result.data; return next();
 };
+
+export const validateGenerateCoverLetter = (req, res, next) => {
+  const result = z.object({ applicationId: z.string().uuid().optional(), jobId: z.string().uuid().optional(), request: text(500).optional(), coverLetter: text(5000).optional() }).strict().refine(({ applicationId, jobId }) => Boolean(applicationId || jobId), { message: 'Application ID or job ID is required', path: ['applicationId'] }).safeParse(req.body);
+  if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
+  req.validatedAi = result.data; return next();
+};
