@@ -8,15 +8,17 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
-  user: { findUnique: jest.fn() },
+  user: { findUnique: jest.fn(), findMany: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
   applicationCvSnapshot: { create: jest.fn() },
+  notification: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
   subscription: { findFirst: jest.fn() },
   job: { findFirst: jest.fn() },
   $transaction: jest.fn(async (callback) => callback({
     application: mockPrisma.application,
     applicationCvSnapshot: mockPrisma.applicationCvSnapshot,
+    notification: mockPrisma.notification,
   })),
 };
 
@@ -89,6 +91,17 @@ const createApplication = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.notification.findFirst.mockResolvedValue(null);
+  mockPrisma.notification.create.mockImplementation(async ({ data }) => ({
+    id: `notification-${mockPrisma.notification.create.mock.calls.length}`,
+    ...data,
+    metadata: null,
+    isRead: false,
+    readAt: null,
+    createdAt,
+    updatedAt: createdAt,
+    actor: null,
+  }));
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.user.findUnique.mockResolvedValue({
     id: seekerId,
@@ -269,6 +282,29 @@ describe('seeker job and application endpoints', () => {
         resumeVersion: 'seekers/11111111-1111-4111-8111-111111111111/resume/current.pdf',
         resumeSubmittedAt: expect.any(Date),
       },
+    }));
+  });
+
+  test('notifies active admins when a seeker applies to a LeamJobs-owned job', async () => {
+    mockPrisma.user.findMany.mockResolvedValue([{ id: 'admin-1', email: 'admin@example.com' }]);
+    mockPrisma.job.findFirst.mockResolvedValue(createJob({ employer: { email: 'hiring@leamjobs.com', employerProfile: company } }));
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      job: { ...createApplication().job, employer: { email: 'hiring@leamjobs.com', employerProfile: company } },
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.' });
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.notification.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        recipientUserId: 'admin-1',
+        eventKey: 'application:submitted:admin:44444444-4444-4444-8444-444444444444',
+        link: `/admin/jobs/${jobId}/applicants`,
+      }),
     }));
   });
 

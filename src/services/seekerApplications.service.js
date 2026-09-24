@@ -2,6 +2,7 @@ import { prisma } from '../config/database.js';
 import { hasEntitlement } from './subscriptionEntitlement.service.js';
 import { isAdvancedCvTemplate } from '../utils/cvTemplates.js';
 import { createNotification } from './notification.service.js';
+import { getLeamJobsEmployerEmail } from './leamjobsEmployer.service.js';
 
 export class ApplicationDuplicateError extends Error {
   constructor() {
@@ -59,7 +60,7 @@ const applicationJobSelect = {
   jobType: true,
   createdAt: true,
   applicationDeadline: true,
-  employer: { select: { employerProfile: { select: { companyName: true } } } },
+  employer: { select: { email: true, employerProfile: { select: { companyName: true } } } },
 };
 
 const mapApplication = (application) => ({
@@ -270,6 +271,13 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
   const applicationResumeUrl = isTemplateApplication ? null : uploadedCv.resumeUrl;
   const applicationResumeObjectKey = isTemplateApplication ? null : uploadedCv.resumeObjectKey;
   const snapshotPayload = isTemplateApplication ? buildLeamJobsCvSnapshot(user, seekerProfile) : null;
+  const isLeamJobsJob = job.employer?.email?.trim().toLowerCase() === getLeamJobsEmployerEmail();
+  const adminRecipients = isLeamJobsJob
+    ? await prisma.user?.findMany?.({
+      where: { role: 'ADMIN', isActive: true },
+      select: { id: true, email: true },
+    }) ?? []
+    : [];
 
   try {
     const application = await prisma.$transaction(async (transaction) => {
@@ -311,6 +319,20 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
         message: `${seekerName} applied for "${created.job.title}".`,
         link: '/employer/applicants',
       }, transaction).catch(() => undefined);
+
+      if (isLeamJobsJob) {
+        await Promise.all(adminRecipients.map((admin) => createNotification({
+          recipientUserId: admin.id,
+          recipientEmail: admin.email,
+          actorUserId: seekerId,
+          type: 'INFO',
+          category: 'APPLICATION',
+          eventKey: `application:submitted:admin:${created.id}`,
+          title: 'New LeamJobs application received',
+          message: `${seekerName} applied for "${created.job.title}".`,
+          link: `/admin/jobs/${created.jobId}/applicants`,
+        }, transaction).catch(() => undefined)));
+      }
 
       return created;
     });
