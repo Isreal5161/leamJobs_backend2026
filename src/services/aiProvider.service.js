@@ -41,7 +41,18 @@ export const requestStructuredCompletion = async ({ system, user, schema }) => {
       }),
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new AiProviderError('AI_PROVIDER_FAILED', 'AI assistance is temporarily unavailable.', 502);
+    if (!response.ok) {
+      const errorInfo = payload?.error ?? payload;
+      const safeErrorMessage = typeof errorInfo?.message === 'string' ? errorInfo.message : (typeof errorInfo?.error === 'string' ? errorInfo.error : null);
+      const diagnostic = [
+        safeErrorMessage,
+        typeof errorInfo?.type === 'string' ? `type=${errorInfo.type}` : null,
+        typeof errorInfo?.code === 'string' ? `code=${errorInfo.code}` : null,
+        typeof errorInfo?.param === 'string' ? `param=${errorInfo.param}` : null,
+      ].filter(Boolean).join(', ');
+      console.error(`AI provider upstream failure: status=${response.status}${diagnostic ? `, error=${diagnostic}` : ''}`);
+      throw new AiProviderError('AI_PROVIDER_FAILED', 'AI assistance is temporarily unavailable.', 502);
+    }
     const content = payload?.choices?.[0]?.message?.content;
     if (!content) throw new AiProviderError('AI_INVALID_RESPONSE', 'AI assistance returned no usable result.', 502);
     let parsed;
