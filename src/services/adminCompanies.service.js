@@ -6,7 +6,6 @@ const adminCompanySelect = {
   firstName: true,
   lastName: true,
   isActive: true,
-  isVerified: true,
   createdAt: true,
   employerProfile: {
     select: {
@@ -20,6 +19,7 @@ const adminCompanySelect = {
       companyLogoUrl: true,
     },
   },
+  employerVerification: { select: { status: true } },
   _count: { select: { jobs: true } },
 };
 
@@ -49,7 +49,7 @@ const mapAdminCompany = (user) => ({
   firstName: user.firstName,
   lastName: user.lastName,
   isActive: user.isActive,
-  isVerified: user.isVerified,
+  isVerified: user.employerVerification?.status === 'APPROVED',
   createdAt: user.createdAt,
   jobCount: user._count.jobs,
 });

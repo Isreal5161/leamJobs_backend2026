@@ -44,6 +44,7 @@ const companyRecord = (overrides = {}) => ({
     location: 'Lagos',
     companyLogoUrl: null,
   },
+  employerVerification: { status: 'APPROVED' },
   _count: { jobs: 3 },
   ...overrides,
 });
@@ -90,6 +91,24 @@ test('admins receive company data with job counts and no sensitive fields', asyn
   expect(response.body.data.companies[0]).not.toHaveProperty('passwordHash');
   expect(response.body.data.companies[0]).not.toHaveProperty('companyLogoKey');
   expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 0, take: 20 }));
+});
+
+test('company verification status comes from the employer verification record', async () => {
+  mockPrisma.user.findMany.mockResolvedValue([
+    companyRecord({ employerVerification: { status: 'APPROVED' } }),
+    companyRecord({ id: '22222222-2222-4222-8222-222222222222', employerVerification: { status: 'PENDING' } }),
+  ]);
+  mockPrisma.user.count.mockResolvedValue(2);
+
+  const response = await request(app)
+    .get('/api/admin/companies')
+    .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.companies.map(({ isVerified }) => isVerified)).toEqual([true, false]);
+  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    select: expect.objectContaining({ employerVerification: { select: { status: true } } }),
+  }));
 });
 
 test('pagination and approved sorting fields are passed safely to Prisma', async () => {
