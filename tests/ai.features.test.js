@@ -13,6 +13,7 @@ const mockPrisma = {
   subscription: { findFirst: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   job: { findFirst: jest.fn() },
+  application: { findUnique: jest.fn() },
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
@@ -22,6 +23,7 @@ jest.unstable_mockModule('../src/services/aiProvider.service.js', () => ({
   requestStructuredCompletion: mockCompletion,
 }));
 const { default: app } = await import('../src/app.js');
+const { generateCoverLetter } = await import('../src/services/aiFeatures.service.js');
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const activePlan = (key) => ({ status: 'ACTIVE', startDate: new Date(Date.now() - 60_000), endDate: new Date(Date.now() + 60_000), plan: { entitlements: [{ entitlement: { key } }] } });
@@ -68,6 +70,45 @@ test('application assistance requires approved job and never submits an applicat
   expect(response.status).toBe(200);
   expect(response.body.data.coverLetter).toBe('Draft');
   expect(mockPrisma.job.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: jobId, status: 'APPROVED' } }));
+});
+
+test('generateCoverLetter reads company name from employerProfile', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_COVER_LETTER'));
+  mockPrisma.application.findUnique.mockResolvedValue({
+    id: 'app-1',
+    seekerId: seekerId,
+    jobId: jobId,
+    coverLetter: '',
+    job: {
+      title: 'Engineer',
+      description: 'Build things',
+      skills: ['JS'],
+      requirements: [],
+      responsibilities: [],
+      benefits: [],
+      employer: { employerProfile: { companyName: 'Example Labs' } },
+    },
+  });
+  mockCompletion.mockResolvedValue({ coverLetter: 'Dear Example Labs team,' });
+
+  const result = await generateCoverLetter(seekerId, { applicationId: 'app-1', request: 'Write a cover letter' });
+
+  expect(result.coverLetter).toBe('Dear Example Labs team,');
+  expect(mockPrisma.application.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+    select: expect.objectContaining({
+      job: expect.objectContaining({
+        select: expect.objectContaining({
+          employer: expect.objectContaining({
+            select: expect.objectContaining({
+              employerProfile: expect.objectContaining({
+                select: { companyName: true },
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+  }));
 });
 
 test('missing provider configuration is normalized safely', async () => {

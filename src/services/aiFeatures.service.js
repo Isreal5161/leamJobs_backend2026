@@ -66,13 +66,13 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
       seekerId: true,
       jobId: true,
       coverLetter: true,
-      job: { select: { title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true, employer: { select: { companyName: true } } } },
+      job: { select: { title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true, employer: { select: { employerProfile: { select: { companyName: true } } } } } },
     },
   }) : null;
 
   const standaloneJob = !applicationId ? await prisma.job.findFirst({
     where: { id: jobId, status: 'APPROVED' },
-    select: { id: true, title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true, employer: { select: { companyName: true } } },
+    select: { id: true, title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true, employer: { select: { employerProfile: { select: { companyName: true } } } } },
   }) : null;
 
   if (!application && !standaloneJob) {

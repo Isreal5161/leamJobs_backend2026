@@ -96,8 +96,8 @@ export const getActiveTrialForUser = async (userId, client = prisma) => {
     where: {
       userId,
       status: 'ACTIVE',
-      startAt: { not: null, lte: now },
-      endAt: { not: null, gt: now },
+      startAt: { lte: now },
+      endAt: { gt: now },
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
