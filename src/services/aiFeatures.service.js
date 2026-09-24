@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { canUseAiFeature, hasEntitlement, recordAiUsage, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
 import { requestStructuredCompletion } from './aiProvider.service.js';
@@ -106,11 +107,32 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
     select: { professionalTitle: true, bio: true, skills: true, experience: true, education: true },
   });
 
-  const result = await requestStructuredCompletion({
-    schema: coverLetterSchema,
-    system: `${system} Write a concise, professional cover letter that truthfully reflects the supplied seeker profile and the specific job description. Do not invent experience, education, or skills. Never mention AI. Return only the cover letter text in the JSON field named coverLetter.`,
-    user: `Task: ${request}\nExisting cover letter:\n${coverLetter ?? application?.coverLetter ?? ''}\nJob reference:\n${json(job ?? {})}\nSeeker reference:\n${json(profile ?? {})}`,
-  });
+  const systemPrompt = `${system} Write a concise, professional cover letter that truthfully reflects the supplied seeker profile and the specific job description. Do not invent experience, education, or skills. Never mention AI. Return only the cover letter text in the JSON field named coverLetter.`;
+  const userPrompt = `Task: ${request}\nExisting cover letter:\n${coverLetter ?? application?.coverLetter ?? ''}\nJob reference:\n${json(job ?? {})}\nSeeker reference:\n${json(profile ?? {})}`;
+  const systemLength = systemPrompt.length;
+  const userLength = userPrompt.length;
+  const totalLength = systemLength + userLength;
+  const approxTokens = Math.ceil(totalLength / 4);
+  const requestId = randomUUID();
+  const diagnostic = `request_id=${requestId}, system_chars=${systemLength}, user_chars=${userLength}, total_chars=${totalLength}, approx_tokens=${approxTokens}, skills_count=${Array.isArray(job?.skills) ? job.skills.length : 0}, requirements_count=${Array.isArray(job?.requirements) ? job.requirements.length : 0}, responsibilities_count=${Array.isArray(job?.responsibilities) ? job.responsibilities.length : 0}, benefits_count=${Array.isArray(job?.benefits) ? job.benefits.length : 0}, experience_count=${Array.isArray(profile?.experience) ? profile.experience.length : 0}, education_count=${Array.isArray(profile?.education) ? profile.education.length : 0}`;
+  const providerStartMs = Date.now();
+  console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_started, ${diagnostic}`);
+
+  let result;
+  try {
+    result = await requestStructuredCompletion({
+      schema: coverLetterSchema,
+      system: systemPrompt,
+      user: userPrompt,
+    });
+  } catch (error) {
+    const providerEndMs = Date.now();
+    console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_finished, request_id=${requestId}, provider_duration_ms=${providerEndMs - providerStartMs}, provider_result=threw, error_code=${error?.publicCode ?? error?.code ?? 'UNKNOWN'}`);
+    throw error;
+  }
+
+  const providerEndMs = Date.now();
+  console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_finished, request_id=${requestId}, provider_duration_ms=${providerEndMs - providerStartMs}, provider_result=resolved`);
 
   await recordAiUsage({ userId, featureKey: 'AI_COVER_LETTER', amount: 1, metadata: { applicationId: application?.id ?? null, jobId: application?.jobId ?? jobId } }).catch(() => undefined);
   return { coverLetter: result.coverLetter, planKey: state.planKey, remaining: Math.max(0, (await canUseAiFeature(userId, 'AI_COVER_LETTER')).remaining) };
