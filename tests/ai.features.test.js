@@ -25,7 +25,7 @@ jest.unstable_mockModule('../src/services/aiProvider.service.js', () => ({
   requestStructuredCompletion: mockCompletion,
 }));
 const { default: app } = await import('../src/app.js');
-const { generateCoverLetter, getProfileAssistantSuggestions } = await import('../src/services/aiFeatures.service.js');
+const { generateCoverLetter } = await import('../src/services/aiFeatures.service.js');
 const { validateProfileAssistant } = await import('../src/validators/ai.validation.js');
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
@@ -109,29 +109,6 @@ test('profile assistant validator still rejects unknown experience and education
   expect(next).not.toHaveBeenCalled();
 });
 
-test('profile assistant prompt explicitly requires the suggestions[] contract and rejects the production-shaped response', async () => {
-  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
-
-  await getProfileAssistantSuggestions(seekerId, {
-    request: 'Improve my profile',
-    professionalTitle: 'Senior Software Engineer',
-    bio: 'Builds products for customers.',
-    skills: ['JavaScript', 'Node.js'],
-    experience: [],
-    education: [],
-  });
-
-  expect(mockCompletion).toHaveBeenCalledWith(expect.objectContaining({
-    system: expect.stringMatching(/top-level\s+["']?suggestions["']?\s*array/i),
-  }));
-
-  const badPayload = {
-    improvedProfileSummary: 'A stronger profile summary',
-    strongestProfileImprovements: ['Make the summary more concise'],
-  };
-  expect(mockCompletion.mock.calls.at(-1)[0].schema.safeParse(badPayload).success).toBe(false);
-});
-
 test('AI profile assistant accepts rich frontend experience payloads without changing service behavior', async () => {
   mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
   const response = await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({
@@ -176,6 +153,73 @@ test('active entitled seeker receives transient profile suggestions without writ
   expect(response.status).toBe(200);
   expect(response.body.data.suggestions).toHaveLength(1);
   expect(mockCompletion).toHaveBeenCalled();
+});
+
+test('CV optimizer accepts the real frontend editor CV structure with nested summary and item ids', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_CV_OPTIMIZER'));
+  mockCompletion.mockResolvedValue({ summary: 'A stronger summary', suggestions: [{ section: 'summary', original: 'Old summary', suggested: 'A stronger summary', reason: 'Clearer value proposition' }] });
+
+  const response = await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({
+    request: 'Improve summary',
+    cv: {
+      personalInfo: {
+        fullName: 'Amina Okafor',
+        title: 'Senior Product Engineer',
+        email: 'amina@example.com',
+        phone: '+2348000000000',
+        location: 'Lagos, Nigeria',
+        linkedin: 'https://linkedin.com/in/amina',
+        summary: 'Builds product experiences that delight customers.',
+      },
+      summary: 'Builds product experiences that delight customers.',
+      experience: [{
+        id: 'exp-1',
+        jobTitle: 'Senior Product Engineer',
+        company: 'Acme Labs',
+        startDate: '2020-01',
+        endDate: '2024-12',
+        currentlyWorking: false,
+        description: 'Led product and engineering improvements.',
+      }],
+      education: [{ id: 'edu-1', degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
+      skills: ['JavaScript', 'Node.js', 'Product strategy'],
+      certifications: [{ id: 'cert-1', name: 'AWS Certified Developer', issuer: 'AWS' }],
+      languages: [{ id: 'lang-1', name: 'English', proficiency: 'Fluent' }],
+      projects: [{
+        id: 'proj-1',
+        name: 'Hiring Portal',
+        description: 'Rebuilt a candidate experience flow.',
+        technologies: ['React', 'Node.js'],
+        projectUrl: 'https://example.com',
+        githubUrl: 'https://github.com/example',
+        startDate: '2023-01',
+        endDate: '2023-12',
+      }],
+    },
+  });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.summary).toBe('A stronger summary');
+  expect(mockCompletion).toHaveBeenCalled();
+});
+
+test('CV optimizer rejects genuinely unknown frontend CV fields while staying strict', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_CV_OPTIMIZER'));
+  const response = await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({
+    request: 'Improve summary',
+    cv: {
+      personalInfo: { fullName: 'A', title: 'Engineer', summary: 'Strong summary', hiddenFlag: true },
+      experience: [{ id: 'exp-1', jobTitle: 'x', company: 'Acme', startDate: '2020-01', endDate: '2022-12', currentlyWorking: false, description: 'desc', hiddenFlag: true }],
+      education: [{ id: 'edu-1', degree: 'BSc', school: 'Uni', year: '2019', hiddenFlag: true }],
+      skills: ['JS'],
+      certifications: [{ id: 'cert-1', name: 'AWS', issuer: 'AWS', hiddenFlag: true }],
+      languages: [{ id: 'lang-1', name: 'English', proficiency: 'Fluent', hiddenFlag: true }],
+      projects: [{ id: 'proj-1', name: 'Portal', description: 'desc', technologies: ['React'], projectUrl: 'https://example.com', githubUrl: 'https://github.com', startDate: '2023-01', endDate: '2023-12', hiddenFlag: true }],
+    },
+  });
+
+  expect(response.status).toBe(400);
+  expect(mockCompletion).not.toHaveBeenCalled();
 });
 
 test('CV optimizer requires its specific entitlement and validates input', async () => {

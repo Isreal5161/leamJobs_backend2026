@@ -9,14 +9,52 @@ const profileContext = z.object({
 }).strict();
 
 const cvData = z.object({
-  personalInfo: z.object({ fullName: text(200), title: text(200), email: text(200).optional(), phone: text(100).optional(), location: text(200).optional(), linkedin: text(300).optional() }).strict(),
+  personalInfo: z.object({
+    fullName: text(200),
+    title: text(200),
+    email: text(200).optional(),
+    phone: text(100).optional(),
+    location: text(200).optional(),
+    linkedin: text(300).optional(),
+    summary: text(3000).optional(),
+  }).strict(),
   summary: text(3000).optional(),
-  experience: z.array(z.object({ jobTitle: text(200), company: text(200), startDate: text(50), endDate: text(50), currentlyWorking: z.boolean(), description: text(3000) }).strict()).max(20),
-  education: z.array(z.object({ degree: text(200), school: text(200), year: text(50) }).strict()).max(20),
+  experience: z.array(z.object({
+    id: text(100),
+    jobTitle: text(200),
+    company: text(200),
+    startDate: text(50),
+    endDate: text(50),
+    currentlyWorking: z.boolean(),
+    description: text(3000),
+  }).strict()).max(20),
+  education: z.array(z.object({
+    id: text(100),
+    degree: text(200),
+    school: text(200),
+    year: text(50),
+  }).strict()).max(20),
   skills: z.array(text(100)).max(80),
-  certifications: z.array(z.object({ name: text(200), issuer: text(200) }).strict()).max(30),
-  languages: z.array(z.object({ name: text(100), proficiency: text(100) }).strict()).max(30).optional(),
-  projects: z.array(z.object({ name: text(200), description: text(2000), technologies: z.array(text(100)).max(30), projectUrl: text(300), githubUrl: text(300), startDate: text(50), endDate: text(50) }).strict()).max(30).optional(),
+  certifications: z.array(z.object({
+    id: text(100),
+    name: text(200),
+    issuer: text(200),
+  }).strict()).max(30),
+  languages: z.array(z.object({
+    id: text(100),
+    name: text(100),
+    proficiency: text(100),
+  }).strict()).max(30).optional(),
+  projects: z.array(z.object({
+    id: text(100),
+    name: text(200),
+    description: text(2000),
+    technologies: z.array(text(100)).max(30),
+    projectUrl: text(300),
+    githubUrl: text(300),
+    startDate: text(50),
+    endDate: text(50),
+  }).strict()).max(30).optional(),
 }).strict();
 
 export const validateProfileAssistant = (req, res, next) => {
