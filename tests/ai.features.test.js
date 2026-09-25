@@ -25,7 +25,7 @@ jest.unstable_mockModule('../src/services/aiProvider.service.js', () => ({
   requestStructuredCompletion: mockCompletion,
 }));
 const { default: app } = await import('../src/app.js');
-const { generateCoverLetter } = await import('../src/services/aiFeatures.service.js');
+const { generateCoverLetter, getProfileAssistantSuggestions } = await import('../src/services/aiFeatures.service.js');
 const { validateProfileAssistant } = await import('../src/validators/ai.validation.js');
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
@@ -107,6 +107,29 @@ test('profile assistant validator still rejects unknown experience and education
 
   expect(res.status).toHaveBeenCalledWith(400);
   expect(next).not.toHaveBeenCalled();
+});
+
+test('profile assistant prompt explicitly requires the suggestions[] contract and rejects the production-shaped response', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
+
+  await getProfileAssistantSuggestions(seekerId, {
+    request: 'Improve my profile',
+    professionalTitle: 'Senior Software Engineer',
+    bio: 'Builds products for customers.',
+    skills: ['JavaScript', 'Node.js'],
+    experience: [],
+    education: [],
+  });
+
+  expect(mockCompletion).toHaveBeenCalledWith(expect.objectContaining({
+    system: expect.stringMatching(/top-level\s+["']?suggestions["']?\s*array/i),
+  }));
+
+  const badPayload = {
+    improvedProfileSummary: 'A stronger profile summary',
+    strongestProfileImprovements: ['Make the summary more concise'],
+  };
+  expect(mockCompletion.mock.calls.at(-1)[0].schema.safeParse(badPayload).success).toBe(false);
 });
 
 test('AI profile assistant accepts rich frontend experience payloads without changing service behavior', async () => {
