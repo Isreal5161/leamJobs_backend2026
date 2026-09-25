@@ -46,7 +46,16 @@ export const requestStructuredCompletion = async ({ system, user, schema }) => {
     let parsed;
     try { parsed = JSON.parse(content); } catch { throw new AiProviderError('AI_INVALID_RESPONSE', 'AI assistance returned an invalid result.', 502); }
     const result = schema.safeParse(parsed);
-    if (!result.success) throw new AiProviderError('AI_INVALID_RESPONSE', 'AI assistance returned an invalid result.', 502);
+    if (!result.success) {
+      console.error('AI_STRUCTURED_RESPONSE_VALIDATION_FAILED', {
+        issues: result.error.issues,
+        parsedType: typeof parsed,
+        topLevelKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : [],
+        suggestionsCount: Array.isArray(parsed?.suggestions) ? parsed.suggestions.length : null,
+        finishReason: payload?.choices?.[0]?.finish_reason ?? null,
+      });
+      throw new AiProviderError('AI_INVALID_RESPONSE', 'AI assistance returned an invalid result.', 502);
+    }
     return result.data;
   } catch (error) {
     if (error instanceof AiProviderError) throw error;
