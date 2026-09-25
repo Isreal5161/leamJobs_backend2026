@@ -43,7 +43,7 @@ beforeEach(() => {
   mockCompletion.mockResolvedValue({ suggestions: [{ section: 'bio', suggestion: 'Clear summary', reason: 'More direct' }] });
 });
 
-test('profile assistant validator accepts frontend experience payload fields and keeps education valid', () => {
+test('profile assistant validator accepts frontend experience and education payload fields while staying strict', () => {
   const req = {
     body: {
       request: 'Review my profile',
@@ -57,7 +57,12 @@ test('profile assistant validator accepts frontend experience payload fields and
         currentlyWorking: false,
         description: 'Led frontend and API delivery.',
       }],
-      education: [{ degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
+      education: [{
+        id: 'edu-1',
+        degree: 'BSc Computer Science',
+        school: 'University of Lagos',
+        year: '2019',
+      }],
     },
   };
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -69,9 +74,10 @@ test('profile assistant validator accepts frontend experience payload fields and
   expect(req.validatedAi.experience).toHaveLength(1);
   expect(req.validatedAi.experience[0]).toMatchObject({ id: 'exp-1', startDate: '2020-01', endDate: '2022-12', currentlyWorking: false });
   expect(req.validatedAi.education).toHaveLength(1);
+  expect(req.validatedAi.education[0]).toMatchObject({ id: 'edu-1', degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' });
 });
 
-test('profile assistant validator still rejects unknown experience fields because it remains strict', () => {
+test('profile assistant validator still rejects unknown experience and education fields because it remains strict', () => {
   const req = {
     body: {
       request: 'Review my profile',
@@ -83,6 +89,13 @@ test('profile assistant validator still rejects unknown experience fields becaus
         endDate: '2022-12',
         currentlyWorking: false,
         description: 'Led frontend and API delivery.',
+        extraField: 'not allowed',
+      }],
+      education: [{
+        id: 'edu-1',
+        degree: 'BSc Computer Science',
+        school: 'University of Lagos',
+        year: '2019',
         extraField: 'not allowed',
       }],
     },
@@ -110,7 +123,12 @@ test('AI profile assistant accepts rich frontend experience payloads without cha
       currentlyWorking: false,
       description: 'Led frontend and API delivery.',
     }],
-    education: [{ degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
+    education: [{
+      id: 'edu-1',
+      degree: 'BSc Computer Science',
+      school: 'University of Lagos',
+      year: '2019',
+    }],
   });
 
   expect(response.status).toBe(200);

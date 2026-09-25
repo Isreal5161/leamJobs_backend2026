@@ -4,7 +4,7 @@ const text = (max) => z.string().trim().max(max);
 const profileContext = z.object({
   professionalTitle: text(200).optional(), bio: text(2000).optional(), skills: z.array(text(100)).max(50).optional(),
   experience: z.array(z.object({ id: text(100), jobTitle: text(200), company: text(200), startDate: text(50), endDate: text(50), currentlyWorking: z.boolean(), description: text(2000) }).strict()).max(20).optional(),
-  education: z.array(z.object({ degree: text(200), school: text(200), year: text(50) }).strict()).max(20).optional(),
+  education: z.array(z.object({ id: text(100), degree: text(200), school: text(200), year: text(50) }).strict()).max(20).optional(),
   request: text(500),
 }).strict();
 
