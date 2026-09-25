@@ -59,6 +59,18 @@ test('admin can read and update persisted trial settings', async () => {
   expect(mockPrisma.subscriptionSettings.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { trialEnabled: false, trialDurationDays: 14, trialPlanKey: 'PREMIUM' } }));
 });
 
+test('trial settings update ignores response-only fields from older clients', async () => {
+  const response = await request(app)
+    .patch('/api/admin/subscription-trial-settings')
+    .set('Authorization', `Bearer ${token('ADMIN', adminId)}`)
+    .send({ id: 'default', trialEnabled: true, trialDurationDays: 14, trialPlanKey: 'PREMIUM', updatedAt: '2026-09-25T00:00:00.000Z' });
+
+  expect(response.status).toBe(200);
+  expect(mockPrisma.subscriptionSettings.upsert).toHaveBeenCalledWith(expect.objectContaining({
+    update: { trialEnabled: true, trialDurationDays: 14, trialPlanKey: 'PREMIUM' },
+  }));
+});
+
 test('admin can list and create plans with known entitlements', async () => {
   const list = await request(app).get('/api/admin/subscription-plans').set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
   expect(list.status).toBe(200);

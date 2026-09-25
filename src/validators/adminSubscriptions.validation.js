@@ -40,10 +40,12 @@ export const validateAdminSubscriptionPlanUpdate = (req, res, next) => {
 
 export const validateAdminSubscriptionTrialSettings = (req, res, next) => {
   const result = z.object({
+    id: z.literal('default').optional(),
     trialEnabled: z.boolean(),
     trialDurationDays: z.coerce.number().int().min(1).max(365),
     trialPlanKey: planKey,
-  }).strict().safeParse(req.body);
+    updatedAt: z.string().optional(),
+  }).strict().transform(({ trialEnabled, trialDurationDays, trialPlanKey }) => ({ trialEnabled, trialDurationDays, trialPlanKey })).safeParse(req.body);
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })) });
   req.validatedTrialSettings = result.data;
   return next();
