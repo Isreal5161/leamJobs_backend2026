@@ -26,6 +26,7 @@ jest.unstable_mockModule('../src/services/aiProvider.service.js', () => ({
 }));
 const { default: app } = await import('../src/app.js');
 const { generateCoverLetter } = await import('../src/services/aiFeatures.service.js');
+const { validateProfileAssistant } = await import('../src/validators/ai.validation.js');
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const activePlan = (key) => ({ status: 'ACTIVE', startDate: new Date(Date.now() - 60_000), endDate: new Date(Date.now() + 60_000), plan: { entitlements: [{ entitlement: { key } }] } });
@@ -40,6 +41,80 @@ beforeEach(() => {
   mockPrisma.aiUsageRecord.deleteMany.mockResolvedValue({ count: 1 });
   mockPrisma.$queryRaw.mockResolvedValue([{ id: seekerId }]);
   mockCompletion.mockResolvedValue({ suggestions: [{ section: 'bio', suggestion: 'Clear summary', reason: 'More direct' }] });
+});
+
+test('profile assistant validator accepts frontend experience payload fields and keeps education valid', () => {
+  const req = {
+    body: {
+      request: 'Review my profile',
+      professionalTitle: 'Senior Software Engineer',
+      experience: [{
+        id: 'exp-1',
+        jobTitle: 'Senior Software Engineer',
+        company: 'Acme Labs',
+        startDate: '2020-01',
+        endDate: '2022-12',
+        currentlyWorking: false,
+        description: 'Led frontend and API delivery.',
+      }],
+      education: [{ degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
+    },
+  };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const next = jest.fn();
+
+  validateProfileAssistant(req, res, next);
+
+  expect(next).toHaveBeenCalledTimes(1);
+  expect(req.validatedAi.experience).toHaveLength(1);
+  expect(req.validatedAi.experience[0]).toMatchObject({ id: 'exp-1', startDate: '2020-01', endDate: '2022-12', currentlyWorking: false });
+  expect(req.validatedAi.education).toHaveLength(1);
+});
+
+test('profile assistant validator still rejects unknown experience fields because it remains strict', () => {
+  const req = {
+    body: {
+      request: 'Review my profile',
+      experience: [{
+        id: 'exp-1',
+        jobTitle: 'Senior Engineer',
+        company: 'Acme Labs',
+        startDate: '2020-01',
+        endDate: '2022-12',
+        currentlyWorking: false,
+        description: 'Led frontend and API delivery.',
+        extraField: 'not allowed',
+      }],
+    },
+  };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const next = jest.fn();
+
+  validateProfileAssistant(req, res, next);
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(next).not.toHaveBeenCalled();
+});
+
+test('AI profile assistant accepts rich frontend experience payloads without changing service behavior', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
+  const response = await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({
+    request: 'Review my profile',
+    professionalTitle: 'Senior Software Engineer',
+    experience: [{
+      id: 'exp-1',
+      jobTitle: 'Senior Software Engineer',
+      company: 'Acme Labs',
+      startDate: '2020-01',
+      endDate: '2022-12',
+      currentlyWorking: false,
+      description: 'Led frontend and API delivery.',
+    }],
+    education: [{ degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
+  });
+
+  expect(response.status).toBe(200);
+  expect(mockCompletion).toHaveBeenCalled();
 });
 
 test('AI profile assistant rejects unauthenticated and non-seeker requests', async () => {
