@@ -1,0 +1,21 @@
+import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, getAdvancedProfileStrength, getCareerRecommendations, getPersonalizedMatches, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, listSupportRequestsForAdmin, prepareInterview, saveJob, unsaveJob, updateJobAlert, updateSupportRequestForAdmin } from '../services/premiumSeeker.service.js';
+
+const run = (service, input = (req) => req.body) => async (req, res, next) => { try { return res.status(200).json({ success: true, data: await service(req.user.sub, input(req)) }); } catch (error) { return next(error); } };
+export const getSavedJobs = run(listSavedJobs);
+export const postSavedJob = run(saveJob, (req) => req.params.jobId);
+export const deleteSavedJob = run(unsaveJob, (req) => req.params.jobId);
+export const getJobAlerts = run(listJobAlerts);
+export const postJobAlert = run(createJobAlert);
+export const patchJobAlert = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await updateJobAlert(req.user.sub, req.params.alertId, req.body) }); } catch (error) { return next(error); } };
+export const removeJobAlert = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await deleteJobAlert(req.user.sub, req.params.alertId) }); } catch (error) { return next(error); } };
+export const getProfileStrength = run(getAdvancedProfileStrength);
+export const getCareerRecommendationResults = run(getCareerRecommendations);
+export const getSalaryInsightResults = run(getSalaryInsights, (req) => req.query);
+export const postInterviewPreparation = run(prepareInterview);
+export const postCareerAssistant = run(askCareerAssistant);
+export const postSkillsGap = run(analyzeSkillsGap);
+export const getPersonalizedJobMatches = run(getPersonalizedMatches);
+export const getSupportRequests = run(listSupportRequests);
+export const postSupportRequest = run(createSupportRequest);
+export const getAdminSupportRequests = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await listSupportRequestsForAdmin() }); } catch (error) { return next(error); } };
+export const patchAdminSupportRequest = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await updateSupportRequestForAdmin(req.params.requestId, req.body) }); } catch (error) { return next(error); } };

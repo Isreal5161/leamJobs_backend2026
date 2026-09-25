@@ -139,7 +139,7 @@ export const mapSeekerJob = (job) => ({
   createdAt: job.createdAt,
 });
 
-const buildJobWhere = ({ search, location, jobType, skills }) => ({
+const buildJobWhere = ({ search, location, jobType, workArrangement, salaryMin, salaryMax, skills }) => ({
   status: 'APPROVED',
   ...(search ? {
     OR: [
@@ -150,12 +150,14 @@ const buildJobWhere = ({ search, location, jobType, skills }) => ({
   } : {}),
   ...(location ? { location: { contains: location, mode: 'insensitive' } } : {}),
   ...(jobType ? { jobType } : {}),
+  ...(workArrangement ? { workArrangement } : {}),
+  ...(salaryMin !== undefined || salaryMax !== undefined ? { employmentCompensation: { ...(salaryMin !== undefined ? { salaryMax: { gte: salaryMin } } : {}), ...(salaryMax !== undefined ? { salaryMin: { lte: salaryMax } } : {}) } } : {}),
   ...(skills?.length ? { skills: { hasSome: skills } } : {}),
 });
 
-export const listApprovedJobs = async ({ search, location, jobType, skills, limit, cursor }) => {
+export const listApprovedJobs = async ({ search, location, jobType, workArrangement, salaryMin, salaryMax, skills, limit, cursor }) => {
   const jobs = await prisma.job.findMany({
-    where: buildJobWhere({ search, location, jobType, skills }),
+    where: buildJobWhere({ search, location, jobType, workArrangement, salaryMin, salaryMax, skills }),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

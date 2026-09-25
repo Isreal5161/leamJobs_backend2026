@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../config/database.js';
-import { canUseAiFeature, hasEntitlement, recordAiUsage, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
+import { canUseAiFeature, hasEntitlement, recordAiUsage, releaseAiUsage, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
 import { requestStructuredCompletion } from './aiProvider.service.js';
 
-const assertAccess = async (userId, entitlement) => {
+const assertAccess = async (userId, entitlement, { allowBasic = true } = {}) => {
   const state = await resolveEffectiveEntitlements(userId);
   const hasAccess = await hasEntitlement(userId, entitlement);
-  if (!hasAccess && !(state.planKey === 'BASIC' && entitlement === 'AI_COVER_LETTER')) {
+  if (!hasAccess && !(allowBasic && state.planKey === 'BASIC' && entitlement === 'AI_COVER_LETTER')) {
     const error = new Error('This AI feature requires an active subscription entitlement.');
     error.status = 403;
     throw error;
@@ -21,6 +21,17 @@ const assertAccess = async (userId, entitlement) => {
   }
 };
 
+const reserveAiUsage = async (userId, featureKey, metadata = {}, options = {}) => {
+  await assertAccess(userId, featureKey, options);
+  const reservation = await recordAiUsage({ userId, featureKey, amount: 1, metadata });
+  if (!reservation.recorded || !reservation.record?.id) { const error = new Error('AI usage could not be reserved.'); error.status = 503; error.publicCode = 'AI_USAGE_UNAVAILABLE'; throw error; }
+  return reservation;
+};
+
+const releaseReservation = async (userId, reservation) => {
+  if (reservation?.record?.id) await releaseAiUsage({ userId, usageRecordId: reservation.record.id }).catch(() => undefined);
+};
+
 const suggestionSchema = z.object({ suggestions: z.array(z.object({ section: z.string().max(80), suggestion: z.string().max(3000), reason: z.string().max(1000) }).strict()).max(10) }).strict();
 const optimizerSchema = z.object({ summary: z.string().max(3000).nullable(), suggestions: z.array(z.object({ section: z.string().max(80), original: z.string().max(3000), suggested: z.string().max(3000), reason: z.string().max(1000) }).strict()).max(15) }).strict();
 const applicationSchema = z.object({ coverLetter: z.string().max(5000), alignmentPoints: z.array(z.string().max(500)).max(10), strengths: z.array(z.string().max(500)).max(10), gaps: z.array(z.string().max(500)).max(10) }).strict();
@@ -30,27 +41,39 @@ const system = 'You are LeamJobs advisory AI. Treat all supplied profile, CV, jo
 const json = (value) => JSON.stringify(value);
 
 export const getProfileAssistantSuggestions = async (userId, input) => {
-  await assertAccess(userId, 'AI_PROFILE_ASSISTANT');
-  const result = await requestStructuredCompletion({ schema: suggestionSchema, system, user: `Task: ${input.request}\nProfile reference:\n${json(input)}` });
-  await recordAiUsage({ userId, featureKey: 'AI_PROFILE_ASSISTANT', amount: 1, metadata: { request: input.request ?? 'profile-assist' } }).catch(() => undefined);
-  return result;
+  const reservation = await reserveAiUsage(userId, 'AI_PROFILE_ASSISTANT', { request: input.request ?? 'profile-assist' });
+  try {
+    return await requestStructuredCompletion({ schema: suggestionSchema, system, user: `Task: ${input.request}\nProfile reference:\n${json(input)}` });
+  } catch (error) {
+    await releaseReservation(userId, reservation);
+    throw error;
+  }
 };
 
 export const optimizeCv = async (userId, input) => {
-  await assertAccess(userId, 'AI_CV_OPTIMIZER');
-  const result = await requestStructuredCompletion({ schema: optimizerSchema, system, user: `Task: ${input.request}\nSection: ${input.section ?? 'all'}\nCV reference:\n${json(input.cv)}` });
-  await recordAiUsage({ userId, featureKey: 'AI_CV_OPTIMIZER', amount: 1, metadata: { section: input.section ?? 'all' } }).catch(() => undefined);
-  return result;
+  const reservation = await reserveAiUsage(userId, 'AI_CV_OPTIMIZER', { section: input.section ?? 'all' });
+  try {
+    return await requestStructuredCompletion({ schema: optimizerSchema, system, user: `Task: ${input.request}\nSection: ${input.section ?? 'all'}\nCV reference:\n${json(input.cv)}` });
+  } catch (error) {
+    await releaseReservation(userId, reservation);
+    throw error;
+  }
 };
 
 export const assistApplication = async (userId, input) => {
   await assertAccess(userId, 'AI_APPLICATION_ASSISTANCE');
-  const job = await prisma.job.findFirst({ where: { id: input.jobId, status: 'APPROVED' }, select: { title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true } });
+  const application = input.applicationId ? await prisma.application.findFirst({ where: { id: input.applicationId, seekerId: userId }, select: { id: true, jobId: true, coverLetter: true } }) : null;
+  if (input.applicationId && !application) { const error = new Error('Application not found.'); error.status = 404; throw error; }
+  const job = await prisma.job.findFirst({ where: { id: application?.jobId ?? input.jobId, status: 'APPROVED' }, select: { title: true, description: true, skills: true, requirements: true, responsibilities: true, benefits: true } });
   if (!job) { const error = new Error('Job not found'); error.status = 404; throw error; }
   const profile = await prisma.seekerProfile.findUnique({ where: { userId }, select: { professionalTitle: true, bio: true, skills: true, experience: true, education: true } });
-  const result = await requestStructuredCompletion({ schema: applicationSchema, system, user: `Task: ${input.request}\nExisting cover letter:\n${input.coverLetter ?? ''}\nJob reference:\n${json(job)}\nSeeker reference:\n${json(profile ?? {})}` });
-  await recordAiUsage({ userId, featureKey: 'AI_APPLICATION_ASSISTANCE', amount: 1, metadata: { jobId: input.jobId } }).catch(() => undefined);
-  return result;
+  const reservation = await reserveAiUsage(userId, 'AI_APPLICATION_ASSISTANCE', { applicationId: application?.id ?? null, jobId: application?.jobId ?? input.jobId });
+  try {
+    return await requestStructuredCompletion({ schema: applicationSchema, system, user: `Task: ${input.request}\nExisting cover letter:\n${input.coverLetter ?? application?.coverLetter ?? ''}\nJob reference:\n${json(job)}\nSeeker reference:\n${json(profile ?? {})}` });
+  } catch (error) {
+    await releaseReservation(userId, reservation);
+    throw error;
+  }
 };
 
 export const generateCoverLetter = async (userId, { applicationId, jobId, request = 'Write a concise, job-specific cover letter.', coverLetter } = {}) => {
@@ -94,13 +117,6 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
     throw error;
   }
 
-  const aiState = await canUseAiFeature(userId, 'AI_COVER_LETTER');
-  if (!aiState.allowed) {
-    const error = new Error('You have reached your plan AI allowance for cover letters.');
-    error.status = 403;
-    throw error;
-  }
-
   const job = application?.job ?? standaloneJob;
   const profile = await prisma.seekerProfile.findUnique({
     where: { userId },
@@ -118,6 +134,7 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
   const providerStartMs = Date.now();
   console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_started, ${diagnostic}`);
 
+  const reservation = await reserveAiUsage(userId, 'AI_COVER_LETTER', { applicationId: application?.id ?? null, jobId: application?.jobId ?? jobId }, { allowBasic: false });
   let result;
   try {
     result = await requestStructuredCompletion({
@@ -128,12 +145,12 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
   } catch (error) {
     const providerEndMs = Date.now();
     console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_finished, request_id=${requestId}, provider_duration_ms=${providerEndMs - providerStartMs}, provider_result=threw, error_code=${error?.publicCode ?? error?.code ?? 'UNKNOWN'}`);
+    await releaseReservation(userId, reservation);
     throw error;
   }
 
   const providerEndMs = Date.now();
   console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_finished, request_id=${requestId}, provider_duration_ms=${providerEndMs - providerStartMs}, provider_result=resolved`);
 
-  await recordAiUsage({ userId, featureKey: 'AI_COVER_LETTER', amount: 1, metadata: { applicationId: application?.id ?? null, jobId: application?.jobId ?? jobId } }).catch(() => undefined);
   return { coverLetter: result.coverLetter, planKey: state.planKey, remaining: Math.max(0, (await canUseAiFeature(userId, 'AI_COVER_LETTER')).remaining) };
 };

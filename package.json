@@ -16,6 +16,7 @@
     "subscription:seed": "node src/scripts/seed-subscription-foundation.js",
     "subscription:expire": "node src/scripts/expire-subscriptions.js",
     "notifications:email": "node src/scripts/process-email-deliveries.js",
+    "job-alerts:process": "node src/scripts/process-job-alerts.js",
     "withdrawals:process": "node src/scripts/process-withdrawals.js",
     "withdrawals:reconcile": "node src/scripts/reconcile-withdrawals.js",
     "prisma:generate": "prisma generate",

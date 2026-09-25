@@ -233,6 +233,13 @@ export const getAiAllowanceForPlan = (planKey) => {
   return AI_ALLOWANCE_BY_PLAN[normalized] ?? AI_ALLOWANCE_BY_PLAN.BASIC;
 };
 
+export const getAiUsagePeriod = (now = new Date()) => {
+  const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const nextPeriodStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const periodEnd = new Date(nextPeriodStart.getTime() - 1);
+  return { periodStart, periodEnd, nextPeriodStart };
+};
+
 export const getAiUsageState = async (userId, client = prisma) => {
   const state = await resolveEffectiveEntitlements(userId, client);
   const planKey = state.planKey || BASIC_PLAN_KEY;
@@ -240,8 +247,9 @@ export const getAiUsageState = async (userId, client = prisma) => {
   let used = 0;
 
   if (client?.aiUsageRecord) {
+    const { periodStart, nextPeriodStart } = getAiUsagePeriod();
     const usage = await client.aiUsageRecord.findMany({
-      where: { userId },
+      where: { userId, periodStart: { gte: periodStart, lt: nextPeriodStart } },
       select: { amount: true },
     });
     used = usage.reduce((total, entry) => total + Number(entry.amount || 0), 0);
@@ -263,7 +271,7 @@ export const getAiUsageState = async (userId, client = prisma) => {
 export const canUseAiFeature = async (userId, featureKey = 'AI_COVER_LETTER', client = prisma) => {
   const state = await getAiUsageState(userId, client);
   const feature = normalizeEntitlementKey(featureKey);
-  const featureAllowed = !feature || feature === 'AI_COVER_LETTER' || feature === 'AI_CV_REVIEW' || feature === 'AI_CV_IMPROVEMENT' || feature === 'APPLICATION_INSIGHTS' || feature === 'AI_CAREER_ASSISTANT';
+  const featureAllowed = !feature || feature === 'AI_COVER_LETTER' || feature === 'AI_CV_REVIEW' || feature === 'AI_CV_IMPROVEMENT' || feature === 'APPLICATION_INSIGHTS' || feature === 'AI_CAREER_ASSISTANT' || feature === 'AI_INTERVIEW_PREPARATION' || feature === 'SKILLS_GAP_ANALYSIS' || feature === 'AI_JOB_MATCHING';
   return {
     allowed: state.allowed && featureAllowed,
     planKey: state.planKey,
@@ -301,19 +309,26 @@ const recordAiUsageInTransaction = async ({ userId, featureKey, amount, metadata
   }
 
   const now = new Date();
+  const { periodStart, periodEnd } = getAiUsagePeriod(now);
   const record = await transaction.aiUsageRecord.create({
     data: {
       userId,
       featureKey: normalizeEntitlementKey(featureKey || 'AI_COVER_LETTER'),
       planKey: state.planKey,
       amount,
-      periodStart: new Date(now.getFullYear(), now.getMonth(), 1),
-      periodEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
+      periodStart,
+      periodEnd,
       metadata,
     },
   });
 
   return { recorded: true, amount, record, remaining: state.unlimited ? null : state.remaining - amount };
+};
+
+export const releaseAiUsage = async ({ userId, usageRecordId, client = prisma } = {}) => {
+  if (!userId || !usageRecordId || !client?.aiUsageRecord) return { released: false };
+  const result = await client.aiUsageRecord.deleteMany({ where: { id: usageRecordId, userId } });
+  return { released: result.count === 1 };
 };
 
 export const recordAiUsage = async ({ userId, featureKey, amount = 1, metadata = {}, client = prisma } = {}) => {

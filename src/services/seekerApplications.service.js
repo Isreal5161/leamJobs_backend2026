@@ -1,5 +1,6 @@
 import { prisma } from '../config/database.js';
-import { hasEntitlement } from './subscriptionEntitlement.service.js';
+import { hasEntitlement, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
+import { subscriptionPlanFeatureDefaults } from './subscriptionFoundation.service.js';
 import { isAdvancedCvTemplate } from '../utils/cvTemplates.js';
 import { createNotification } from './notification.service.js';
 import { getLeamJobsEmployerEmail } from './leamjobsEmployer.service.js';
@@ -278,9 +279,30 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
       select: { id: true, email: true },
     }) ?? []
     : [];
+  const entitlementState = await resolveEffectiveEntitlements(seekerId);
+  const defaults = subscriptionPlanFeatureDefaults[entitlementState.planKey] ?? subscriptionPlanFeatureDefaults.BASIC;
+  const config = entitlementState.effectivePlan?.featureConfig && typeof entitlementState.effectivePlan.featureConfig === 'object' ? entitlementState.effectivePlan.featureConfig : {};
+  const applicationLimit = config.applicationLimit === null
+    ? Infinity
+    : Number.isFinite(Number(config.applicationLimit))
+      ? Number(config.applicationLimit)
+      : defaults.applicationLimit ?? Infinity;
 
   try {
     const application = await prisma.$transaction(async (transaction) => {
+      if (typeof transaction.$queryRaw === 'function') await transaction.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${seekerId} FOR UPDATE`;
+      if (Number.isFinite(applicationLimit)) {
+        const periodStart = new Date();
+        periodStart.setUTCDate(1);
+        periodStart.setUTCHours(0, 0, 0, 0);
+        const applicationCount = await transaction.application.count({ where: { seekerId, createdAt: { gte: periodStart } } });
+        if (applicationCount >= applicationLimit) {
+          const error = new Error(`Your ${entitlementState.planKey} plan allows ${applicationLimit} applications per month.`);
+          error.status = 403;
+          error.publicCode = 'APPLICATION_LIMIT_REACHED';
+          throw error;
+        }
+      }
       const created = await transaction.application.create({
         data: {
           seekerId,

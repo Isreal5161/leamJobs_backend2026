@@ -2,6 +2,8 @@ import 'dotenv/config.js';
 import app from './app.js';
 import { env } from './config/env.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
+import cron from 'node-cron';
+import { processJobAlerts } from './services/jobAlerts.service.js';
 
 const PORT = env.PORT || 5000;
 const HOST = env.HOST || 'localhost';
@@ -20,10 +22,15 @@ const startServer = async () => {
       console.log(`✓ Environment: ${env.NODE_ENV}`);
     });
 
+    const jobAlertSchedule = cron.schedule('0 * * * *', () => {
+      void processJobAlerts().catch((error) => console.error('Scheduled job alert processing failed:', error.message));
+    }, { scheduled: env.NODE_ENV !== 'test' });
+
     // Graceful shutdown - SIGTERM
     process.on('SIGTERM', async () => {
       console.log('SIGTERM received, shutting down gracefully...');
       server.close(async () => {
+        jobAlertSchedule.stop();
         await disconnectDatabase();
         console.log('Server closed');
         process.exit(0);
@@ -34,6 +41,7 @@ const startServer = async () => {
     process.on('SIGINT', async () => {
       console.log('SIGINT received, shutting down gracefully...');
       server.close(async () => {
+        jobAlertSchedule.stop();
         await disconnectDatabase();
         console.log('Server closed');
         process.exit(0);

@@ -32,7 +32,7 @@ export const validateCvOptimizer = (req, res, next) => {
 };
 
 export const validateApplicationAssistance = (req, res, next) => {
-  const result = z.object({ jobId: z.string().uuid(), request: text(500), coverLetter: text(5000).optional() }).strict().safeParse(req.body);
+  const result = z.object({ applicationId: z.string().uuid().optional(), jobId: z.string().uuid().optional(), request: text(500), coverLetter: text(5000).optional() }).strict().refine(({ applicationId, jobId }) => Boolean(applicationId || jobId), { message: 'Application ID or job ID is required', path: ['applicationId'] }).safeParse(req.body);
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
   req.validatedAi = result.data; return next();
 };

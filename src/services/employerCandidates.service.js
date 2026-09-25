@@ -83,16 +83,26 @@ export const listEmployerCandidates = async ({ limit, cursor, search, location, 
         END)::int AS "priority",
           BOOL_OR(e."key" = 'PROFILE_VISIBILITY_BOOST') AS "featured",
           BOOL_OR(e."key" = 'PROFILE_VISIBILITY_BOOST') AS "visibilityBoosted"
-      FROM "Subscription" s
+      FROM (
+        SELECT s."userId", s."planId"
+        FROM "Subscription" s
+        WHERE s."status" = 'ACTIVE'
+          AND s."startDate" IS NOT NULL
+          AND s."startDate" <= CURRENT_TIMESTAMP
+          AND s."endDate" IS NOT NULL
+          AND s."endDate" > CURRENT_TIMESTAMP
+        UNION ALL
+        SELECT trial."userId", spn_trial."id" AS "planId"
+        FROM "UserSubscriptionTrial" trial
+        INNER JOIN "SubscriptionPlan" spn_trial ON spn_trial."key" = trial."grantedPlanKey"
+        WHERE trial."status" = 'ACTIVE'
+          AND trial."startAt" <= CURRENT_TIMESTAMP
+          AND trial."endAt" > CURRENT_TIMESTAMP
+      ) s
       INNER JOIN "SubscriptionPlan" spn ON spn."id" = s."planId"
       INNER JOIN "PlanEntitlement" pe ON pe."planId" = spn."id"
       INNER JOIN "Entitlement" e ON e."id" = pe."entitlementId"
-      WHERE s."status" = 'ACTIVE'
-        AND s."startDate" IS NOT NULL
-        AND s."startDate" <= CURRENT_TIMESTAMP
-        AND s."endDate" IS NOT NULL
-        AND s."endDate" > CURRENT_TIMESTAMP
-        AND e."isActive" = true
+      WHERE e."isActive" = true
           AND e."key" IN ('PROFILE_VISIBILITY_BOOST')
       GROUP BY s."userId"
     )

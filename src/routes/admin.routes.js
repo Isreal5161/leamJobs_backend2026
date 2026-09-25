@@ -11,6 +11,8 @@ import {
 } from '../controllers/adminJobs.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
+import { getAdminSupportRequests, patchAdminSupportRequest } from '../controllers/premiumSeeker.controller.js';
+import { validateSupportUpdate } from '../validators/premiumSeeker.validation.js';
 import { listReleaseCandidates, releaseContract } from '../controllers/adminRelease.controller.js';
 import { listUsers } from '../controllers/adminUsers.controller.js';
 import { validateAdminUsersQuery } from '../validators/adminUsers.validation.js';
@@ -115,6 +117,8 @@ adminRouter.get('/communications/campaigns/:id/preview', authenticate, requireRo
 adminRouter.get('/communications/campaigns/:id/report', authenticate, requireRole('ADMIN'), campaignReport);
 adminRouter.get('/communications/campaigns/:id/deliveries', authenticate, requireRole('ADMIN'), validateCampaignDeliveriesQuery, campaignDeliveries);
 adminRouter.get('/communications/recipients/count', authenticate, requireRole('ADMIN'), validateCampaignRecipientQuery, campaignRecipients);
+adminRouter.get('/support/premium', authenticate, requireRole('ADMIN'), getAdminSupportRequests);
+adminRouter.patch('/support/premium/:requestId', authenticate, requireRole('ADMIN'), validateSupportUpdate, patchAdminSupportRequest);
 adminRouter.post('/communications/campaigns/:id/send', authenticate, requireRole('ADMIN'), sendCampaign);
 adminRouter.post('/contracts/:contractId/release', authenticate, requireRole('ADMIN'), releaseContract);
 

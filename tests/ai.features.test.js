@@ -14,6 +14,8 @@ const mockPrisma = {
   seekerProfile: { findUnique: jest.fn() },
   job: { findFirst: jest.fn() },
   application: { findUnique: jest.fn() },
+  aiUsageRecord: { findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+  $queryRaw: jest.fn(),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
@@ -33,6 +35,10 @@ beforeEach(() => {
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.job.findFirst.mockResolvedValue({ id: jobId, title: 'Engineer', description: 'Build things', skills: ['JS'], requirements: [], responsibilities: [], benefits: [] });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ professionalTitle: 'Engineer', bio: 'Builds products', skills: ['JS'], experience: [], education: [] });
+  mockPrisma.aiUsageRecord.findMany.mockResolvedValue([]);
+  mockPrisma.aiUsageRecord.create.mockImplementation(async ({ data }) => ({ id: `usage-${mockPrisma.aiUsageRecord.create.mock.calls.length}`, ...data }));
+  mockPrisma.aiUsageRecord.deleteMany.mockResolvedValue({ count: 1 });
+  mockPrisma.$queryRaw.mockResolvedValue([{ id: seekerId }]);
   mockCompletion.mockResolvedValue({ suggestions: [{ section: 'bio', suggestion: 'Clear summary', reason: 'More direct' }] });
 });
 

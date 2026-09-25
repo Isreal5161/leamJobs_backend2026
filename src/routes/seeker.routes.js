@@ -53,6 +53,9 @@ import { requireEntitlement } from '../middleware/entitlement.middleware.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
+import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, getAdvancedProfileStrength, getCareerRecommendations, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, prepareInterview, saveJob, unsaveJob, updateJobAlert } from '../services/premiumSeeker.service.js';
+import { deleteSavedJob, getCareerRecommendationResults, getJobAlerts, getPersonalizedJobMatches, getProfileStrength, getSalaryInsightResults, getSavedJobs, getSupportRequests, patchJobAlert, postCareerAssistant, postInterviewPreparation, postJobAlert, postSavedJob, postSkillsGap, postSupportRequest, removeJobAlert } from '../controllers/premiumSeeker.controller.js';
+import { validateAssistant, validateJobAlert, validateJobAlertUpdate, validateJobInput, validateSupportRequest } from '../validators/premiumSeeker.validation.js';
 
 const seekerRouter = Router();
 
@@ -120,7 +123,23 @@ seekerRouter.post('/subscriptions/verify', authenticate, requireRole('SEEKER'), 
 seekerRouter.post('/ai/profile-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_PROFILE_ASSISTANT'), validateProfileAssistant, profileAssistant);
 seekerRouter.post('/ai/cv-optimizer', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CV_OPTIMIZER'), validateCvOptimizer, cvOptimizer);
 seekerRouter.post('/ai/application-assistance', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_APPLICATION_ASSISTANCE'), validateApplicationAssistance, applicationAssistance);
+seekerRouter.post('/ai/interview-preparation', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_INTERVIEW_PREPARATION'), validateJobInput, postInterviewPreparation);
+seekerRouter.post('/ai/career-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CAREER_ASSISTANT'), validateAssistant, postCareerAssistant);
+seekerRouter.post('/ai/skills-gap', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('SKILLS_GAP_ANALYSIS'), validateJobInput, postSkillsGap);
+seekerRouter.post('/ai/job-matching', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_JOB_MATCHING'), getPersonalizedJobMatches);
 seekerRouter.post('/applications/cover-letter/generate', authenticate, requireRole('SEEKER'), aiLimiter, validateGenerateCoverLetter, generateApplicationCoverLetter);
+seekerRouter.get('/saved-jobs', authenticate, requireRole('SEEKER'), requireEntitlement('SAVED_JOBS'), getSavedJobs);
+seekerRouter.post('/saved-jobs/:jobId', authenticate, requireRole('SEEKER'), requireEntitlement('SAVED_JOBS'), postSavedJob);
+seekerRouter.delete('/saved-jobs/:jobId', authenticate, requireRole('SEEKER'), requireEntitlement('SAVED_JOBS'), deleteSavedJob);
+seekerRouter.get('/job-alerts', authenticate, requireRole('SEEKER'), requireEntitlement('JOB_ALERTS'), getJobAlerts);
+seekerRouter.post('/job-alerts', authenticate, requireRole('SEEKER'), requireEntitlement('JOB_ALERTS'), validateJobAlert, postJobAlert);
+seekerRouter.patch('/job-alerts/:alertId', authenticate, requireRole('SEEKER'), requireEntitlement('JOB_ALERTS'), validateJobAlertUpdate, patchJobAlert);
+seekerRouter.delete('/job-alerts/:alertId', authenticate, requireRole('SEEKER'), requireEntitlement('JOB_ALERTS'), removeJobAlert);
+seekerRouter.get('/profile/strength', authenticate, requireRole('SEEKER'), requireEntitlement('PROFILE_STRENGTH'), getProfileStrength);
+seekerRouter.get('/career-recommendations', authenticate, requireRole('SEEKER'), requireEntitlement('CAREER_RECOMMENDATIONS'), getCareerRecommendationResults);
+seekerRouter.get('/salary-insights', authenticate, requireRole('SEEKER'), requireEntitlement('SALARY_CAREER_INSIGHTS'), getSalaryInsightResults);
+seekerRouter.get('/support/requests', authenticate, requireRole('SEEKER'), requireEntitlement('PREMIUM_SUPPORT'), getSupportRequests);
+seekerRouter.post('/support/requests', authenticate, requireRole('SEEKER'), requireEntitlement('PREMIUM_SUPPORT'), validateSupportRequest, postSupportRequest);
 seekerRouter.get('/payout-accounts', authenticate, requireRole('SEEKER'), listSeekerPayoutAccounts);
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
