@@ -43,7 +43,7 @@ import { listSeekerRecommendations } from '../controllers/seekerRecommendations.
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
 import { confirmSeekerContract, getSeekerContract, submitCompletion } from '../controllers/contract.controller.js';
 import { validateCompletionSubmission } from '../validators/contract.validation.js';
-import { checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
+import { checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, startTrial, trialOffer, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
 import { validateSeekerSubscriptionCheckout, validateSeekerSubscriptionVerification } from '../validators/seekerSubscriptions.validation.js';
 import { respondToInvitation } from '../controllers/jobInvitation.controller.js';
 import { validateInvitationResponse } from '../validators/jobInvitation.validation.js';
@@ -113,6 +113,8 @@ seekerRouter.get('/notifications', authenticate, requireRole('SEEKER'), validate
 seekerRouter.patch('/notifications/read-all', authenticate, requireRole('SEEKER'), readAllNotifications);
 seekerRouter.patch('/notifications/:notificationId/read', authenticate, requireRole('SEEKER'), readNotification);
 seekerRouter.get('/subscriptions', authenticate, requireRole('SEEKER'), listSubscriptions);
+seekerRouter.get('/subscriptions/trial', authenticate, requireRole('SEEKER'), trialOffer);
+seekerRouter.post('/subscriptions/trial', authenticate, requireRole('SEEKER'), startTrial);
 seekerRouter.post('/subscriptions/checkout', authenticate, requireRole('SEEKER'), validateSeekerSubscriptionCheckout, checkoutSubscription);
 seekerRouter.post('/subscriptions/verify', authenticate, requireRole('SEEKER'), validateSeekerSubscriptionVerification, verifySubscriptionPayment);
 seekerRouter.post('/ai/profile-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_PROFILE_ASSISTANT'), validateProfileAssistant, profileAssistant);

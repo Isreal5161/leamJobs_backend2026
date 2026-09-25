@@ -6,7 +6,7 @@ import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './fl
 import { recordSubscriptionEvent } from './subscriptionFoundation.service.js';
 import { addBillingInterval, getEffectiveSubscriptionStatus, reconcileExpiredSubscriptionsForUser } from './subscriptionLifecycle.service.js';
 import { createNotification } from './notification.service.js';
-import { getAiUsageState, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
+import { getActiveTrialForUser, getAiUsageState, resolveEffectiveEntitlements, startFreeTrial } from './subscriptionEntitlement.service.js';
 
 export class SeekerSubscriptionError extends Error {
   constructor(message, status = 400) {
@@ -581,3 +581,22 @@ export const listSeekerSubscriptions = async (userId) => {
     },
   };
 };
+
+export const getSeekerTrialOffer = async (userId) => {
+  const settings = prisma.subscriptionSettings
+    ? await prisma.subscriptionSettings.upsert({
+      where: { id: 'default' },
+      update: {},
+      create: { id: 'default', trialEnabled: true, trialDurationDays: 7, trialPlanKey: 'PREMIUM' },
+    })
+    : { trialEnabled: true, trialDurationDays: 7, trialPlanKey: 'PREMIUM' };
+  const activeTrial = await getActiveTrialForUser(userId);
+
+  return {
+    available: Boolean(settings.trialEnabled && !activeTrial),
+    durationDays: settings.trialDurationDays,
+    trialPlanKey: settings.trialPlanKey,
+  };
+};
+
+export const startSeekerFreeTrial = async (userId) => startFreeTrial({ userId, source: 'SELF_SERVICE', description: 'Seeker self-service free trial' });
