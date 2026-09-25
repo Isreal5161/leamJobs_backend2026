@@ -19,7 +19,10 @@ describeDatabase('job alert advisory lock', () => {
 
   test('returns skipped when the advisory transaction lock is already held', async () => {
     const holdLock = prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('leamjobs:job-alert-processor'))`;
+      const rows = await transaction.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext('leamjobs:job-alert-processor')) AS locked`;
+      if (!rows[0]?.locked) {
+        throw new Error('Failed to acquire the PostgreSQL advisory transaction lock.');
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
       return { locked: true };
     });
