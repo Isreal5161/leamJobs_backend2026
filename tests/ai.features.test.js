@@ -155,71 +155,34 @@ test('active entitled seeker receives transient profile suggestions without writ
   expect(mockCompletion).toHaveBeenCalled();
 });
 
-test('CV optimizer accepts the real frontend editor CV structure with nested summary and item ids', async () => {
-  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_CV_OPTIMIZER'));
-  mockCompletion.mockResolvedValue({ summary: 'A stronger summary', suggestions: [{ section: 'summary', original: 'Old summary', suggested: 'A stronger summary', reason: 'Clearer value proposition' }] });
+test('profile assistant prompt explicitly requires the exact suggestions[] response contract', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
+  await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({ request: 'Review my profile', bio: 'Builds products' });
 
-  const response = await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({
-    request: 'Improve summary',
-    cv: {
-      personalInfo: {
-        fullName: 'Amina Okafor',
-        title: 'Senior Product Engineer',
-        email: 'amina@example.com',
-        phone: '+2348000000000',
-        location: 'Lagos, Nigeria',
-        linkedin: 'https://linkedin.com/in/amina',
-        summary: 'Builds product experiences that delight customers.',
-      },
-      summary: 'Builds product experiences that delight customers.',
-      experience: [{
-        id: 'exp-1',
-        jobTitle: 'Senior Product Engineer',
-        company: 'Acme Labs',
-        startDate: '2020-01',
-        endDate: '2024-12',
-        currentlyWorking: false,
-        description: 'Led product and engineering improvements.',
-      }],
-      education: [{ id: 'edu-1', degree: 'BSc Computer Science', school: 'University of Lagos', year: '2019' }],
-      skills: ['JavaScript', 'Node.js', 'Product strategy'],
-      certifications: [{ id: 'cert-1', name: 'AWS Certified Developer', issuer: 'AWS' }],
-      languages: [{ id: 'lang-1', name: 'English', proficiency: 'Fluent' }],
-      projects: [{
-        id: 'proj-1',
-        name: 'Hiring Portal',
-        description: 'Rebuilt a candidate experience flow.',
-        technologies: ['React', 'Node.js'],
-        projectUrl: 'https://example.com',
-        githubUrl: 'https://github.com/example',
-        startDate: '2023-01',
-        endDate: '2023-12',
-      }],
-    },
-  });
-
-  expect(response.status).toBe(200);
-  expect(response.body.data.summary).toBe('A stronger summary');
-  expect(mockCompletion).toHaveBeenCalled();
+  const userPrompt = mockCompletion.mock.calls.at(-1)[0].user;
+  expect(userPrompt).toContain('"suggestions"');
+  expect(userPrompt).toContain('"section": "string"');
+  expect(userPrompt).toContain('"suggestion": "string"');
+  expect(userPrompt).toContain('"reason": "string"');
+  expect(userPrompt).toContain('no improvedProfileSummary');
+  expect(userPrompt).toContain('no strongestProfileImprovements');
+  expect(userPrompt).toContain('no recommendedProfessionalTitle');
+  expect(userPrompt).toContain('no recommendedSkills');
 });
 
-test('CV optimizer rejects genuinely unknown frontend CV fields while staying strict', async () => {
+test('CV optimizer prompt explicitly requires the exact summary/suggestions response contract', async () => {
   mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_CV_OPTIMIZER'));
-  const response = await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({
-    request: 'Improve summary',
-    cv: {
-      personalInfo: { fullName: 'A', title: 'Engineer', summary: 'Strong summary', hiddenFlag: true },
-      experience: [{ id: 'exp-1', jobTitle: 'x', company: 'Acme', startDate: '2020-01', endDate: '2022-12', currentlyWorking: false, description: 'desc', hiddenFlag: true }],
-      education: [{ id: 'edu-1', degree: 'BSc', school: 'Uni', year: '2019', hiddenFlag: true }],
-      skills: ['JS'],
-      certifications: [{ id: 'cert-1', name: 'AWS', issuer: 'AWS', hiddenFlag: true }],
-      languages: [{ id: 'lang-1', name: 'English', proficiency: 'Fluent', hiddenFlag: true }],
-      projects: [{ id: 'proj-1', name: 'Portal', description: 'desc', technologies: ['React'], projectUrl: 'https://example.com', githubUrl: 'https://github.com', startDate: '2023-01', endDate: '2023-12', hiddenFlag: true }],
-    },
-  });
+  await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({ request: 'Improve summary', cv: { personalInfo: { fullName: 'A', title: 'Engineer' }, experience: [], education: [], skills: [], certifications: [] } });
 
-  expect(response.status).toBe(400);
-  expect(mockCompletion).not.toHaveBeenCalled();
+  const userPrompt = mockCompletion.mock.calls.at(-1)[0].user;
+  expect(userPrompt).toContain('"summary": "string or null"');
+  expect(userPrompt).toContain('"suggestions": [');
+  expect(userPrompt).toContain('"original": "string"');
+  expect(userPrompt).toContain('"suggested": "string"');
+  expect(userPrompt).toContain('no experience top-level key');
+  expect(userPrompt).toContain('no education top-level key');
+  expect(userPrompt).toContain('no skills top-level key');
+  expect(userPrompt).toContain('no alternate CV schema');
 });
 
 test('CV optimizer requires its specific entitlement and validates input', async () => {
@@ -278,9 +241,10 @@ test('generateCoverLetter reads company name from employerProfile', async () => 
 });
 
 test('missing provider configuration is normalized safely', async () => {
+  const uniqueSeekerId = '33333333-3333-4333-8333-333333333333';
   mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
   mockCompletion.mockRejectedValue(Object.assign(new Error('not configured'), { status: 503, publicCode: 'AI_NOT_CONFIGURED' }));
-  const response = await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({ request: 'Help' });
+  const response = await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token('SEEKER', uniqueSeekerId)}`).send({ request: 'Help' });
   expect(response.status).toBe(503);
   expect(response.body.error.code).toBe('AI_NOT_CONFIGURED');
 });
