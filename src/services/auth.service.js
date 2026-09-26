@@ -51,10 +51,30 @@ export class RoleMismatchError extends Error {
   }
 }
 
+export class InvalidPublicRegistrationRoleError extends Error {
+  constructor() {
+    super('Public registration role must be SEEKER or EMPLOYER.');
+    this.name = 'InvalidPublicRegistrationRoleError';
+    this.status = 400;
+    this.publicMessage = 'Role must be SEEKER or EMPLOYER.';
+  }
+}
+
+const normalizePublicRegistrationRole = (role) => {
+  const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : undefined;
+
+  if (normalizedRole === 'SEEKER' || normalizedRole === 'EMPLOYER') {
+    return normalizedRole;
+  }
+
+  throw new InvalidPublicRegistrationRoleError();
+};
+
 export const registerUser = async ({ firstName, lastName, email, password, phone, role }) => {
   const normalizedFirstName = firstName.trim();
   const normalizedLastName = lastName.trim();
   const normalizedEmail = email.trim().toLowerCase();
+  const normalizedRole = normalizePublicRegistrationRole(role);
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
   try {
@@ -65,7 +85,7 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
         email: normalizedEmail,
         passwordHash,
         phone,
-        role,
+        role: normalizedRole,
         isActive: false,
         isVerified: false,
       },

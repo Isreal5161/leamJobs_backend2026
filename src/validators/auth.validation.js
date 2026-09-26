@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+const publicRegistrationRoleSchema = z.enum(['SEEKER', 'EMPLOYER'], {
+  required_error: 'Role is required',
+  invalid_type_error: 'Role must be SEEKER or EMPLOYER',
+});
+
 const registrationSchema = z.object({
   firstName: z.string().trim().min(1, 'First name is required'),
   lastName: z.string().trim().min(1, 'Last name is required'),
@@ -12,7 +17,7 @@ const registrationSchema = z.object({
     .regex(/[0-9]/, 'Password must contain a number')
     .regex(/[^A-Za-z0-9]/, 'Password must contain a special character'),
   phone: z.string().trim().min(1, 'Phone must not be empty').optional(),
-  role: z.enum(['SEEKER', 'EMPLOYER']).optional().default('SEEKER'),
+  role: publicRegistrationRoleSchema,
 }).strict();
 
 const loginSchema = z.object({

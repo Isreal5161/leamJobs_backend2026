@@ -97,6 +97,31 @@ describe('subscription entitlement enforcement', () => {
     }
   });
 
+  test('middleware stores a trusted request-scoped entitlement state for downstream AI checks', async () => {
+    mockPrisma.subscription.findFirst.mockResolvedValue({
+      id: 'sub-1',
+      userId: 'user-4',
+      planId: 'plan-1',
+      status: 'ACTIVE',
+      plan: { entitlements: [{ entitlement: { key: 'PROFILE_ANALYTICS' } }] },
+    });
+
+    const request = { user: { sub: 'user-4', role: 'SEEKER' } };
+    const response = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    const next = jest.fn();
+
+    await requireEntitlement('PROFILE_ANALYTICS')(request, response, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(request.entitlementState).toMatchObject({
+      userId: 'user-4',
+      planKey: 'BASIC',
+      source: 'SUBSCRIPTION',
+      hasActiveSubscription: true,
+    });
+    expect(request.entitlementState.entitlements).toEqual(expect.arrayContaining(['PROFILE_ANALYTICS']));
+  });
+
   test('middleware allows authorized entitlement and rejects unauthorized requests', async () => {
     mockPrisma.subscription.findFirst.mockResolvedValue({
       id: 'sub-1',

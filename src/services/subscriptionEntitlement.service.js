@@ -196,13 +196,13 @@ export const getCurrentSubscriptionEntitlements = async (userId, client = prisma
   return state.entitlements;
 };
 
-export const hasEntitlement = async (userId, entitlementKey, client = prisma) => {
+export const hasEntitlement = async (userId, entitlementKey, client = prisma, stateOverride = null) => {
   const normalized = normalizeEntitlementKey(entitlementKey);
   if (!normalized) {
     return false;
   }
 
-  const state = await resolveEffectiveEntitlements(userId, client);
+  const state = stateOverride ?? await resolveEffectiveEntitlements(userId, client);
   return state.entitlements.includes(normalized);
 };
 
@@ -240,19 +240,19 @@ export const getAiUsagePeriod = (now = new Date()) => {
   return { periodStart, periodEnd, nextPeriodStart };
 };
 
-export const getAiUsageState = async (userId, client = prisma) => {
-  const state = await resolveEffectiveEntitlements(userId, client);
+export const getAiUsageState = async (userId, client = prisma, stateOverride = null) => {
+  const state = stateOverride ?? await resolveEffectiveEntitlements(userId, client);
   const planKey = state.planKey || BASIC_PLAN_KEY;
   const limit = state.aiUnlimited ? Infinity : Number.isInteger(state.aiAllowance) ? state.aiAllowance : getAiAllowanceForPlan(planKey);
   let used = 0;
 
   if (client?.aiUsageRecord) {
     const { periodStart, nextPeriodStart } = getAiUsagePeriod();
-    const usage = await client.aiUsageRecord.findMany({
+    const usage = await client.aiUsageRecord.aggregate({
       where: { userId, periodStart: { gte: periodStart, lt: nextPeriodStart } },
-      select: { amount: true },
+      _sum: { amount: true },
     });
-    used = usage.reduce((total, entry) => total + Number(entry.amount || 0), 0);
+    used = Number(usage?._sum?.amount ?? 0);
   }
 
   const remaining = Math.max(0, limit - used);
@@ -268,8 +268,8 @@ export const getAiUsageState = async (userId, client = prisma) => {
   };
 };
 
-export const canUseAiFeature = async (userId, featureKey = 'AI_COVER_LETTER', client = prisma) => {
-  const state = await getAiUsageState(userId, client);
+export const canUseAiFeature = async (userId, featureKey = 'AI_COVER_LETTER', client = prisma, stateOverride = null) => {
+  const state = stateOverride ?? await getAiUsageState(userId, client);
   const feature = normalizeEntitlementKey(featureKey);
   const featureAllowed = !feature || feature === 'AI_COVER_LETTER' || feature === 'AI_CV_REVIEW' || feature === 'AI_CV_IMPROVEMENT' || feature === 'APPLICATION_INSIGHTS' || feature === 'AI_CAREER_ASSISTANT' || feature === 'AI_INTERVIEW_PREPARATION' || feature === 'SKILLS_GAP_ANALYSIS' || feature === 'AI_JOB_MATCHING';
   return {

@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const mockPrisma = {
   subscription: { findFirst: jest.fn() },
   userSubscriptionTrial: { findFirst: jest.fn(), create: jest.fn() },
-  aiUsageRecord: { findMany: jest.fn(), create: jest.fn() },
+  aiUsageRecord: { aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }), findMany: jest.fn(), create: jest.fn() },
   subscriptionPlan: { findUnique: jest.fn() },
 };
 
@@ -45,7 +45,7 @@ describe('free-trial and AI allowance enforcement', () => {
   test('AI allowance tracks remaining usage and rejects exhausted plans', async () => {
     mockPrisma.subscription.findFirst.mockResolvedValue(null);
     mockPrisma.userSubscriptionTrial.findFirst.mockResolvedValue(null);
-    mockPrisma.aiUsageRecord.findMany.mockResolvedValue([{ amount: 4 }, { amount: 1 }]);
+    mockPrisma.aiUsageRecord.aggregate.mockResolvedValue({ _sum: { amount: 5 } });
 
     const state = await getAiUsageState('user-1');
     expect(state.planKey).toBe('BASIC');
@@ -83,7 +83,7 @@ describe('free-trial and AI allowance enforcement', () => {
       endDate: new Date(Date.now() + 60_000),
       plan: { key: 'PREMIUM', aiAllowance: 100, aiUnlimited: true, entitlements: [{ entitlement: { key: 'AI_COVER_LETTER' } }] },
     });
-    mockPrisma.aiUsageRecord.findMany.mockResolvedValue([{ amount: 10000 }]);
+    mockPrisma.aiUsageRecord.aggregate.mockResolvedValue({ _sum: { amount: 10000 } });
 
     await expect(canUseAiFeature('user-unlimited', 'AI_COVER_LETTER')).resolves.toMatchObject({ allowed: true, unlimited: true });
   });

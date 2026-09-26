@@ -24,7 +24,15 @@ const mockPrisma = {
     }),
   },
   aiUsageRecord: {
-    findMany: jest.fn(({ where }) => records.filter((record) => record.userId === where.userId && record.periodStart >= where.periodStart.gte && record.periodStart < where.periodStart.lt).map(({ amount }) => ({ amount }))),
+    aggregate: jest.fn(({ where }) => {
+      const total = records.reduce((sum, record) => {
+        if (record.userId === where.userId && record.periodStart >= where.periodStart.gte && record.periodStart < where.periodStart.lt) {
+          return sum + Number(record.amount || 0);
+        }
+        return sum;
+      }, 0);
+      return { _sum: { amount: total } };
+    }),
   },
 };
 
@@ -34,11 +42,12 @@ const { getAiUsagePeriod, getAiUsageState } = await import('../src/services/subs
 
 test('historical AI usage does not consume the current period allowance', async () => {
   await expect(getAiUsageState('user-1')).resolves.toMatchObject({ limit: 5, used: 2, remaining: 3 });
-  expect(mockPrisma.aiUsageRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+  expect(mockPrisma.aiUsageRecord.aggregate).toHaveBeenCalledWith(expect.objectContaining({
     where: expect.objectContaining({
       userId: 'user-1',
       periodStart: { gte: currentPeriodStart, lt: nextPeriodStart },
     }),
+    _sum: { amount: true },
   }));
 });
 

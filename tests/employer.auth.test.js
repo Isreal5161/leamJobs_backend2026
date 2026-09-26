@@ -13,6 +13,7 @@ const mockPrisma = {
   user: {
     findUnique: jest.fn(),
     update: jest.fn(),
+    create: jest.fn(),
   },
 };
 
@@ -108,6 +109,71 @@ describe('Employer authentication and authorization', () => {
       status: 401,
       name: 'AuthenticationError',
     });
+  });
+
+  test('public registration requires an explicit role and rejects missing role', async () => {
+    const response = await request(app)
+      .post('/api/auth/register')
+      .send({
+        firstName: 'No',
+        lastName: 'Role',
+        email: 'norole@example.com',
+        password: 'Password1!',
+        phone: '+2348000000000',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual(expect.objectContaining({
+      message: 'Validation failed',
+    }));
+  });
+
+  test('public registration rejects invalid role values', async () => {
+    const response = await request(app)
+      .post('/api/auth/register')
+      .send({
+        firstName: 'Bad',
+        lastName: 'Role',
+        email: 'badrole@example.com',
+        password: 'Password1!',
+        phone: '+2348000000000',
+        role: 'MANAGER',
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual(expect.objectContaining({
+      message: 'Validation failed',
+    }));
+  });
+
+  test('EMPLOYER registration persists EMPLOYER role in the database record', async () => {
+    mockPrisma.user.create.mockResolvedValue({
+      id: 'employer-created-123',
+      email: 'employer-create@example.com',
+      firstName: 'Employer',
+      lastName: 'User',
+      role: 'EMPLOYER',
+      isActive: false,
+      isVerified: false,
+    });
+
+    const response = await request(app)
+      .post('/api/auth/register')
+      .send({
+        firstName: 'Employer',
+        lastName: 'User',
+        email: 'employer-create@example.com',
+        password: 'Password1!',
+        phone: '+2348000000000',
+        role: 'EMPLOYER',
+      });
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        role: 'EMPLOYER',
+      }),
+    }));
   });
 
   test('SEEKER token is rejected from the Employer endpoint', async () => {

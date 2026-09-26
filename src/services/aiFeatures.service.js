@@ -1,19 +1,19 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../config/database.js';
-import { canUseAiFeature, hasEntitlement, recordAiUsage, releaseAiUsage, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
+import { canUseAiFeature, getAiUsageState, hasEntitlement, recordAiUsage, releaseAiUsage, resolveEffectiveEntitlements } from './subscriptionEntitlement.service.js';
 import { requestStructuredCompletion } from './aiProvider.service.js';
 
-const assertAccess = async (userId, entitlement, { allowBasic = true } = {}) => {
-  const state = await resolveEffectiveEntitlements(userId);
-  const hasAccess = await hasEntitlement(userId, entitlement);
+const assertAccess = async (userId, entitlement, { allowBasic = true, entitlementState } = {}) => {
+  const state = entitlementState ?? await resolveEffectiveEntitlements(userId);
+  const hasAccess = await hasEntitlement(userId, entitlement, undefined, state);
   if (!hasAccess && !(allowBasic && state.planKey === 'BASIC' && entitlement === 'AI_COVER_LETTER')) {
     const error = new Error('This AI feature requires an active subscription entitlement.');
     error.status = 403;
     throw error;
   }
 
-  const aiState = await canUseAiFeature(userId, entitlement);
+  const aiState = await canUseAiFeature(userId, entitlement, undefined, await getAiUsageState(userId, undefined, state));
   if (!aiState.allowed) {
     const error = new Error('You have reached your plan AI allowance.');
     error.status = 403;
@@ -243,5 +243,6 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
   const providerEndMs = Date.now();
   console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_finished, request_id=${requestId}, provider_duration_ms=${providerEndMs - providerStartMs}, provider_result=resolved`);
 
-  return { coverLetter: result.coverLetter, planKey: state.planKey, remaining: Math.max(0, (await canUseAiFeature(userId, 'AI_COVER_LETTER')).remaining) };
+  const aiUsageState = await getAiUsageState(userId, undefined, state);
+  return { coverLetter: result.coverLetter, planKey: state.planKey, remaining: Math.max(0, aiUsageState.remaining) };
 };

@@ -14,7 +14,7 @@ const mockPrisma = {
   seekerProfile: { findUnique: jest.fn() },
   job: { findFirst: jest.fn() },
   application: { findUnique: jest.fn() },
-  aiUsageRecord: { findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+  aiUsageRecord: { aggregate: jest.fn().mockResolvedValue({ _sum: { amount: 0 } }), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
   $queryRaw: jest.fn(),
 };
 
