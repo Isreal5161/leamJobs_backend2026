@@ -155,7 +155,7 @@ test('active entitled seeker receives transient profile suggestions without writ
   expect(mockCompletion).toHaveBeenCalled();
 });
 
-test('profile assistant prompt explicitly requires the exact suggestions[] response contract and higher quality summary depth', async () => {
+test('profile assistant prompt explicitly requires an 80-150 word, multi-dimensional, factual summary and no generic padding', async () => {
   mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
   await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({ request: 'Review my profile', bio: 'Builds products' });
 
@@ -168,12 +168,31 @@ test('profile assistant prompt explicitly requires the exact suggestions[] respo
   expect(userPrompt).toContain('no strongestProfileImprovements');
   expect(userPrompt).toContain('no recommendedProfessionalTitle');
   expect(userPrompt).toContain('no recommendedSkills');
-  expect(userPrompt).toContain('approximately 80-150 words');
+  expect(userPrompt).toContain('minimum 80 words');
+  expect(userPrompt).toContain('maximum 150 words');
+  expect(userPrompt).toContain('normally be between 80 and 150 words');
+  expect(userPrompt).toContain('summary below 80 words is invalid');
+  expect(userPrompt).toContain('substantive professional summary');
+  expect(userPrompt).toContain('multi-dimensional');
+  expect(userPrompt).toContain('inspect the entire supplied profile');
+  expect(userPrompt).toContain('synthesize the available factual information');
+  expect(userPrompt).toContain('instead of simply rewriting the existing short summary');
+  expect(userPrompt).toContain('no generic one-sentence summaries');
   expect(userPrompt).toContain('do not mechanically pad');
+  expect(userPrompt).toContain('never invent employers');
+  expect(userPrompt).toContain('never invent achievements');
+  expect(userPrompt).toContain('never invent metrics');
+  expect(userPrompt).toContain('never invent facts just to reach 80 words');
+  expect(userPrompt).toContain('do not invent profile facts');
   expect(userPrompt).toContain('real professional title');
-  expect(userPrompt).toContain('generic one-sentence summaries');
-  expect(userPrompt).toContain('do not invent metrics');
-  expect(userPrompt).toContain('2-5 concise bullet-style');
+  expect(userPrompt).toContain('work experience');
+  expect(userPrompt).toContain('responsibilities');
+  expect(userPrompt).toContain('skills');
+  expect(userPrompt).toContain('education');
+  expect(userPrompt).toContain('certifications');
+  expect(userPrompt).toContain('actual achievements');
+  expect(userPrompt).toContain('career direction');
+  expect(userPrompt).toContain('a shorter truthful summary is acceptable');
   expect(userPrompt).toContain('never rewrite identity or contact fields');
 });
 
