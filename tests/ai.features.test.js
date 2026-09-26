@@ -155,7 +155,7 @@ test('active entitled seeker receives transient profile suggestions without writ
   expect(mockCompletion).toHaveBeenCalled();
 });
 
-test('profile assistant prompt explicitly requires the exact suggestions[] response contract', async () => {
+test('profile assistant prompt explicitly requires the exact suggestions[] response contract and higher quality summary depth', async () => {
   mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_PROFILE_ASSISTANT'));
   await request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token()}`).send({ request: 'Review my profile', bio: 'Builds products' });
 
@@ -168,6 +168,13 @@ test('profile assistant prompt explicitly requires the exact suggestions[] respo
   expect(userPrompt).toContain('no strongestProfileImprovements');
   expect(userPrompt).toContain('no recommendedProfessionalTitle');
   expect(userPrompt).toContain('no recommendedSkills');
+  expect(userPrompt).toContain('approximately 80-150 words');
+  expect(userPrompt).toContain('do not mechanically pad');
+  expect(userPrompt).toContain('real professional title');
+  expect(userPrompt).toContain('generic one-sentence summaries');
+  expect(userPrompt).toContain('do not invent metrics');
+  expect(userPrompt).toContain('2-5 concise bullet-style');
+  expect(userPrompt).toContain('never rewrite identity or contact fields');
 });
 
 test('CV optimizer prompt explicitly requires the exact summary/suggestions response contract', async () => {
