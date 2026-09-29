@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
+import { readObject } from './storage/storage.service.js';
 
 const MAX_LIMIT = 50;
 
@@ -62,6 +63,20 @@ const mapCandidate = (candidate) => ({
   visibilityBoosted: Boolean(candidate.visibilityBoosted),
   featured: Boolean(candidate.featured),
 });
+
+export const getEmployerCandidateProfilePicture = async (candidateId) => {
+  const candidate = await prisma.user.findFirst({
+    where: { id: candidateId, role: 'SEEKER', isActive: true },
+    select: { seekerProfile: { select: { profilePictureKey: true } } },
+  });
+  const objectKey = candidate?.seekerProfile?.profilePictureKey;
+  if (!objectKey) {
+    const error = new Error('Candidate profile picture not found.');
+    error.status = 404;
+    throw error;
+  }
+  return { buffer: await readObject(objectKey), objectKey };
+};
 
 export const listEmployerCandidates = async ({ limit, cursor, search, location, skill }) => {
   const decodedCursor = decodeCursor(cursor);

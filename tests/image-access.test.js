@@ -17,7 +17,7 @@ const mockPrisma = {
   employerProfile: { findUnique: jest.fn() },
   application: { findFirst: jest.fn() },
   job: { findUnique: jest.fn() },
-  user: { findUnique: jest.fn() },
+  user: { findUnique: jest.fn(), findFirst: jest.fn() },
 };
 const mockReadObject = jest.fn();
 
@@ -82,6 +82,46 @@ test('owning employer can stream an applicant profile picture but another employ
     .set('Authorization', `Bearer ${token('EMPLOYER', otherEmployerId)}`);
 
   expect(denied.status).toBe(404);
+});
+
+test('employer can stream an active candidate profile picture without accessing the seeker-owned route', async () => {
+  mockPrisma.user.findFirst.mockResolvedValue({ seekerProfile: { profilePictureKey: 'seekers/seeker-1/profile-picture/a.webp' } });
+  mockReadObject.mockResolvedValue(Buffer.from('candidate-picture'));
+
+  const response = await request(app)
+    .get('/api/employer/candidates/seeker-1/profile-picture')
+    .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`);
+
+  expect(response.status).toBe(200);
+  expect(response.headers['content-type']).toMatch(/image\/webp/);
+  expect(response.body.toString()).toBe('candidate-picture');
+  expect(mockPrisma.user.findFirst).toHaveBeenCalledWith({
+    where: { id: 'seeker-1', role: 'SEEKER', isActive: true },
+    select: { seekerProfile: { select: { profilePictureKey: true } } },
+  });
+  expect(mockReadObject).toHaveBeenCalledWith('seekers/seeker-1/profile-picture/a.webp');
+});
+
+test('candidate profile pictures are unavailable for inactive, non-seeker, or missing-profile users', async () => {
+  mockPrisma.user.findFirst.mockResolvedValue(null);
+  const denied = await request(app)
+    .get('/api/employer/candidates/private-user/profile-picture')
+    .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`);
+  expect(denied.status).toBe(404);
+  expect(mockReadObject).not.toHaveBeenCalled();
+
+  mockPrisma.user.findFirst.mockResolvedValue({ seekerProfile: { profilePictureKey: null } });
+  const missingPicture = await request(app)
+    .get('/api/employer/candidates/no-picture/profile-picture')
+    .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`);
+  expect(missingPicture.status).toBe(404);
+  expect(mockReadObject).not.toHaveBeenCalled();
+});
+
+test('only employers can access candidate profile pictures', async () => {
+  await expect(request(app).get('/api/employer/candidates/seeker-1/profile-picture')).resolves.toMatchObject({ status: 401 });
+  await expect(request(app).get('/api/employer/candidates/seeker-1/profile-picture').set('Authorization', `Bearer ${token('SEEKER', 'seeker-1')}`)).resolves.toMatchObject({ status: 403 });
+  expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
 });
 
 test('admin profile-picture access remains scoped to authorized jobs', async () => {
