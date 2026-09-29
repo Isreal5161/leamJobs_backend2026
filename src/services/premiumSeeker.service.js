@@ -128,6 +128,31 @@ export const getCareerRecommendations = async (userId) => {
 };
 
 const interviewSchema = z.object({ questions: z.array(z.object({ question: z.string(), type: z.enum(['technical', 'behavioral', 'role']), guidance: z.string() })), preparationAreas: z.array(z.string()), answerFramework: z.string() });
+const interviewResponseContract = [
+  'Return ONLY valid JSON matching this exact structure:',
+  '{',
+  '  "questions": [',
+  '    {',
+  '      "question": "string",',
+  '      "type": "technical | behavioral | role",',
+  '      "guidance": "string"',
+  '    }',
+  '  ],',
+  '  "preparationAreas": [',
+  '    "string"',
+  '  ],',
+  '  "answerFramework": "string"',
+  '}',
+  'Rules:',
+  '- Return valid JSON only; do not wrap JSON in Markdown or code fences.',
+  '- questions must be an array.',
+  '- Every question object must contain question, type, and guidance.',
+  '- type must be exactly one of: technical, behavioral, role.',
+  '- preparationAreas must be an array of strings.',
+  '- answerFramework must be a string.',
+  '- Do not invent facts about the seeker.',
+  '- Base preparation on the supplied job and profile information.',
+].join('\n');
 export const prepareInterview = async (userId, input) => {
   const access = await requireAiAccess(userId, 'AI_INTERVIEW_PREPARATION');
   const job = await prisma.job.findFirst({ where: { id: input.jobId, status: 'APPROVED' }, select: { title: true, description: true, skills: true, requirements: true, responsibilities: true } });
@@ -135,7 +160,7 @@ export const prepareInterview = async (userId, input) => {
   const profile = await prisma.seekerProfile.findUnique({ where: { userId }, select: { professionalTitle: true, bio: true, skills: true, experience: true, education: true } });
   const usage = await reserveAiUsage(userId, 'AI_INTERVIEW_PREPARATION', access);
   try {
-    const result = await requestStructuredCompletion({ schema: interviewSchema, system: aiSystem, user: `Prepare the seeker for this job. Job: ${json(job)} Profile: ${json(profile ?? {})}` });
+    const result = await requestStructuredCompletion({ schema: interviewSchema, system: aiSystem, user: `${interviewResponseContract}\nPrepare the seeker for this job. Job: ${json(job)} Profile: ${json(profile ?? {})}` });
     return { ...result, remaining: usage.remaining - 1 };
   } catch (error) {
     await releaseReservation(userId, usage);

@@ -26,6 +26,7 @@ jest.unstable_mockModule('../src/services/aiProvider.service.js', () => ({
 }));
 const { default: app } = await import('../src/app.js');
 const { generateCoverLetter } = await import('../src/services/aiFeatures.service.js');
+const { prepareInterview } = await import('../src/services/premiumSeeker.service.js');
 const { validateProfileAssistant } = await import('../src/validators/ai.validation.js');
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
@@ -216,6 +217,39 @@ test('CV optimizer requires its specific entitlement and validates input', async
   const response = await request(app).post('/api/seeker/ai/cv-optimizer').set('Authorization', `Bearer ${token()}`).send({ request: 'Improve summary', cv: { personalInfo: { fullName: 'A', title: 'Engineer' }, experience: [{ jobTitle: 'x' }], education: [], skills: [], certifications: [] } });
   expect(response.status).toBe(400);
   expect(mockCompletion).not.toHaveBeenCalled();
+});
+
+test('interview preparation prompt specifies its exact JSON response contract', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_INTERVIEW_PREPARATION'));
+  await prepareInterview(seekerId, { jobId });
+
+  const userPrompt = mockCompletion.mock.calls.at(-1)[0].user;
+  expect(userPrompt).toContain(`Return ONLY valid JSON matching this exact structure:\n{\n  "questions": [\n    {\n      "question": "string",\n      "type": "technical | behavioral | role",\n      "guidance": "string"\n    }\n  ],\n  "preparationAreas": [\n    "string"\n  ],\n  "answerFramework": "string"\n}`);
+  expect(userPrompt).toContain('Return valid JSON only; do not wrap JSON in Markdown or code fences.');
+  expect(userPrompt).toContain('Every question object must contain question, type, and guidance.');
+  expect(userPrompt).toContain('type must be exactly one of: technical, behavioral, role.');
+  expect(userPrompt).toContain('preparationAreas must be an array of strings.');
+  expect(userPrompt).toContain('answerFramework must be a string.');
+  expect(userPrompt).toContain('Do not invent facts about the seeker.');
+  expect(userPrompt).toContain('Base preparation on the supplied job and profile information.');
+});
+
+test('valid interview preparation response passes the service schema', async () => {
+  mockPrisma.subscription.findFirst.mockResolvedValue(activePlan('AI_INTERVIEW_PREPARATION'));
+  const expectedResponse = {
+    questions: [{ question: 'How would you approach this role?', type: 'role', guidance: 'Connect your answer to the supplied job responsibilities.' }],
+    preparationAreas: ['Review the job requirements.'],
+    answerFramework: 'Use a situation, action, and result structure.',
+  };
+  mockCompletion.mockImplementationOnce(async ({ schema }) => {
+    const result = schema.safeParse(expectedResponse);
+    expect(result.success).toBe(true);
+    return result.data;
+  });
+
+  const response = await prepareInterview(seekerId, { jobId });
+
+  expect(response).toMatchObject(expectedResponse);
 });
 
 test('application assistance requires approved job and never submits an application', async () => {
