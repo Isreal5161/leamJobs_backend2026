@@ -1,4 +1,4 @@
-import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, getAdvancedProfileStrength, getCareerRecommendations, getPersonalizedMatches, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, listSupportRequestsForAdmin, prepareInterview, saveJob, unsaveJob, updateJobAlert, updateSupportRequestForAdmin } from '../services/premiumSeeker.service.js';
+import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, evaluateInterview, getAdvancedProfileStrength, getCareerRecommendations, getPersonalizedMatches, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, listSupportRequestsForAdmin, prepareInterview, saveJob, startInterview, unsaveJob, updateJobAlert, updateSupportRequestForAdmin } from '../services/premiumSeeker.service.js';
 
 const run = (service, input = (req) => req.body) => async (req, res, next) => { try { return res.status(200).json({ success: true, data: await service(req.user.sub, input(req)) }); } catch (error) { return next(error); } };
 export const getSavedJobs = run(listSavedJobs);
@@ -12,6 +12,8 @@ export const getProfileStrength = run(getAdvancedProfileStrength);
 export const getCareerRecommendationResults = run(getCareerRecommendations);
 export const getSalaryInsightResults = run(getSalaryInsights, (req) => req.query);
 export const postInterviewPreparation = run(prepareInterview);
+export const postInterviewStart = run(startInterview);
+export const postInterviewEvaluation = run(evaluateInterview);
 export const postCareerAssistant = run(askCareerAssistant);
 export const postSkillsGap = run(analyzeSkillsGap);
 export const getPersonalizedJobMatches = run(getPersonalizedMatches);

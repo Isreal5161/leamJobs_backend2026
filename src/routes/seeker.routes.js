@@ -54,8 +54,8 @@ import { listNotifications, readAllNotifications, readNotification } from '../co
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
 import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, getAdvancedProfileStrength, getCareerRecommendations, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, prepareInterview, saveJob, unsaveJob, updateJobAlert } from '../services/premiumSeeker.service.js';
-import { deleteSavedJob, getCareerRecommendationResults, getJobAlerts, getPersonalizedJobMatches, getProfileStrength, getSalaryInsightResults, getSavedJobs, getSupportRequests, patchJobAlert, postCareerAssistant, postInterviewPreparation, postJobAlert, postSavedJob, postSkillsGap, postSupportRequest, removeJobAlert } from '../controllers/premiumSeeker.controller.js';
-import { validateAssistant, validateJobAlert, validateJobAlertUpdate, validateJobInput, validateSupportRequest } from '../validators/premiumSeeker.validation.js';
+import { deleteSavedJob, getCareerRecommendationResults, getJobAlerts, getPersonalizedJobMatches, getProfileStrength, getSalaryInsightResults, getSavedJobs, getSupportRequests, patchJobAlert, postCareerAssistant, postInterviewEvaluation, postInterviewPreparation, postInterviewStart, postJobAlert, postSavedJob, postSkillsGap, postSupportRequest, removeJobAlert } from '../controllers/premiumSeeker.controller.js';
+import { validateAssistant, validateInterviewEvaluation, validateInterviewStart, validateJobAlert, validateJobAlertUpdate, validateJobInput, validateSupportRequest } from '../validators/premiumSeeker.validation.js';
 
 const seekerRouter = Router();
 
@@ -123,6 +123,8 @@ seekerRouter.post('/subscriptions/verify', authenticate, requireRole('SEEKER'), 
 seekerRouter.post('/ai/profile-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_PROFILE_ASSISTANT'), validateProfileAssistant, profileAssistant);
 seekerRouter.post('/ai/cv-optimizer', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CV_OPTIMIZER'), validateCvOptimizer, cvOptimizer);
 seekerRouter.post('/ai/application-assistance', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_APPLICATION_ASSISTANCE'), validateApplicationAssistance, applicationAssistance);
+seekerRouter.post('/ai/interview/start', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_INTERVIEW_PREPARATION'), validateInterviewStart, postInterviewStart);
+seekerRouter.post('/ai/interview/evaluate', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_INTERVIEW_PREPARATION'), validateInterviewEvaluation, postInterviewEvaluation);
 seekerRouter.post('/ai/interview-preparation', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_INTERVIEW_PREPARATION'), validateJobInput, postInterviewPreparation);
 seekerRouter.post('/ai/career-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CAREER_ASSISTANT'), validateAssistant, postCareerAssistant);
 seekerRouter.post('/ai/skills-gap', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('SKILLS_GAP_ANALYSIS'), validateJobInput, postSkillsGap);

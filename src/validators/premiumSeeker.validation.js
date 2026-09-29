@@ -8,5 +8,13 @@ export const validateJobAlert = validate(jobAlertSchema);
 export const validateJobAlertUpdate = validate(jobAlertFields.partial().refine(validateSalaryRange, { message: 'Minimum salary cannot exceed maximum salary.', path: ['salaryMax'] }));
 export const validateAssistant = validate(z.object({ question: z.string().trim().min(3).max(1500) }));
 export const validateJobInput = validate(z.object({ jobId: z.string().uuid() }));
+export const validateInterviewStart = validate(z.object({ jobId: z.string().uuid() }).strict());
+export const validateInterviewEvaluation = validate(z.object({
+	sessionToken: z.string().trim().min(1).max(60000),
+	answers: z.array(z.object({
+		questionId: z.string().trim().min(1).max(40),
+		answer: z.string().trim().min(1).max(4000),
+	}).strict()).min(8).max(10),
+}).strict());
 export const validateSupportRequest = validate(z.object({ subject: z.string().trim().min(3).max(120), category: z.string().trim().min(2).max(60), message: z.string().trim().min(10).max(5000) }));
 export const validateSupportUpdate = validate(z.object({ status: z.enum(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']), response: z.string().trim().max(5000).optional().nullable() }));
