@@ -385,6 +385,7 @@ model SeekerProfile {
   resumeObjectKey   String?
   profilePictureUrl String?
   profilePictureKey String?
+  availability      SeekerAvailability @default(NOT_AVAILABLE)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -1143,6 +1144,12 @@ enum Role {
   SEEKER
   EMPLOYER
   ADMIN
+}
+
+enum SeekerAvailability {
+  AVAILABLE_NOW
+  AVAILABLE_SOON
+  NOT_AVAILABLE
 }
 
 enum EmployerVerificationStatus {

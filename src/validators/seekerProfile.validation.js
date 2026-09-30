@@ -28,6 +28,7 @@ const projectItemSchema = z.object({
 }, 'Duplicate technologies are not allowed');
 
 const seekerProfileUpdateSchema = z.object({
+  availability: z.enum(['AVAILABLE_NOW', 'AVAILABLE_SOON', 'NOT_AVAILABLE']).optional(),
   fullName: z.string().trim().min(1, 'Full name is required').max(200, 'Full name is too long').optional(),
   firstName: z.string().trim().min(1, 'First name is required').max(100, 'First name is too long').optional(),
   lastName: z.string().trim().min(1, 'Last name is required').max(100, 'Last name is too long').optional(),

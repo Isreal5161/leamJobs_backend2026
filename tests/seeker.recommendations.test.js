@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
+import { calculateSkillMatch } from '../src/utils/skillNormalization.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
@@ -38,6 +39,24 @@ beforeEach(() => {
     { id: '33333333-3333-4333-8333-333333333333', matchScore: 0, recommendationRank: 2 },
     { id: '44444444-4444-4444-8444-444444444444', matchScore: 0, recommendationRank: 3 },
   ]);
+});
+
+describe('shared deterministic skill match', () => {
+  test('scores unique normalized job skills and does not invent a score without job skills', () => {
+    expect(calculateSkillMatch(['React', ' react ', 'Node.js'], ['react', 'Node.js', 'TypeScript'])).toEqual({
+      score: 67,
+      matchedSkills: ['react', 'Node.js'],
+      totalJobSkills: 3,
+    });
+    expect(calculateSkillMatch(['React'], ['Python', 'SQL'])).toMatchObject({ score: 0, totalJobSkills: 2 });
+    expect(calculateSkillMatch(['React'], [])).toEqual({ score: null, matchedSkills: [], totalJobSkills: 0 });
+  });
+
+  test('calculates a different fit for the same candidate against different jobs', () => {
+    const skills = ['React', 'TypeScript'];
+    expect(calculateSkillMatch(skills, ['React', 'TypeScript']).score).toBe(100);
+    expect(calculateSkillMatch(skills, ['React', 'TypeScript', 'Node.js', 'SQL']).score).toBe(50);
+  });
 });
 
 describe('GET /api/seeker/recommendations', () => {

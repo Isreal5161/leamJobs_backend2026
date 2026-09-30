@@ -1,7 +1,7 @@
 import { prisma } from '../config/database.js';
 import { Prisma } from '@prisma/client';
 import { mapSeekerJob } from './seekerJobs.service.js';
-import { normalizeSkills } from '../utils/skillNormalization.js';
+import { calculateSkillMatch, normalizeSkills } from '../utils/skillNormalization.js';
 import { hasEntitlement } from './subscriptionEntitlement.service.js';
 import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
 

@@ -11,3 +11,15 @@ export const normalizeSkills = (skills = []) => {
     return normalized;
   }, []);
 };
+
+export const calculateSkillMatch = (candidateSkills = [], jobSkills = []) => {
+  const normalizedJobSkills = normalizeSkills(jobSkills);
+  const candidateSkillKeys = new Set(normalizeSkills(candidateSkills).map((skill) => skill.key));
+  const matchedSkills = normalizedJobSkills.filter((skill) => candidateSkillKeys.has(skill.key));
+
+  return {
+    score: normalizedJobSkills.length ? Math.round((matchedSkills.length / normalizedJobSkills.length) * 100) : null,
+    matchedSkills: matchedSkills.map((skill) => skill.display),
+    totalJobSkills: normalizedJobSkills.length,
+  };
+};

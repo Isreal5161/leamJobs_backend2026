@@ -16,20 +16,25 @@ const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JW
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 
-const candidate = (id, priority, entitlements = [], overrides = {}) => ({
-  id,
-  firstName: 'Ada',
-  lastName: 'Lovelace',
-  professionalTitle: 'Software Engineer',
-  bio: 'Builds reliable systems.',
-  location: 'Lagos',
-  skills: ['JavaScript'],
-  profilePictureUrl: null,
-  priority,
-  featured: entitlements.includes('FEATURED_CANDIDATE'),
-  visibilityBoosted: entitlements.includes('PROFILE_VISIBILITY_BOOST'),
-  ...overrides,
-});
+const candidate = (id, priority, entitlements = [], overrides = {}) => {
+  const visibilityBoosted = entitlements.some((key) => ['PROFILE_VISIBILITY_BOOST', 'FEATURED_CANDIDATE'].includes(key));
+  return {
+    id,
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    professionalTitle: 'Software Engineer',
+    bio: 'Builds reliable systems.',
+    location: 'Lagos',
+    skills: ['JavaScript'],
+    profilePictureUrl: null,
+    priority,
+    availability: 'AVAILABLE_NOW',
+    subscriptionTier: priority === 2 ? 'PREMIUM' : priority === 1 ? 'PROFESSIONAL' : 'BASIC',
+    featured: visibilityBoosted,
+    visibilityBoosted,
+    ...overrides,
+  };
+};
 
 const sqlText = () => mockPrisma.$queryRaw.mock.calls[0][0].strings.join(' ');
 
@@ -63,13 +68,14 @@ describe('Employer candidate discovery', () => {
     expect(sqlText()).toContain('u."role" = \'SEEKER\'');
     expect(sqlText()).toContain('u."isActive" = true');
     expect(sqlText()).toContain('INNER JOIN "SeekerProfile" sp');
+    expect(sqlText()).toContain('sp."availability"');
     expect(sqlText()).not.toContain('u."isVerified" = true');
   });
 
-  test('resolves active entitlement priority through the full relation', async () => {
+  test('maps the backend boost field to both employer badges', async () => {
     mockPrisma.$queryRaw.mockResolvedValue([
-      candidate('premium', 2, ['PROFILE_VISIBILITY_BOOST', 'FEATURED_CANDIDATE']),
-      candidate('professional', 1, ['PROFILE_VISIBILITY_BOOST']),
+      candidate('premium', 2, ['PROFILE_VISIBILITY_BOOST']),
+      candidate('professional', 1, ['PROFESSIONAL_CANDIDATE_VISIBILITY']),
       candidate('free', 0),
     ]);
 
@@ -79,15 +85,34 @@ describe('Employer candidate discovery', () => {
 
     expect(response.body.data.candidates.map(({ id }) => id)).toEqual(['premium', 'professional', 'free']);
     expect(response.body.data.candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'premium', featured: true, visibilityBoosted: true }),
-      expect.objectContaining({ id: 'professional', featured: false, visibilityBoosted: true }),
-      expect.objectContaining({ id: 'free', featured: false, visibilityBoosted: false }),
+      expect.objectContaining({ id: 'premium', subscriptionTier: 'PREMIUM', featured: true, visibilityBoosted: true }),
+      expect.objectContaining({ id: 'professional', subscriptionTier: 'PROFESSIONAL', featured: false, visibilityBoosted: false }),
+      expect.objectContaining({ id: 'free', subscriptionTier: 'BASIC', featured: false, visibilityBoosted: false }),
     ]));
     expect(sqlText()).toContain('s."status" = \'ACTIVE\'');
     expect(sqlText()).toContain('INNER JOIN "SubscriptionPlan" spn');
     expect(sqlText()).toContain('INNER JOIN "PlanEntitlement" pe');
     expect(sqlText()).toContain('INNER JOIN "Entitlement" e');
     expect(sqlText()).toContain('e."key" IN');
+    expect(sqlText()).toContain('sp."availability"');
+  });
+
+  test('builds a single Premium-only visibility priority from the canonical entitlement', async () => {
+    await request(app)
+      .get('/api/employer/candidates')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    const query = sqlText();
+    expect(query).toMatch(/WHEN e\."key" IN\s*\([^)]*PROFILE_VISIBILITY_BOOST[^)]*FEATURED_CANDIDATE[^)]*\) THEN 2[\s\S]*WHEN e\."key" = 'PROFESSIONAL_CANDIDATE_VISIBILITY' THEN 1[\s\S]*ELSE 0/);
+    expect(query).toContain('BOOL_OR(e."key" IN');
+    expect(query).toContain('PROFILE_VISIBILITY_BOOST');
+    expect(query).toContain('FEATURED_CANDIDATE');
+    expect(query).toContain('AS "subscriptionTier"');
+    expect(query).not.toContain('AS "featured"');
+    expect(query).toContain('WHERE e."isActive" = true');
+    expect(query).toContain('s."status" = \'ACTIVE\'');
+    expect(query).toContain('trial."status" = \'ACTIVE\'');
+    expect(query).toContain('ORDER BY COALESCE(ce."priority", 0) DESC, u."id" ASC');
   });
 
   test.each(['PENDING', 'EXPIRED', 'CANCELLED', 'FAILED'])('does not grant %s subscriptions priority', async () => {
@@ -95,7 +120,7 @@ describe('Employer candidate discovery', () => {
     const response = await request(app)
       .get('/api/employer/candidates')
       .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
-    expect(response.body.data.candidates[0]).toMatchObject({ featured: false, visibilityBoosted: false });
+    expect(response.body.data.candidates[0]).toMatchObject({ subscriptionTier: 'BASIC', featured: false, visibilityBoosted: false });
     expect(sqlText()).toContain('s."status" = \'ACTIVE\'');
   });
 
@@ -103,7 +128,7 @@ describe('Employer candidate discovery', () => {
     mockPrisma.$queryRaw.mockResolvedValue([
       candidate('featured-a', 2, ['FEATURED_CANDIDATE']),
       candidate('featured-b', 2, ['FEATURED_CANDIDATE']),
-      candidate('visibility-a', 1, ['PROFILE_VISIBILITY_BOOST']),
+      candidate('premium-c', 2, ['PROFILE_VISIBILITY_BOOST']),
     ]);
 
     const first = await request(app)
@@ -113,23 +138,36 @@ describe('Employer candidate discovery', () => {
     expect(first.body.data.candidates.map(({ id }) => id)).toEqual(['featured-a', 'featured-b']);
     expect(first.body.data.pagination).toMatchObject({ limit: 2, hasMore: true });
     expect(first.body.data.pagination.nextCursor).toEqual(expect.any(String));
+    expect(JSON.parse(Buffer.from(first.body.data.pagination.nextCursor, 'base64url').toString('utf8'))).toEqual({ priority: 2, id: 'featured-b' });
     expect(sqlText()).toContain('ORDER BY COALESCE(ce."priority", 0) DESC, u."id" ASC');
     expect(sqlText()).toContain('LIMIT');
 
     mockPrisma.$queryRaw.mockResolvedValue([
-      candidate('visibility-a', 1, ['PROFILE_VISIBILITY_BOOST']),
-      candidate('normal-a', 0),
+      candidate('premium-c', 2, ['PROFILE_VISIBILITY_BOOST']),
+      candidate('professional-a', 1, ['PROFESSIONAL_CANDIDATE_VISIBILITY']),
+      candidate('professional-b', 1, ['PROFESSIONAL_CANDIDATE_VISIBILITY']),
     ]);
     const second = await request(app)
       .get(`/api/employer/candidates?limit=2&cursor=${first.body.data.pagination.nextCursor}`)
       .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
 
-    expect(second.body.data.candidates.map(({ id }) => id)).toEqual(['visibility-a', 'normal-a']);
+    expect(second.body.data.candidates.map(({ id }) => id)).toEqual(['premium-c', 'professional-a']);
+    expect(JSON.parse(Buffer.from(second.body.data.pagination.nextCursor, 'base64url').toString('utf8'))).toEqual({ priority: 1, id: 'professional-a' });
+    expect(second.body.data.candidates[1]).toMatchObject({ subscriptionTier: 'PROFESSIONAL', featured: false, visibilityBoosted: false });
+
+    mockPrisma.$queryRaw.mockResolvedValue([candidate('professional-b', 1, ['PROFESSIONAL_CANDIDATE_VISIBILITY']), candidate('basic-a', 0)]);
+    const third = await request(app)
+      .get(`/api/employer/candidates?limit=2&cursor=${second.body.data.pagination.nextCursor}`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    expect(third.body.data.candidates.map(({ id }) => id)).toEqual(['professional-b', 'basic-a']);
+    expect(third.body.data.pagination).toMatchObject({ hasMore: false, nextCursor: null });
     expect(new Set([
       ...first.body.data.candidates.map(({ id }) => id),
       ...second.body.data.candidates.map(({ id }) => id),
-    ]).size).toBe(4);
-    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(2);
+      ...third.body.data.candidates.map(({ id }) => id),
+    ]).size).toBe(6);
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(3);
   });
 
   test('supports search, location, and skill filters in the database query', async () => {
@@ -139,6 +177,15 @@ describe('Employer candidate discovery', () => {
     expect(response.status).toBe(200);
     expect(sqlText()).toContain('ILIKE');
     expect(sqlText()).toContain('ANY(sp."skills")');
+  });
+
+  test.each(['0', '51'])('rejects candidate page limit %s outside the supported range', async (limit) => {
+    const response = await request(app)
+      .get(`/api/employer/candidates?limit=${limit}`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
   });
 
   test('keeps the employer response privacy-safe', async () => {
@@ -168,6 +215,8 @@ describe('Employer candidate discovery', () => {
       },
       visibilityBoosted: false,
       featured: false,
+      subscriptionTier: 'BASIC',
+      availability: 'AVAILABLE_NOW',
     });
   });
 
@@ -182,5 +231,11 @@ describe('Employer candidate discovery', () => {
       .get('/api/employer/candidates?sort=featured')
       .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
     expect(unknownQuery.status).toBe(400);
+
+    const clientPriority = await request(app)
+      .get('/api/employer/candidates?featured=true&visibilityBoosted=true&priority=2&plan=PREMIUM&planKey=PREMIUM&tier=PROFESSIONAL&subscriptionTier=PREMIUM&availability=AVAILABLE_NOW&jobFitScore=100')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+    expect(clientPriority.status).toBe(400);
+    expect(mockPrisma.$queryRaw).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,7 @@ const createUserRecord = (overrides = {}) => ({
     city: 'Ikeja',
     professionalTitle: 'Frontend Developer',
     location: 'Ikeja, Lagos, Nigeria',
+    availability: 'NOT_AVAILABLE',
     skills: ['React', 'TypeScript'],
     languages: [{ id: 'language-1', name: 'English', proficiency: 'Professional' }],
     projects: [{ id: 'project-1', name: 'LeamJobs', description: '', technologies: [], projectUrl: '', githubUrl: '', startDate: '', endDate: '' }],
@@ -79,6 +80,7 @@ describe('seeker profile onboarding endpoints', () => {
       city: 'Ikeja',
       professionalTitle: 'Frontend Developer',
       skills: ['React', 'TypeScript'],
+      availability: 'NOT_AVAILABLE',
       languages: [{ name: 'English', proficiency: 'Professional' }],
       projects: [{ name: 'LeamJobs' }],
     });
@@ -156,6 +158,89 @@ describe('seeker profile onboarding endpoints', () => {
     expect(response.body.message).toBe('Validation failed');
   });
 
+  test('PATCH /api/seeker/profile rejects client-controlled subscription and matching presentation fields', async () => {
+    const response = await request(app)
+      .patch('/api/seeker/profile')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({
+        availability: 'AVAILABLE_NOW',
+        subscriptionTier: 'PREMIUM',
+        planKey: 'PREMIUM',
+        featured: true,
+        visibilityBoosted: true,
+        jobFitScore: 100,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe('Validation failed');
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test.each(['AVAILABLE_NOW', 'AVAILABLE_SOON', 'NOT_AVAILABLE'])('seeker can set availability to %s without changing other profile fields', async (availability) => {
+    mockPrisma.seekerProfile.upsert.mockResolvedValue({
+      id: 'profile-1',
+      country: 'Nigeria',
+      state: 'Lagos',
+      city: 'Ikeja',
+      professionalTitle: 'Frontend Developer',
+      location: 'Ikeja, Lagos, Nigeria',
+      skills: ['React', 'TypeScript'],
+      availability,
+    });
+
+    const response = await request(app)
+      .patch('/api/seeker/profile')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ availability });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.availability).toBe(availability);
+    expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: seekerId },
+      update: expect.objectContaining({ availability }),
+      create: expect.objectContaining({ userId: seekerId, availability }),
+    }));
+    expect(mockPrisma.seekerProfile.upsert.mock.calls.at(-1)[0].update).not.toHaveProperty('skills');
+    expect(mockPrisma.seekerProfile.upsert.mock.calls.at(-1)[0].update).not.toHaveProperty('location');
+  });
+
+  test('PATCH /api/seeker/profile rejects invalid availability', async () => {
+    const response = await request(app)
+      .patch('/api/seeker/profile')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ availability: 'IMMEDIATE' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe('Validation failed');
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('employers cannot modify seeker availability', async () => {
+    const response = await request(app)
+      .patch('/api/seeker/profile')
+      .set('Authorization', `Bearer ${createToken('EMPLOYER')}`)
+      .send({ availability: 'AVAILABLE_NOW' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  test('a seeker availability update is scoped to the authenticated seeker id', async () => {
+    mockPrisma.seekerProfile.upsert.mockResolvedValue({ id: 'profile-1', availability: 'AVAILABLE_NOW' });
+    await request(app)
+      .patch('/api/seeker/profile')
+      .set('Authorization', `Bearer ${createToken('SEEKER', otherSeekerId)}`)
+      .send({ availability: 'AVAILABLE_NOW' });
+
+    expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: otherSeekerId },
+      create: expect.objectContaining({ userId: otherSeekerId }),
+    }));
+    expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: seekerId },
+    }));
+  });
+
   test('PATCH /api/seeker/profile rejects empty or invalid onboarding values', async () => {
     const response = await request(app)
       .patch('/api/seeker/profile')
@@ -203,6 +288,7 @@ describe('seeker profile onboarding endpoints', () => {
     });
     expect(response.body.data.profile).toEqual({
       id: null,
+      availability: 'NOT_AVAILABLE',
       country: null,
       state: null,
       city: null,
@@ -256,6 +342,7 @@ describe('seeker profile onboarding endpoints', () => {
       professionalTitle: 'Frontend Developer',
       location: 'Ikeja, Lagos, Nigeria',
       skills: ['React', 'TypeScript'],
+      availability: 'NOT_AVAILABLE',
     });
 
     expect(mockPrisma.seekerProfile.upsert).toHaveBeenCalledTimes(1);

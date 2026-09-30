@@ -12,6 +12,7 @@ process.env.R2_ACCESS_KEY_ID = 'test-key-id';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
+  $queryRaw: jest.fn(),
   application: {
     findMany: jest.fn(),
     count: jest.fn(),
@@ -78,6 +79,7 @@ const profile = {
   profilePictureUrl: '/api/seeker/profile/picture',
   country: 'Nigeria', state: 'Lagos', city: 'Lagos', location: 'Lagos, Nigeria',
   bio: 'Builds accessible products.', skills: ['React', 'TypeScript'],
+  availability: 'AVAILABLE_SOON',
   education: [{ id: 'education-1', degree: 'BSc', school: 'University', year: '2024' }],
   experience: [{ id: 'experience-1', jobTitle: 'Engineer', company: 'Acme', description: 'Built products.' }],
   certifications: [{ id: 'certification-1', name: 'AWS', issuer: 'Amazon' }],
@@ -99,7 +101,7 @@ const detailApplication = (overrides = {}) => ({
   createdAt: new Date('2026-09-10T10:00:00.000Z'),
   updatedAt: new Date('2026-09-10T10:00:00.000Z'),
   seeker,
-  job: { id: jobA, title: 'Frontend Engineer', employerId: employerA },
+  job: { id: jobA, title: 'Frontend Engineer', employerId: employerA, skills: ['React', 'TypeScript', 'Node.js'] },
   ...overrides,
 });
 
@@ -119,6 +121,7 @@ const conversation = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.$queryRaw.mockResolvedValue([]);
   mockPrisma.application.findMany.mockResolvedValue([]);
   mockPrisma.application.count.mockResolvedValue(0);
   mockPrisma.application.findFirst.mockResolvedValue(null);
@@ -173,6 +176,83 @@ describe('Employer Applications authorization and privacy', () => {
     expect(response.body.data.applications[0].applicant).not.toHaveProperty('id');
     expect(response.body.data.applications[0].applicant).not.toHaveProperty('email');
     expect(mockPrisma.application.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { jobId: jobA, job: { employerId: employerA } } }));
+    expect(mockPrisma.application.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    }));
+  });
+
+  test('returns server-calculated job fit for the specific employer job', async () => {
+    mockPrisma.application.findMany.mockResolvedValue([detailApplication()]);
+    mockPrisma.application.count.mockResolvedValue(1);
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.applications[0].applicant.jobFitScore).toBe(67);
+    expect(response.body.data.applications[0].applicant.availability).toBe('AVAILABLE_SOON');
+    expect(mockPrisma.application.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ job: { select: expect.objectContaining({ skills: true }) } }),
+    }));
+  });
+
+  test('job fit uses unique normalized job skills and is independent of subscription and availability', async () => {
+    const normalizedProfile = {
+      ...profile,
+      skills: [' React ', 'react', 'NODE.JS', 'TypeScript', ' node.js '],
+    };
+    const normalizedApplication = detailApplication({
+      seeker: { ...seeker, seekerProfile: normalizedProfile },
+      job: { id: jobA, title: 'Frontend Engineer', employerId: employerA, skills: ['React', ' react ', 'Node.js', 'SQL', ' sql '] },
+    });
+    const scenarios = [
+      { subscriptionTier: 'BASIC', visibilityBoosted: false, availability: 'AVAILABLE_NOW' },
+      { subscriptionTier: 'PROFESSIONAL', visibilityBoosted: false, availability: 'AVAILABLE_SOON' },
+      { subscriptionTier: 'PREMIUM', visibilityBoosted: true, availability: 'NOT_AVAILABLE' },
+    ];
+    const scores = [];
+
+    for (const presentation of scenarios) {
+      const applicationForPresentation = detailApplication({
+        ...normalizedApplication,
+        seeker: {
+          ...normalizedApplication.seeker,
+          seekerProfile: { ...normalizedProfile, availability: presentation.availability },
+        },
+      });
+      mockPrisma.application.findMany.mockResolvedValue([applicationForPresentation]);
+      mockPrisma.application.count.mockResolvedValue(1);
+      mockPrisma.$queryRaw.mockResolvedValue([{ id: seekerA, ...presentation }]);
+
+      const response = await request(app)
+        .get(`/api/employer/jobs/${jobA}/applications`)
+        .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+      const applicant = response.body.data.applications[0].applicant;
+      scores.push(applicant.jobFitScore);
+      expect(applicant).toMatchObject({
+        subscriptionTier: presentation.subscriptionTier,
+        availability: presentation.availability,
+        jobFitScore: 67,
+      });
+      expect(applicant.jobFitScore).toBeGreaterThanOrEqual(0);
+      expect(applicant.jobFitScore).toBeLessThanOrEqual(100);
+    }
+
+    expect(scores).toEqual([67, 67, 67]);
+  });
+
+  test('returns null job fit when the authoritative job has no skills', async () => {
+    mockPrisma.application.findMany.mockResolvedValue([detailApplication({ job: { id: jobA, title: 'Frontend Engineer', employerId: employerA, skills: [] } })]);
+    mockPrisma.application.count.mockResolvedValue(1);
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.applications[0].applicant.jobFitScore).toBeNull();
   });
 
   test('Employer B cannot access Employer A application detail', async () => {
@@ -192,7 +272,8 @@ describe('Employer Applications authorization and privacy', () => {
       .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data.application.applicant).toMatchObject({ fullName: 'Ada Lovelace', professionalTitle: 'Frontend Engineer', skills: ['React', 'TypeScript'] });
+    expect(response.body.data.application.applicant).toMatchObject({ fullName: 'Ada Lovelace', professionalTitle: 'Frontend Engineer', skills: ['React', 'TypeScript'], jobFitScore: 67 });
+    expect(response.body.data.application.applicant.availability).toBe('AVAILABLE_SOON');
     expect(response.body.data.application).toHaveProperty('coverLetter');
     expect(response.body.data.application).not.toHaveProperty('passwordHash');
     expect(response.body.data.application).not.toHaveProperty('wallet');
@@ -200,6 +281,27 @@ describe('Employer Applications authorization and privacy', () => {
     expect(response.body.data.application).not.toHaveProperty('phone');
     expect(response.body.data.application).not.toHaveProperty('resumeObjectKey');
     expect(response.body.data.application.applicant.profilePictureUrl).toBe('/api/seeker/profile/picture');
+  });
+
+  test('application applicant receives the current server-derived subscription presentation', async () => {
+    mockPrisma.application.findMany.mockResolvedValue([detailApplication()]);
+    mockPrisma.application.count.mockResolvedValue(1);
+    mockPrisma.$queryRaw.mockResolvedValue([{ id: seekerA, subscriptionTier: 'PREMIUM', visibilityBoosted: true, availability: 'AVAILABLE_SOON' }]);
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+    expect(response.body.data.applications[0].applicant).toMatchObject({
+      subscriptionTier: 'PREMIUM',
+      featured: true,
+      visibilityBoosted: true,
+      jobFitScore: 67,
+      availability: 'AVAILABLE_SOON',
+    });
+    const query = mockPrisma.$queryRaw.mock.calls[0][0].strings.join(' ');
+    expect(query).toContain('s."status" = \'ACTIVE\'');
+    expect(query).toContain('trial."status" = \'ACTIVE\'');
   });
 });
 
@@ -211,7 +313,16 @@ describe('Employer Application status and CV access', () => {
     const response = await request(app)
       .patch(`/api/employer/jobs/${jobA}/applications/${applicationA}/status`)
       .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
-      .send({ status: 'SHORTLISTED', jobId: jobB, seekerId: employerB });
+      .send({
+        status: 'SHORTLISTED',
+        jobId: jobB,
+        seekerId: employerB,
+        availability: 'AVAILABLE_NOW',
+        subscriptionTier: 'PREMIUM',
+        featured: true,
+        visibilityBoosted: true,
+        jobFitScore: 100,
+      });
 
     expect(response.status).toBe(400);
     expect(mockPrisma.application.update).not.toHaveBeenCalled();
@@ -223,6 +334,17 @@ describe('Employer Application status and CV access', () => {
 
     expect(validResponse.status).toBe(200);
     expect(mockPrisma.application.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: applicationA }, data: { status: 'SHORTLISTED' } }));
+  });
+
+  test('rejects a client-provided jobFitScore before looking up or mutating the application', async () => {
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobA}/applications/${applicationA}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send({ status: 'SHORTLISTED', jobFitScore: 100 });
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.application.findFirst).not.toHaveBeenCalled();
+    expect(mockPrisma.application.update).not.toHaveBeenCalled();
   });
 
   test('invalid status is rejected before database mutation', async () => {

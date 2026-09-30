@@ -59,6 +59,18 @@ describe('subscription entitlement enforcement', () => {
     await expect(hasEntitlement('user-1', 'FEATURED_CANDIDATE')).resolves.toBe(false);
   });
 
+  test('active professional grants Professional candidate visibility but not Premium visibility', async () => {
+    mockPrisma.subscription.findFirst.mockResolvedValue({
+      id: 'sub-professional',
+      userId: 'user-professional',
+      status: 'ACTIVE',
+      plan: { entitlements: [{ entitlement: { key: 'PROFESSIONAL_CANDIDATE_VISIBILITY' } }] },
+    });
+
+    await expect(hasEntitlement('user-professional', 'PROFESSIONAL_CANDIDATE_VISIBILITY')).resolves.toBe(true);
+    await expect(hasEntitlement('user-professional', 'PROFILE_VISIBILITY_BOOST')).resolves.toBe(false);
+  });
+
   test('active entitlement lookup requires a currently valid date window', async () => {
     const now = new Date();
     mockPrisma.subscription.findFirst.mockResolvedValue(null);

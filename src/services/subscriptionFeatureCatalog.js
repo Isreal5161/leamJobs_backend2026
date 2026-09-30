@@ -37,6 +37,7 @@ export const subscriptionEntitlements = [
   { key: 'CAREER_RECOMMENDATIONS', displayName: 'Career recommendations', description: 'Receive personalized career recommendations.' },
   { key: 'PRIORITY_RECOMMENDATIONS', displayName: 'Priority recommendations', description: 'Receive prioritized job recommendations.' },
   { key: 'SALARY_CAREER_INSIGHTS', displayName: 'Salary/career insights', description: 'Access salary and career market insights.' },
+  { key: 'PROFESSIONAL_CANDIDATE_VISIBILITY', displayName: 'Professional candidate visibility', description: 'Show a Professional presentation and improved prominence in employer candidate discovery.' },
   { key: 'PROFILE_VISIBILITY_BOOST', displayName: 'Profile visibility boost', description: 'Improve profile visibility in candidate discovery.' },
   { key: 'PREMIUM_SUPPORT', displayName: 'Premium support', description: 'Access priority support assistance.' },
 ];

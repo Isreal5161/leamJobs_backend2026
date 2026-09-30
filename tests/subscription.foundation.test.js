@@ -24,11 +24,15 @@ test('defines unique monthly Basic, Professional, and Premium plans with stable 
 
   expect(subscriptionPlans.map((plan) => plan.key)).toEqual(['BASIC', 'PROFESSIONAL', 'PREMIUM']);
   expect(new Set(subscriptionEntitlements.map((entitlement) => entitlement.key)).size).toBe(subscriptionEntitlements.length);
+  expect(subscriptionPlans.find((plan) => plan.key === 'BASIC').entitlementKeys).not.toContain('PROFESSIONAL_CANDIDATE_VISIBILITY');
+  expect(subscriptionPlans.find((plan) => plan.key === 'PROFESSIONAL').entitlementKeys).toContain('PROFESSIONAL_CANDIDATE_VISIBILITY');
+  expect(subscriptionPlans.find((plan) => plan.key === 'PREMIUM').entitlementKeys).toContain('PROFILE_VISIBILITY_BOOST');
+  expect(subscriptionPlans.find((plan) => plan.key === 'PREMIUM').entitlementKeys).not.toContain('PROFESSIONAL_CANDIDATE_VISIBILITY');
   expect(subscriptionPlans.every((plan) => plan.billingInterval === 'MONTHLY')).toBe(true);
   expect(subscriptionPlans.every((plan) => plan.price === null && plan.currency === null)).toBe(true);
   expect(Object.keys(result.plans)).toEqual(['BASIC', 'PROFESSIONAL', 'PREMIUM']);
   expect(mockPrisma.subscriptionPlan.upsert).toHaveBeenCalledTimes(3);
-  expect(mockPrisma.planEntitlement.upsert).toHaveBeenCalledTimes(48);
+  expect(mockPrisma.planEntitlement.upsert).toHaveBeenCalledTimes(49);
 });
 
 test('records subscription lifecycle events without payment or entitlement side effects', async () => {

@@ -3,6 +3,8 @@ import { prisma } from '../config/database.js';
 import { readObject } from './storage/storage.service.js';
 import { getActivePlatformFeePercentage } from './platformFee.service.js';
 import { createNotification } from './notification.service.js';
+import { calculateSkillMatch } from '../utils/skillNormalization.js';
+import { getEmployerCandidateSubscriptionTiers } from './employerCandidates.service.js';
 
 const applicationStatuses = ['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'REJECTED', 'ACCEPTED', 'WITHDRAWN'];
 
@@ -62,6 +64,7 @@ const applicantSelect = {
       location: true,
       bio: true,
       skills: true,
+      availability: true,
       education: true,
       experience: true,
       certifications: true,
@@ -82,7 +85,7 @@ const listSelect = {
   updatedAt: true,
   contract: { select: { id: true } },
   seeker: { select: applicantSelect },
-  job: { select: { id: true, title: true, employerId: true } },
+  job: { select: { id: true, title: true, employerId: true, skills: true } },
 };
 
 const detailSelect = {
@@ -98,7 +101,7 @@ const detailSelect = {
   updatedAt: true,
   contract: { select: { id: true } },
   seeker: { select: applicantSelect },
-  job: { select: { id: true, title: true, employerId: true } },
+  job: { select: { id: true, title: true, employerId: true, skills: true } },
   cvSnapshot: {
     select: {
       id: true,
@@ -120,8 +123,10 @@ const assertStatus = (status) => {
   }
 };
 
-const mapApplicant = (seeker) => {
+const mapApplicant = (seeker, jobSkills, subscription = {}) => {
   const profile = seeker.seekerProfile;
+  const jobFitScore = calculateSkillMatch(profile?.skills ?? [], jobSkills ?? []).score;
+  const visibilityBoosted = Boolean(subscription.visibilityBoosted);
   return {
     id: seeker.id,
     firstName: seeker.firstName,
@@ -137,6 +142,11 @@ const mapApplicant = (seeker) => {
     city: profile?.city ?? null,
     bio: profile?.bio ?? null,
     skills: profile?.skills ?? [],
+    availability: profile?.availability ?? 'NOT_AVAILABLE',
+    subscriptionTier: subscription.subscriptionTier ?? 'BASIC',
+    featured: visibilityBoosted,
+    visibilityBoosted,
+    jobFitScore,
     education: profile?.education ?? null,
     experience: profile?.experience ?? null,
     certifications: profile?.certifications ?? null,
@@ -147,8 +157,8 @@ const mapApplicant = (seeker) => {
   };
 };
 
-const mapApplicationListItem = (application) => {
-  const { id, ...applicant } = mapApplicant(application.seeker);
+const mapApplicationListItem = (application, subscription) => {
+  const { id, ...applicant } = mapApplicant(application.seeker, application.job.skills, subscription);
   return {
     id: application.id,
     jobId: application.jobId,
@@ -161,7 +171,7 @@ const mapApplicationListItem = (application) => {
   };
 };
 
-const mapApplicationDetail = (application) => {
+const mapApplicationDetail = (application, subscription) => {
   const snapshot = application.cvSnapshot ?? null;
   const source = snapshot
     ? 'template'
@@ -200,8 +210,13 @@ const mapApplicationDetail = (application) => {
       id: application.job.id,
       title: application.job.title,
     },
-    applicant: mapApplicant(application.seeker),
+    applicant: mapApplicant(application.seeker, application.job.skills, subscription),
   };
+};
+
+const mapApplicationDetailWithSubscription = async (application) => {
+  const subscriptionTiers = await getEmployerCandidateSubscriptionTiers([application.seeker.id]);
+  return mapApplicationDetail(application, subscriptionTiers.get(application.seeker.id));
 };
 
 const ownedApplicationWhere = (employerId, jobId, applicationId) => ({
@@ -227,10 +242,11 @@ export const listEmployerApplications = async (employerId, jobId, { page = 1, li
     }),
     prisma.application.count({ where }),
   ]);
+  const subscriptionTiers = await getEmployerCandidateSubscriptionTiers(applications.map(({ seeker }) => seeker.id));
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
   return {
-    applications: applications.map(mapApplicationListItem),
+    applications: applications.map((application) => mapApplicationListItem(application, subscriptionTiers.get(application.seeker.id))),
     pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
   };
 };
@@ -238,7 +254,7 @@ export const listEmployerApplications = async (employerId, jobId, { page = 1, li
 export const getEmployerApplication = async (employerId, jobId, applicationId) => {
   const application = await findOwnedApplication(employerId, jobId, applicationId);
   if (!application) throw new EmployerApplicationNotFoundError();
-  return mapApplicationDetail(application);
+  return mapApplicationDetailWithSubscription(application);
 };
 
 export const getEmployerApplicationProfilePicture = async (employerId, jobId, applicationId) => {
@@ -273,7 +289,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         link: '/seeker/applications',
       }).catch(() => undefined);
     }
-    return mapApplicationDetail(updated);
+    return mapApplicationDetailWithSubscription(updated);
   }
 
   return prisma.$transaction(async (transaction) => {
@@ -331,7 +347,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         link: `/seeker/applications`,
       }, transaction).catch(() => undefined);
 
-      return mapApplicationDetail(updated);
+      return mapApplicationDetailWithSubscription(updated);
     }
 
     if (!application.job.freelanceCompensation) {
@@ -343,7 +359,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         where: { id: application.id },
         select: detailSelect,
       });
-      return mapApplicationDetail(existing);
+      return mapApplicationDetailWithSubscription(existing);
     }
 
     const agreedAmount = new Prisma.Decimal(application.job.freelanceCompensation.projectAmount);
@@ -381,13 +397,13 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
       select: detailSelect,
     });
 
-    return mapApplicationDetail(updated);
+    return mapApplicationDetailWithSubscription(updated);
   }).catch(async (error) => {
     if (error?.code !== 'P2002') throw error;
 
     const existing = await findOwnedApplication(employerId, jobId, applicationId, detailSelect);
     if (!existing?.contract) throw error;
-    return mapApplicationDetail(existing);
+    return mapApplicationDetailWithSubscription(existing);
   });
 };
 

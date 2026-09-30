@@ -25,6 +25,7 @@ const profileSelect = {
   resumeObjectKey: true,
   profilePictureUrl: true,
   profilePictureKey: true,
+  availability: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -147,6 +148,7 @@ export const getSeekerProfileForUser = async (userId) => {
     professionalTitle: profile.professionalTitle,
     location: profile.location,
     skills: profile.skills ?? [],
+    availability: profile.availability ?? 'NOT_AVAILABLE',
     bio: profile.bio ?? null,
     education: profile.education ?? null,
     experience: profile.experience ?? null,
@@ -165,6 +167,7 @@ export const getSeekerProfileForUser = async (userId) => {
     professionalTitle: null,
     location: null,
     skills: [],
+    availability: 'NOT_AVAILABLE',
     bio: null,
     education: null,
     experience: null,
@@ -210,27 +213,31 @@ export const upsertSeekerProfileForUser = async (userId, payload) => {
     });
   }
 
-  const normalizedPayload = {
+  const hasProfileDetails = ['country', 'state', 'city', 'professionalTitle', 'skills']
+    .some((field) => payload[field] !== undefined);
+  const normalizedPayload = hasProfileDetails ? {
     country: payload.country?.trim() || null,
     state: payload.state?.trim() || null,
     city: payload.city?.trim() || null,
     professionalTitle: payload.professionalTitle?.trim() || null,
     skills: normalizeSkills(payload.skills),
-  };
-
-  const location = formatLocation(normalizedPayload);
+  } : {};
+  const location = hasProfileDetails ? formatLocation(normalizedPayload) : undefined;
+  const availability = payload.availability;
 
   const profile = await prisma.seekerProfile.upsert({
     where: { userId },
     update: {
       ...normalizedPayload,
-      location,
+      ...(availability !== undefined ? { availability } : {}),
+      ...(hasProfileDetails ? { location } : {}),
       updatedAt: new Date(),
     },
     create: {
       userId,
       ...normalizedPayload,
-      location,
+      ...(availability !== undefined ? { availability } : {}),
+      ...(hasProfileDetails ? { location } : {}),
     },
     select: profileSelect,
   });
@@ -243,6 +250,7 @@ export const upsertSeekerProfileForUser = async (userId, payload) => {
     professionalTitle: profile.professionalTitle,
     location: profile.location,
     skills: profile.skills ?? [],
+    availability: profile.availability ?? 'NOT_AVAILABLE',
     bio: profile.bio ?? null,
     education: profile.education ?? null,
     experience: profile.experience ?? null,

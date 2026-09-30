@@ -1,0 +1,4 @@
+CREATE TYPE "SeekerAvailability" AS ENUM ('AVAILABLE_NOW', 'AVAILABLE_SOON', 'NOT_AVAILABLE');
+
+ALTER TABLE "SeekerProfile"
+ADD COLUMN "availability" "SeekerAvailability" NOT NULL DEFAULT 'NOT_AVAILABLE';

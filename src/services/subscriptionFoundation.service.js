@@ -33,8 +33,8 @@ export const subscriptionPlans = [
     aiAllowance: 20,
     aiUnlimited: false,
     featureConfig: { tier: 'professional', ...subscriptionPlanFeatureDefaults.PROFESSIONAL },
-    benefits: ['Advanced job filters', 'Career matching', 'AI CV review', 'AI cover letter', 'Application insights'],
-    entitlementKeys: ['BROWSE_JOBS', 'SEARCH_FILTERS', 'APPLY_FOR_JOBS', 'SAVED_JOBS', 'JOB_ALERTS', 'BASIC_PROFILE', 'CV_UPLOAD', 'APPLICATION_TRACKING', 'PROFILE_STRENGTH', 'AI_CV_REVIEW', 'AI_CV_IMPROVEMENT', 'AI_COVER_LETTER', 'AI_JOB_MATCHING', 'APPLICATION_INSIGHTS', 'CAREER_RECOMMENDATIONS', 'PRIORITY_RECOMMENDATIONS', 'SALARY_CAREER_INSIGHTS'],
+    benefits: ['Advanced job filters', 'Career matching', 'AI CV review', 'AI cover letter', 'Application insights', 'Professional candidate visibility'],
+    entitlementKeys: ['BROWSE_JOBS', 'SEARCH_FILTERS', 'APPLY_FOR_JOBS', 'SAVED_JOBS', 'JOB_ALERTS', 'BASIC_PROFILE', 'CV_UPLOAD', 'APPLICATION_TRACKING', 'PROFILE_STRENGTH', 'AI_CV_REVIEW', 'AI_CV_IMPROVEMENT', 'AI_COVER_LETTER', 'AI_JOB_MATCHING', 'APPLICATION_INSIGHTS', 'CAREER_RECOMMENDATIONS', 'PRIORITY_RECOMMENDATIONS', 'SALARY_CAREER_INSIGHTS', 'PROFESSIONAL_CANDIDATE_VISIBILITY'],
   },
   {
     key: 'PREMIUM',
