@@ -1,4 +1,5 @@
 import {
+  cancelSeekerSubscriptionPayment,
   initializeSeekerSubscriptionCheckout,
   getSeekerTrialOffer,
   listSeekerPlanOptions,
@@ -49,6 +50,18 @@ export const checkoutSubscription = async (req, res, next) => {
       userId: req.user.sub,
       planId: req.validatedBody.planId,
       idempotencyKey: req.validatedBody.idempotencyKey,
+    });
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const cancelSubscriptionPayment = async (req, res, next) => {
+  try {
+    const result = await cancelSeekerSubscriptionPayment({
+      userId: req.user.sub,
+      providerReference: req.validatedBody.providerReference,
     });
     return res.status(200).json({ success: true, data: result });
   } catch (error) {

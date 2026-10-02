@@ -358,6 +358,101 @@ export const initializeSeekerSubscriptionCheckout = async ({ userId, planId, ide
   }
 };
 
+export const cancelSeekerSubscriptionPayment = async ({ userId, providerReference }) => {
+  const result = await prisma.$transaction(async (transaction) => {
+    const paymentWhere = {
+      userId,
+      providerReference,
+      paymentType: 'SUBSCRIPTION',
+      provider: 'FLUTTERWAVE',
+    };
+    const paymentSelectForCancellation = {
+      id: true,
+      userId: true,
+      subscriptionId: true,
+      providerReference: true,
+      status: true,
+      paymentType: true,
+      provider: true,
+      subscription: { select: { id: true, userId: true, status: true } },
+    };
+    const readPayment = () => transaction.payment.findFirst({
+      where: paymentWhere,
+      select: paymentSelectForCancellation,
+    });
+    const payment = await readPayment();
+
+    if (!payment) {
+      throw new SeekerSubscriptionError('Subscription payment record not found', 404);
+    }
+    if (!payment.subscription
+      || payment.subscriptionId !== payment.subscription.id
+      || payment.userId !== userId
+      || payment.subscription.userId !== userId) {
+      console.warn('Subscription payment cancellation binding mismatch', { paymentId: payment.id, reason: 'user_subscription_binding' });
+      throw new SeekerSubscriptionError('This payment is not linked to your subscription', 409);
+    }
+
+    if (payment.status === 'CANCELLED' && payment.subscription.status === 'CANCELLED') {
+      return { status: 'CANCELLED' };
+    }
+    if (payment.status === 'SUCCESSFUL' || payment.subscription.status === 'ACTIVE') {
+      throw new SeekerSubscriptionError('This payment can no longer be cancelled', 409);
+    }
+    if (payment.status !== 'PENDING' || payment.subscription.status !== 'PENDING') {
+      throw new SeekerSubscriptionError('This payment is no longer awaiting cancellation', 409);
+    }
+
+    const cancelledAt = new Date();
+    const subscriptionUpdate = await transaction.subscription.updateMany({
+      where: { id: payment.subscriptionId, userId, status: 'PENDING' },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt,
+        cancellationReason: 'USER_CANCELLED_CHECKOUT',
+      },
+    });
+    if (subscriptionUpdate.count !== 1) {
+      const current = await readPayment();
+      if (current?.status === 'CANCELLED' && current.subscription?.status === 'CANCELLED') {
+        return { status: 'CANCELLED' };
+      }
+      throw new SeekerSubscriptionError('This payment can no longer be cancelled', 409);
+    }
+
+    const paymentUpdate = await transaction.payment.updateMany({
+      where: {
+        id: payment.id,
+        userId,
+        subscriptionId: payment.subscriptionId,
+        providerReference,
+        paymentType: 'SUBSCRIPTION',
+        provider: 'FLUTTERWAVE',
+        status: 'PENDING',
+      },
+      data: { status: 'CANCELLED' },
+    });
+    if (paymentUpdate.count !== 1) {
+      const current = await readPayment();
+      if (current?.status === 'CANCELLED' && current.subscription?.status === 'CANCELLED') {
+        return { status: 'CANCELLED' };
+      }
+      throw new SeekerSubscriptionError('This payment can no longer be cancelled', 409);
+    }
+
+    await recordSubscriptionEvent({
+      subscriptionId: payment.subscriptionId,
+      eventType: 'CANCELLED',
+      providerReference,
+      metadata: { paymentId: payment.id, reason: 'USER_CANCELLED_CHECKOUT' },
+    }, transaction);
+
+    return { status: 'CANCELLED' };
+  });
+
+  return result;
+};
+
 export const verifySeekerSubscriptionPayment = async ({
   userId,
   providerReference,

@@ -316,6 +316,22 @@ test.each(['pending', 'failed'])('stale %s webhook cannot downgrade a successful
   expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
 });
 
+test('stale successful webhook cannot reactivate a cancelled subscription payment', async () => {
+  currentPaymentStatus = 'CANCELLED';
+  currentSubscriptionStatus = 'CANCELLED';
+  mockPrisma.payment.findFirst.mockResolvedValue({
+    ...payment('CANCELLED'),
+    subscription: subscription('CANCELLED'),
+  });
+
+  await expect(handleFlutterwaveWebhook({ payload: payload() })).rejects.toMatchObject({ status: 409 });
+
+  expect(currentPaymentStatus).toBe('CANCELLED');
+  expect(currentSubscriptionStatus).toBe('CANCELLED');
+  expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+  expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalled();
+});
+
 test('contract payment routing ignores webhook metadata and preserves the existing contract handler', async () => {
   mockPrisma.payment.findUnique.mockImplementation(async ({ where }) => (
     where.providerReference === reference || where.transactionId === '123'

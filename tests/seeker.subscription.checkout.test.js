@@ -27,6 +27,7 @@ const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await imp
 const { default: app } = await import('../src/app.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
+const otherSeekerId = '22222222-2222-4222-8222-222222222222';
 const adminId = '99999999-9999-4999-8999-999999999999';
 const planId = '33333333-3333-4333-8333-333333333333';
 const paymentProviderRef = 'leamjobs_sub_123';
@@ -134,6 +135,142 @@ test('non-seeker cannot start a subscription purchase', async () => {
     .send({ planId });
 
   expect(response.status).toBe(403);
+});
+
+test('authenticated seeker can cancel their own pending subscription checkout', async () => {
+  const pending = pendingPayment();
+  mockPrisma.payment.findFirst.mockResolvedValue(pending);
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(200);
+  expect(response.body).toMatchObject({ success: true, data: { status: 'CANCELLED' } });
+  expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: {
+      userId: seekerId,
+      providerReference: paymentProviderRef,
+      paymentType: 'SUBSCRIPTION',
+      provider: 'FLUTTERWAVE',
+    },
+  }));
+  expect(mockPrisma.subscription.updateMany).toHaveBeenCalledWith({
+    where: { id: 'sub-1', userId: seekerId, status: 'PENDING' },
+    data: expect.objectContaining({
+      status: 'CANCELLED',
+      cancelledAt: expect.any(Date),
+      cancellationReason: 'USER_CANCELLED_CHECKOUT',
+    }),
+  });
+  expect(mockPrisma.payment.updateMany).toHaveBeenCalledWith({
+    where: {
+      id: 'payment-1',
+      userId: seekerId,
+      subscriptionId: 'sub-1',
+      providerReference: paymentProviderRef,
+      paymentType: 'SUBSCRIPTION',
+      provider: 'FLUTTERWAVE',
+      status: 'PENDING',
+    },
+    data: { status: 'CANCELLED' },
+  });
+  expect(mockPrisma.subscriptionEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      subscriptionId: 'sub-1',
+      eventType: 'CANCELLED',
+      providerReference: paymentProviderRef,
+    }),
+  }));
+});
+
+test('seeker cannot cancel another user payment and client ownership fields are rejected', async () => {
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+  const otherUserResponse = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', otherSeekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+  expect(otherUserResponse.status).toBe(404);
+  expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ userId: otherSeekerId, providerReference: paymentProviderRef }),
+  }));
+
+  const manipulatedResponse = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef, userId: otherSeekerId, status: 'CANCELLED' });
+  expect(manipulatedResponse.status).toBe(400);
+  expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['successful payment', { status: 'SUCCESSFUL', subscription: { ...pendingPayment().subscription, status: 'ACTIVE' } }],
+  ['active subscription', { subscription: { ...pendingPayment().subscription, status: 'ACTIVE' } }],
+])('%s cannot be cancelled', async (_label, overrides) => {
+  mockPrisma.payment.findFirst.mockResolvedValue(pendingPayment(overrides));
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(409);
+  expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.subscriptionEvent.create).not.toHaveBeenCalled();
+});
+
+test('already cancelled checkout cancellation is idempotent and does not record another event', async () => {
+  mockPrisma.payment.findFirst.mockResolvedValue(pendingPayment({
+    status: 'CANCELLED',
+    subscription: { ...pendingPayment().subscription, status: 'CANCELLED' },
+  }));
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.status).toBe('CANCELLED');
+  expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.subscriptionEvent.create).not.toHaveBeenCalled();
+});
+
+test('concurrent repeat cancellation returns the already-cancelled state without another event', async () => {
+  mockPrisma.payment.findFirst
+    .mockResolvedValueOnce(pendingPayment())
+    .mockResolvedValueOnce(pendingPayment({
+      status: 'CANCELLED',
+      subscription: { ...pendingPayment().subscription, status: 'CANCELLED' },
+    }));
+  mockPrisma.subscription.updateMany.mockResolvedValue({ count: 0 });
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.status).toBe('CANCELLED');
+  expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.subscriptionEvent.create).not.toHaveBeenCalled();
+});
+
+test('cancellation that loses the activation race cannot change payment state', async () => {
+  mockPrisma.payment.findFirst.mockResolvedValue(pendingPayment());
+  mockPrisma.subscription.updateMany.mockResolvedValue({ count: 0 });
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/payment/cancel')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(409);
+  expect(mockPrisma.payment.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.subscriptionEvent.create).not.toHaveBeenCalled();
 });
 
 test('unknown plan is rejected before payment initialization', async () => {

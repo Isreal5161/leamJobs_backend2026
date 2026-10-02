@@ -35,3 +35,16 @@ export const validateSeekerSubscriptionVerification = (req, res, next) => {
   };
   return next();
 };
+
+export const validateSeekerSubscriptionCancellation = (req, res, next) => {
+  const result = z.object({
+    providerReference: z.string().trim().min(1).max(200),
+  }).strict().safeParse(req.body ?? {});
+
+  if (!result.success) {
+    return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });
+  }
+
+  req.validatedBody = result.data;
+  return next();
+};

@@ -43,8 +43,8 @@ import { listSeekerRecommendations } from '../controllers/seekerRecommendations.
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
 import { confirmSeekerContract, getSeekerContract, submitCompletion } from '../controllers/contract.controller.js';
 import { validateCompletionSubmission } from '../validators/contract.validation.js';
-import { checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, startTrial, trialOffer, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
-import { validateSeekerSubscriptionCheckout, validateSeekerSubscriptionVerification } from '../validators/seekerSubscriptions.validation.js';
+import { cancelSubscriptionPayment, checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, startTrial, trialOffer, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
+import { validateSeekerSubscriptionCancellation, validateSeekerSubscriptionCheckout, validateSeekerSubscriptionVerification } from '../validators/seekerSubscriptions.validation.js';
 import { respondToInvitation } from '../controllers/jobInvitation.controller.js';
 import { validateInvitationResponse } from '../validators/jobInvitation.validation.js';
 import { profileAssistant, cvOptimizer, applicationAssistance, generateApplicationCoverLetter } from '../controllers/ai.controller.js';
@@ -119,6 +119,7 @@ seekerRouter.get('/subscriptions', authenticate, requireRole('SEEKER'), listSubs
 seekerRouter.get('/subscriptions/trial', authenticate, requireRole('SEEKER'), trialOffer);
 seekerRouter.post('/subscriptions/trial', authenticate, requireRole('SEEKER'), startTrial);
 seekerRouter.post('/subscriptions/checkout', authenticate, requireRole('SEEKER'), validateSeekerSubscriptionCheckout, checkoutSubscription);
+seekerRouter.post('/subscriptions/payment/cancel', authenticate, requireRole('SEEKER'), validateSeekerSubscriptionCancellation, cancelSubscriptionPayment);
 seekerRouter.post('/subscriptions/verify', authenticate, requireRole('SEEKER'), validateSeekerSubscriptionVerification, verifySubscriptionPayment);
 seekerRouter.post('/ai/profile-assistant', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_PROFILE_ASSISTANT'), validateProfileAssistant, profileAssistant);
 seekerRouter.post('/ai/cv-optimizer', authenticate, requireRole('SEEKER'), aiLimiter, requireEntitlement('AI_CV_OPTIMIZER'), validateCvOptimizer, cvOptimizer);
