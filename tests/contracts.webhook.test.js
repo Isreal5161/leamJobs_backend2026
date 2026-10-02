@@ -74,6 +74,7 @@ const mockPrisma = {
   contract: { findFirst: jest.fn(), findUnique: jest.fn() },
   payment: { findUnique: jest.fn(), update: jest.fn() },
   escrow: { findUnique: jest.fn(), update: jest.fn() },
+  financialLedgerEntry: { createMany: jest.fn() },
   providerWebhookEvent: { create: jest.fn(), update: jest.fn(), delete: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
@@ -102,7 +103,7 @@ beforeEach(() => {
   mockPrisma.providerWebhookEvent.update.mockResolvedValue({});
   mockPrisma.payment.findUnique.mockResolvedValue(payment());
   mockPrisma.payment.update.mockResolvedValue(payment({ status: 'SUCCESSFUL' }));
-  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('100000.00') });
+  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('100000.00'), platformFeeAmount: new Prisma.Decimal('5000.00'), seekerNetAmount: new Prisma.Decimal('95000.00') });
   mockPrisma.escrow.update.mockResolvedValue({});
   mockPrisma.contract.findFirst.mockImplementation(async ({ select }) => select?.applicationId ? fullContract() : {
     id: contractId,
@@ -135,6 +136,36 @@ test('duplicate ProviderWebhookEvent is ignored without a second funding transit
   const result = await handleFlutterwaveWebhook({ payload: webhookPayload() });
   expect(result).toEqual({ duplicate: true });
   expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.financialLedgerEntry.createMany).toHaveBeenCalledTimes(1);
+});
+
+test('additive webhook verifies employer total but funds only the project amount', async () => {
+  mockPrisma.contract.findFirst.mockImplementation(async ({ select }) => select?.applicationId ? fullContract() : {
+    id: contractId,
+    employerId,
+    freelanceDetails: { escrow: { id: escrowId, payments: [payment({ amount: '105000.00' })] } },
+  });
+  mockPrisma.payment.findUnique.mockResolvedValue(payment({ amount: '105000.00' }));
+  mockPrisma.escrow.findUnique.mockResolvedValue({
+    id: escrowId,
+    status: 'UNFUNDED',
+    grossAmount: new Prisma.Decimal('100000.00'),
+    platformFeeAmount: new Prisma.Decimal('5000.00'),
+    seekerNetAmount: new Prisma.Decimal('100000.00'),
+  });
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ status: 'success', data: { id: 987654, tx_ref: providerReference, amount: 105000, currency: 'NGN', status: 'successful' } }),
+  });
+
+  const result = await handleFlutterwaveWebhook({ payload: webhookPayload() });
+
+  expect(result.duplicate).toBe(false);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'FUNDED', fundedAmount: new Prisma.Decimal('100000.00') }),
+  }));
+  expect(mockPrisma.financialLedgerEntry.createMany.mock.calls[0][0].data.map(({ amount }) => amount.toFixed(2)))
+    .toEqual(['105000.00', '100000.00', '5000.00']);
 });
 
 test.each([
@@ -147,5 +178,5 @@ test.each([
   });
   await expect(handleFlutterwaveWebhook({ payload: webhookPayload() })).rejects.toMatchObject({ status: 422 });
   expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
-  expect(mockPrisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }));
+  expect(mockPrisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'PROCESSING' }) }));
 });

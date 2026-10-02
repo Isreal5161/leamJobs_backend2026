@@ -366,7 +366,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
     const currency = application.job.freelanceCompensation.currency;
     const platformFeePercentage = await getActivePlatformFeePercentage(transaction);
     const platformFeeAmount = agreedAmount.mul(platformFeePercentage).dividedBy(100).toDecimalPlaces(2);
-    const seekerNetAmount = agreedAmount.minus(platformFeeAmount).toDecimalPlaces(2);
+    const seekerNetAmount = agreedAmount;
 
     await transaction.contract.create({
       data: {
@@ -476,7 +476,7 @@ export const selectContractJobApplication = async (employerId, jobId, applicatio
     const agreedAmount = new Prisma.Decimal(compensation.amount);
     const platformFeePercentage = await getActivePlatformFeePercentage(transaction);
     const platformFeeAmount = agreedAmount.mul(platformFeePercentage).dividedBy(100).toDecimalPlaces(2);
-    const seekerNetAmount = agreedAmount.minus(platformFeeAmount).toDecimalPlaces(2);
+    const seekerNetAmount = agreedAmount;
     const selectedAt = new Date();
     const contract = await transaction.contract.create({
       data: {

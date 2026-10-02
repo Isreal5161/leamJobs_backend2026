@@ -58,6 +58,8 @@ import {
   viewEmployerVerification,
 } from '../controllers/adminEmployerVerification.controller.js';
 import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
+import { getAdminPlatformFee, updateAdminPlatformFee } from '../controllers/platformFee.controller.js';
+import { validatePlatformFeeUpdate } from '../validators/platformFee.validation.js';
 
 const adminRouter = Router();
 
@@ -72,6 +74,8 @@ adminRouter.patch('/verification-submissions/:verificationId/reject', authentica
 adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
+adminRouter.get('/platform-fee', authenticate, requireRole('ADMIN'), getAdminPlatformFee);
+adminRouter.patch('/platform-fee', authenticate, requireRole('ADMIN'), validatePlatformFeeUpdate, updateAdminPlatformFee);
 adminRouter.get('/payments', authenticate, requireRole('ADMIN'), validateAdminPaymentsQuery, listAdminPaymentsController);
 adminRouter.post('/withdrawals/:id/execute', authenticate, requireRole('ADMIN'), executeWithdrawalController);
 adminRouter.post('/withdrawals/:id/reconcile', authenticate, requireRole('ADMIN'), reconcileWithdrawalController);

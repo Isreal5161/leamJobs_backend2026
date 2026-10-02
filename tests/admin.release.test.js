@@ -110,6 +110,34 @@ test('admin release credits seeker NET amount and records one wallet ledger entr
   });
 });
 
+test('additive funding release credits only the agreed project amount', async () => {
+  mockPrisma.escrow.findUnique.mockResolvedValue({
+    ...escrowRecord(),
+    grossAmount: new Prisma.Decimal('500000.00'),
+    platformFeeAmount: new Prisma.Decimal('25000.00'),
+    seekerNetAmount: new Prisma.Decimal('500000.00'),
+    fundedAmount: new Prisma.Decimal('500000.00'),
+    freelanceContract: {
+      ...escrowRecord().freelanceContract,
+      agreedAmount: new Prisma.Decimal('500000.00'),
+    },
+  });
+  mockPrisma.wallet.update.mockResolvedValueOnce({ availableBalance: new Prisma.Decimal('501000.00') });
+  mockPrisma.escrow.update.mockResolvedValueOnce(escrowRecord({ status: 'RELEASED', releasedAmount: '500000.00', releasedAt: new Date() }));
+
+  const response = await request(app)
+    .post(`/api/admin/contracts/${contractId}/release`)
+    .set('Authorization', ['Bearer', token('ADMIN', adminId)].join(' '));
+
+  expect(response.status).toBe(200);
+  expect(mockPrisma.wallet.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: { availableBalance: new Prisma.Decimal('501000.00'), version: { increment: 1 } },
+  }));
+  expect(mockPrisma.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ entryType: 'WALLET_CREDIT', amount: new Prisma.Decimal('500000.00') }),
+  }));
+});
+
 test('repeated release is idempotent and does not credit again', async () => {
   mockPrisma.escrow.findUnique.mockResolvedValue(escrowRecord({ status: 'RELEASED', releasedAmount: '95000.00', releasedAt: new Date() }));
 

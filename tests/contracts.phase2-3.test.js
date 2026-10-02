@@ -69,10 +69,12 @@ const mockPrisma = {
   payment: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
   escrow: { findUnique: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
+  financialLedgerEntry: { createMany: jest.fn() },
   providerWebhookEvent: { create: jest.fn(), update: jest.fn(), delete: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
 };
+let storedPayment;
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
@@ -87,14 +89,21 @@ const { submitContractCompletion, confirmContractCompletion } = await import('..
 
 beforeEach(() => {
   jest.clearAllMocks();
+  storedPayment = null;
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: contractId }]);
   mockPrisma.contract.findUnique.mockResolvedValue(contract());
   mockPrisma.contract.findFirst.mockResolvedValue(contract());
-  mockPrisma.payment.create.mockResolvedValue(payment());
-  mockPrisma.payment.update.mockImplementation(async ({ data }) => ({ ...payment({ status: data.status ?? 'PENDING' }), metadata: data.metadata ?? payment().metadata }));
-  mockPrisma.payment.findUnique.mockResolvedValue(null);
-  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('100000.00') });
+  mockPrisma.payment.create.mockImplementation(async ({ data }) => {
+    storedPayment = { ...payment(), ...data };
+    return storedPayment;
+  });
+  mockPrisma.payment.update.mockImplementation(async ({ data }) => {
+    storedPayment = { ...(storedPayment ?? payment()), ...data };
+    return storedPayment;
+  });
+  mockPrisma.payment.findUnique.mockImplementation(async () => storedPayment ?? payment());
+  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('100000.00'), platformFeeAmount: new Prisma.Decimal('5000.00'), seekerNetAmount: new Prisma.Decimal('95000.00') });
   mockPrisma.escrow.update.mockResolvedValue(undefined);
   mockPrisma.freelanceContract.update.mockResolvedValue(undefined);
   initializeFlutterwavePayment.mockResolvedValue({ checkoutUrl: 'https://checkout.test', providerReference });

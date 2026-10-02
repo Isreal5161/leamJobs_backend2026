@@ -10,10 +10,11 @@ export class FlutterwaveConfigurationError extends Error {
 }
 
 export class FlutterwaveRequestError extends Error {
-  constructor(message) {
+  constructor(message, { outcomeUnknown = false } = {}) {
     super(message);
     this.name = 'FlutterwaveRequestError';
     this.status = 502;
+    this.outcomeUnknown = outcomeUnknown;
   }
 }
 
@@ -36,12 +37,18 @@ const requestFlutterwave = async (path, options = {}) => {
       },
     });
   } catch (error) {
-    throw new FlutterwaveRequestError(error instanceof Error ? error.message : 'Flutterwave request failed');
+    throw new FlutterwaveRequestError(error instanceof Error ? error.message : 'Flutterwave request failed', { outcomeUnknown: true });
   }
 
-  const payload = await response.json().catch(() => null);
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    if (response.ok) throw new FlutterwaveRequestError('Flutterwave returned an invalid response', { outcomeUnknown: true });
+    payload = null;
+  }
   if (!response.ok || payload?.status === 'error') {
-    throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed');
+    throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed', { outcomeUnknown: response.status >= 500 });
   }
   return payload;
 };
@@ -62,7 +69,7 @@ export const initializeFlutterwavePayment = async ({ amount, currency, email, cu
   });
 
   if (!payload?.data?.link) {
-    throw new FlutterwaveRequestError('Flutterwave did not return a checkout link');
+    throw new FlutterwaveRequestError('Flutterwave did not return a checkout link', { outcomeUnknown: true });
   }
   return { checkoutUrl: payload.data.link, providerReference: payload.data.tx_ref || txRef };
 };
