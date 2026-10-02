@@ -5,11 +5,11 @@ import {
   submitContractCompletion,
 } from '../services/contract.service.js';
 import {
-  handleFlutterwaveWebhook,
   initializeContractPayment,
   verifyContractPayment,
 } from '../services/contractPayment.service.js';
 import { assertFlutterwaveWebhookSignature } from '../services/flutterwave.service.js';
+import { handleFlutterwaveWebhook } from '../services/flutterwaveWebhook.service.js';
 import { getLeamJobsEmployerIdentity } from '../services/leamjobsEmployer.service.js';
 
 const getCanonicalLeamJobsEmployerId = async () => {

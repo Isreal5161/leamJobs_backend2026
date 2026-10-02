@@ -62,6 +62,7 @@ export const verifySubscriptionPayment = async (req, res, next) => {
       userId: req.user.sub,
       providerReference: req.validatedBody.providerReference,
       transactionId: req.validatedBody.transactionId,
+      returnFailureState: req.validatedBody.returnFailureState,
     });
     return res.status(200).json({ success: true, data: result });
   } catch (error) {

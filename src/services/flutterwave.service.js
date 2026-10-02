@@ -46,7 +46,7 @@ const requestFlutterwave = async (path, options = {}) => {
   return payload;
 };
 
-export const initializeFlutterwavePayment = async ({ amount, currency, email, txRef, meta, redirectUrl }) => {
+export const initializeFlutterwavePayment = async ({ amount, currency, email, customerName, txRef, meta, redirectUrl, title = 'LeamJobs contract funding' }) => {
   const payload = await requestFlutterwave('/payments', {
     method: 'POST',
     body: JSON.stringify({
@@ -55,9 +55,9 @@ export const initializeFlutterwavePayment = async ({ amount, currency, email, tx
       currency,
       redirect_url: redirectUrl || env.FLUTTERWAVE_REDIRECT_URL || undefined,
       payment_options: 'card,banktransfer,ussd',
-      customer: { email },
+      customer: { email, ...(customerName ? { name: customerName } : {}) },
       meta,
-      customizations: { title: 'LeamJobs contract funding' },
+      customizations: { title },
     }),
   });
 

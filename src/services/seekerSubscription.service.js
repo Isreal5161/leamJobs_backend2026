@@ -216,135 +216,185 @@ export const initializeSeekerSubscriptionCheckout = async ({ userId, planId, ide
   }
 
   const pendingKey = requestedKey || `subscription:${userId}:${planId}:${crypto.randomUUID()}`;
+  const priorPaymentSelect = {
+    ...paymentSelect,
+    subscription: { select: { ...subscriptionSelect } },
+  };
+  let intent;
 
   try {
-    return await prisma.$transaction(async (transaction) => {
-    const activeNow = await getCurrentActiveSubscription(userId, transaction);
-    if (activeNow) {
-      throw new SeekerSubscriptionError('You already have an active subscription', 409);
-    }
-
-    const priorPayment = await transaction.payment.findFirst({
-      where: { userId, paymentType: 'SUBSCRIPTION', idempotencyKey: pendingKey },
-      select: { ...paymentSelect, subscription: { select: { id: true, status: true, plan: { select: { id: true, key: true, displayName: true } } } } },
-    });
-
-    if (priorPayment) {
-      const subscription = priorPayment.subscription ?? await transaction.subscription.findUnique({ where: { id: priorPayment.subscriptionId }, select: subscriptionSelect });
-      return {
-        alreadyInitialized: true,
-        checkoutUrl: priorPayment.metadata?.checkoutUrl ?? null,
-        payment: serializePayment(priorPayment),
-        subscription: subscription ? serializeSubscription(subscription) : null,
-      };
-    }
-
-    const subscription = await transaction.subscription.create({
-      data: {
-        userId,
-        planId: plan.id,
-        status: 'PENDING',
-        priceSnapshot: plan.price,
-        currencySnapshot: plan.currency,
-        billingIntervalSnapshot: plan.billingInterval,
-        startDate: new Date(),
-        nextRenewalAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
-      select: subscriptionSelect,
-    });
-
-    const providerReference = `leamjobs_sub_${userId}_${crypto.randomUUID()}`;
-    const payment = await transaction.payment.create({
-      data: {
-        userId,
-        subscriptionId: subscription.id,
-        providerReference,
-        idempotencyKey: pendingKey,
-        amount: plan.price,
-        currency: plan.currency,
-        status: 'PENDING',
-        paymentType: 'SUBSCRIPTION',
-        provider: 'FLUTTERWAVE',
-        metadata: { userId, planId: plan.id, subscriptionId: subscription.id, checkoutUrl: null },
-      },
-      select: paymentSelect,
-    });
-
-    await recordSubscriptionEvent({ subscriptionId: subscription.id, eventType: 'PAYMENT_PENDING', providerReference, metadata: { userId, paymentId: payment.id, planKey: plan.key } }, transaction);
-
-    try {
-      const checkout = await initializeFlutterwavePayment({
-        amount: plan.price.toFixed(2),
-        currency: plan.currency,
-        email: user.email,
-        txRef: providerReference,
-        meta: { userId, planId: plan.id, subscriptionId: subscription.id },
-        redirectUrl: `${env.FRONTEND_URL}/seeker/payments?plan=${encodeURIComponent(plan.key)}`,
+    intent = await prisma.$transaction(async (transaction) => {
+      const priorPayment = await transaction.payment.findFirst({
+        where: { idempotencyKey: pendingKey },
+        select: priorPaymentSelect,
       });
 
-      const updatedPayment = await transaction.payment.update({
-        where: { id: payment.id },
-        data: { metadata: { ...payment.metadata, checkoutUrl: checkout.checkoutUrl, providerReference, providerStatus: 'initialized' } },
+      if (priorPayment) {
+        if (priorPayment.userId !== userId) {
+          throw new SeekerSubscriptionError('This idempotency key is already in use', 409);
+        }
+        if (priorPayment.paymentType !== 'SUBSCRIPTION' || priorPayment.subscription?.planId !== plan.id) {
+          throw new SeekerSubscriptionError('This idempotency key belongs to a different plan', 409);
+        }
+        return { payment: priorPayment, subscription: priorPayment.subscription, alreadyInitialized: true };
+      }
+
+      const activeNow = await getCurrentActiveSubscription(userId, transaction);
+      if (activeNow) {
+        throw new SeekerSubscriptionError('You already have an active subscription', 409);
+      }
+
+      const subscription = await transaction.subscription.create({
+        data: {
+          userId,
+          planId: plan.id,
+          status: 'PENDING',
+          priceSnapshot: plan.price,
+          currencySnapshot: plan.currency,
+          billingIntervalSnapshot: plan.billingInterval,
+          startDate: new Date(),
+          nextRenewalAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+        select: subscriptionSelect,
+      });
+
+      const providerReference = `leamjobs_sub_${crypto.randomUUID()}`;
+      const payment = await transaction.payment.create({
+        data: {
+          userId,
+          subscriptionId: subscription.id,
+          providerReference,
+          idempotencyKey: pendingKey,
+          amount: plan.price,
+          currency: plan.currency,
+          status: 'PENDING',
+          paymentType: 'SUBSCRIPTION',
+          provider: 'FLUTTERWAVE',
+          metadata: { userId, planId: plan.id, planKey: plan.key, subscriptionId: subscription.id, customerEmail: user.email, checkoutUrl: null },
+        },
         select: paymentSelect,
       });
 
-      return {
-        alreadyInitialized: false,
-        checkoutUrl: checkout.checkoutUrl,
-        payment: serializePayment(updatedPayment),
-        subscription: serializeSubscription({ ...subscription, payments: [updatedPayment] }),
-      };
-    } catch (error) {
-      await transaction.payment.update({
-        where: { id: payment.id },
-        data: { status: 'FAILED', metadata: { ...(payment.metadata ?? {}), checkoutUrl: null, failure: error.message }, verifiedAt: new Date() },
-      }).catch(() => undefined);
-      await transaction.subscription.update({
-        where: { id: subscription.id },
-        data: { status: 'FAILED' },
-      }).catch(() => undefined);
-      await recordSubscriptionEvent({ subscriptionId: subscription.id, eventType: 'PAYMENT_FAILED', providerReference, metadata: { error: error.message, step: 'checkout_init' } }, transaction).catch(() => undefined);
-      await notifySubscriptionPaymentFailure({ userId, subscriptionId: subscription.id, paymentId: payment.id, planName: plan.displayName, client: transaction });
-      throw error;
-    }
+      await recordSubscriptionEvent({ subscriptionId: subscription.id, eventType: 'PAYMENT_PENDING', providerReference, metadata: { userId, paymentId: payment.id, planKey: plan.key } }, transaction);
+      return { payment, subscription, alreadyInitialized: false };
     });
   } catch (error) {
-    if (error?.code === 'P2002' && requestedKey) {
-      const existingPayment = await prisma.payment.findUnique({
-        where: { idempotencyKey: requestedKey },
-        select: { ...paymentSelect, subscription: { select: subscriptionSelect } },
-      });
-      if (existingPayment?.userId === userId) {
-        const subscription = existingPayment.subscription ?? await prisma.subscription.findUnique({ where: { id: existingPayment.subscriptionId }, select: subscriptionSelect });
-        return {
-          alreadyInitialized: true,
-          checkoutUrl: existingPayment.metadata?.checkoutUrl ?? null,
-          payment: serializePayment(existingPayment),
-          subscription: subscription ? serializeSubscription(subscription) : null,
-        };
-      }
-      if (existingPayment) throw new SeekerSubscriptionError('This idempotency key is already in use', 409);
+    if (error?.code !== 'P2002') throw error;
+    const existingPayment = await prisma.payment.findFirst({ where: { idempotencyKey: pendingKey }, select: priorPaymentSelect });
+    if (!existingPayment) throw error;
+    if (existingPayment.userId !== userId) throw new SeekerSubscriptionError('This idempotency key is already in use', 409);
+    if (existingPayment.paymentType !== 'SUBSCRIPTION' || existingPayment.subscription?.planId !== plan.id) {
+      throw new SeekerSubscriptionError('This idempotency key belongs to a different plan', 409);
     }
+    intent = { payment: existingPayment, subscription: existingPayment.subscription, alreadyInitialized: true };
+  }
+
+  const { payment, subscription, alreadyInitialized } = intent;
+  const responseForExisting = async (existingPayment = payment, existingSubscription = subscription) => ({
+    alreadyInitialized: true,
+    checkoutUrl: existingPayment.metadata?.checkoutUrl ?? null,
+    payment: serializePayment(existingPayment),
+    subscription: existingSubscription ? serializeSubscription(existingSubscription) : null,
+    initializing: existingPayment.status === 'PROCESSING',
+  });
+
+  if (alreadyInitialized) {
+    if (payment.status !== 'PENDING') return responseForExisting();
+    if (payment.metadata?.checkoutUrl) return responseForExisting();
+  }
+
+  const claimed = await prisma.payment.updateMany({
+    where: { id: payment.id, status: 'PENDING' },
+    data: { status: 'PROCESSING' },
+  });
+  if (claimed.count !== 1) {
+    const current = await prisma.payment.findUnique({ where: { id: payment.id }, select: priorPaymentSelect });
+    if (!current || current.userId !== userId || current.subscription?.planId !== plan.id) {
+      throw new SeekerSubscriptionError('Checkout state changed; please check your subscription status', 409);
+    }
+    return responseForExisting(current, current.subscription);
+  }
+
+  try {
+    const checkout = await initializeFlutterwavePayment({
+      amount: plan.price.toFixed(2),
+      currency: plan.currency,
+      email: user.email,
+      customerName: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || undefined,
+      txRef: payment.providerReference,
+      meta: { userId, planId: plan.id, planKey: plan.key, subscriptionId: subscription.id },
+      redirectUrl: `${env.FRONTEND_URL_PROD || env.FRONTEND_URL}/seeker/subscription/payment-result?plan=${encodeURIComponent(plan.key)}`,
+      title: `LeamJobs ${plan.displayName} subscription`,
+    });
+
+    const updatedPayment = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'PENDING',
+        metadata: { ...(payment.metadata ?? {}), checkoutUrl: checkout.checkoutUrl, providerReference: payment.providerReference, providerStatus: 'initialized' },
+      },
+      select: paymentSelect,
+    });
+    const updatedSubscription = await prisma.subscription.findUnique({ where: { id: subscription.id }, select: subscriptionSelect });
+
+    return {
+      alreadyInitialized: false,
+      checkoutUrl: checkout.checkoutUrl,
+      payment: serializePayment(updatedPayment),
+      subscription: updatedSubscription ? serializeSubscription({ ...updatedSubscription, payments: [updatedPayment] }) : null,
+    };
+  } catch (error) {
+    await prisma.$transaction(async (transaction) => {
+      const failed = await transaction.payment.updateMany({
+        where: { id: payment.id, status: 'PROCESSING' },
+        data: { status: 'FAILED', metadata: { ...(payment.metadata ?? {}), checkoutUrl: null, failure: error.message }, verifiedAt: new Date() },
+      });
+      if (failed.count !== 1) return;
+      await transaction.subscription.updateMany({ where: { id: subscription.id, status: 'PENDING' }, data: { status: 'FAILED' } });
+      await recordSubscriptionEvent({ subscriptionId: subscription.id, eventType: 'PAYMENT_FAILED', providerReference: payment.providerReference, metadata: { error: error.message, step: 'checkout_init' } }, transaction);
+    }).catch(() => undefined);
+    await notifySubscriptionPaymentFailure({ userId, subscriptionId: subscription.id, paymentId: payment.id, planName: plan.displayName });
     throw error;
   }
 };
 
-export const verifySeekerSubscriptionPayment = async ({ userId, providerReference, transactionId }) => {
+export const verifySeekerSubscriptionPayment = async ({
+  userId,
+  providerReference,
+  transactionId,
+  returnProviderFailure = false,
+  returnFailureState = false,
+}) => {
   if (!providerReference && !transactionId) {
     throw new SeekerSubscriptionError('A Flutterwave transaction reference is required', 400);
   }
 
   await reconcileExpiredSubscriptionsForUser(userId);
 
-  const payment = await prisma.payment.findFirst({
+  let providerPayment = null;
+  let payment = await prisma.payment.findFirst({
     where: {
       userId,
       paymentType: 'SUBSCRIPTION',
       ...(providerReference ? { providerReference } : {}),
-      ...(transactionId ? { transactionId: String(transactionId) } : {}),
+      ...(!providerReference && transactionId ? { transactionId: String(transactionId) } : {}),
     },
     select: { ...paymentSelect, subscription: { select: subscriptionSelect } },
   });
+
+  if (!payment && !providerReference && transactionId) {
+    try {
+      providerPayment = await verifyFlutterwaveTransaction(String(transactionId));
+    } catch {
+      throw new SeekerSubscriptionError('Payment confirmation is temporarily unavailable. Please check again shortly.', 503);
+    }
+    const resolvedReference = String(providerPayment.tx_ref || providerPayment.reference || '');
+    if (!resolvedReference) throw new SeekerSubscriptionError('Flutterwave could not identify this payment', 422);
+    payment = await prisma.payment.findFirst({
+      where: { userId, paymentType: 'SUBSCRIPTION', providerReference: resolvedReference },
+      select: { ...paymentSelect, subscription: { select: subscriptionSelect } },
+    });
+  }
 
   if (!payment) {
     throw new SeekerSubscriptionError('Subscription payment record not found', 404);
@@ -353,9 +403,44 @@ export const verifySeekerSubscriptionPayment = async ({ userId, providerReferenc
     throw new SeekerSubscriptionError('Unsupported subscription payment provider', 422);
   }
 
+  const subscription = payment.subscription ?? (payment.subscriptionId
+    ? await prisma.subscription.findUnique({ where: { id: payment.subscriptionId }, select: subscriptionSelect })
+    : null);
+  if (!subscription || subscription.id !== payment.subscriptionId || subscription.userId !== userId || payment.userId !== userId) {
+    console.warn('Subscription payment binding mismatch', { paymentId: payment.id, reason: 'user_subscription_binding' });
+    throw new SeekerSubscriptionError('This payment is not linked to your subscription', 409);
+  }
+  if (payment.transactionId && transactionId && String(payment.transactionId) !== String(transactionId)) {
+    throw new SeekerSubscriptionError('The transaction ID does not match this payment', 409);
+  }
+  const storedMetadata = payment.metadata ?? {};
+  if ((storedMetadata.userId && String(storedMetadata.userId) !== userId)
+    || (storedMetadata.planId && String(storedMetadata.planId) !== subscription.planId)
+    || (storedMetadata.subscriptionId && String(storedMetadata.subscriptionId) !== subscription.id)
+    || (storedMetadata.planKey && subscription.plan?.key && String(storedMetadata.planKey) !== subscription.plan.key)) {
+    console.warn('Subscription payment binding mismatch', { paymentId: payment.id, reason: 'stored_metadata_binding' });
+    throw new SeekerSubscriptionError('This payment is not linked to your subscription', 409);
+  }
+
   if (payment.status === 'SUCCESSFUL') {
-    const subscription = payment.subscription ?? await prisma.subscription.findUnique({ where: { id: payment.subscriptionId }, select: subscriptionSelect });
     return { payment: serializePayment(payment), subscription: subscription ? serializeSubscription(subscription) : null, alreadyVerified: true };
+  }
+  if (returnProviderFailure && payment.status === 'FAILED' && subscription.status === 'FAILED') {
+    return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), failed: true };
+  }
+  if (returnFailureState && payment.status === 'FAILED' && subscription.status === 'FAILED') {
+    return {
+      payment: serializePayment(payment),
+      subscription: serializeSubscription(subscription),
+      failed: true,
+      failureType: payment.metadata?.providerStatus === 'cancelled' ? 'cancelled' : 'failed',
+    };
+  }
+  if (payment.status === 'PROCESSING') {
+    return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
+  }
+  if (payment.status !== 'PENDING' || subscription.status !== 'PENDING') {
+    throw new SeekerSubscriptionError('This payment is no longer awaiting verification', 409);
   }
 
   const markVerificationFailure = async ({ reason, providerStatus, resolvedTransactionId, metadata = {} }) => {
@@ -387,38 +472,132 @@ export const verifySeekerSubscriptionPayment = async ({ userId, providerReferenc
     return transitioned;
   };
 
-  if (!transactionId || !/^[0-9]+$/.test(String(transactionId))) {
+  const resolvedTransactionId = transactionId ?? payment.transactionId;
+  if (!resolvedTransactionId) {
+    return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
+  }
+  if (!/^[0-9]+$/.test(String(resolvedTransactionId))) {
     throw new SeekerSubscriptionError('A valid Flutterwave transaction ID is required', 400);
   }
 
-  let providerPayment;
-  try {
-    providerPayment = await verifyFlutterwaveTransaction(String(transactionId));
-  } catch (error) {
-    await markVerificationFailure({ reason: error.message, resolvedTransactionId: String(transactionId), metadata: { step: 'verification' } }).catch(() => undefined);
-    throw error;
+  if (!providerPayment) {
+    try {
+      providerPayment = await verifyFlutterwaveTransaction(String(resolvedTransactionId));
+    } catch {
+      throw new SeekerSubscriptionError('Payment confirmation is temporarily unavailable. Please check again shortly.', 503);
+    }
   }
 
   const txRef = String(providerPayment.tx_ref || providerPayment.reference || '');
-  const amount = String(providerPayment.amount ?? providerPayment.amount_paid ?? '0');
-  const currency = normalizeCurrency(providerPayment.currency);
-  const providerTransactionId = String(providerPayment.id || providerPayment.flw_ref || providerPayment.transaction_id || transactionId);
-
-  if (providerPayment.status !== 'successful' || txRef !== payment.providerReference || !new Prisma.Decimal(amount).eq(new Prisma.Decimal(String(payment.amount)))) {
-    await markVerificationFailure({ reason: 'verification_failed', providerStatus: providerPayment.status, resolvedTransactionId: providerTransactionId });
-    throw new SeekerSubscriptionError('Flutterwave payment verification failed', 422);
+  const returnedTransactionId = providerPayment.id ?? providerPayment.transaction_id ?? providerPayment.flw_ref;
+  if (txRef !== payment.providerReference) {
+    console.warn('Subscription payment verification mismatch', { paymentId: payment.id, reason: 'provider_reference_mismatch' });
+    throw new SeekerSubscriptionError('Flutterwave could not match this transaction to the payment', 422);
+  }
+  if (returnedTransactionId !== undefined && String(returnedTransactionId) !== String(resolvedTransactionId)) {
+    console.warn('Subscription payment verification mismatch', { paymentId: payment.id, reason: 'transaction_id_mismatch' });
+    throw new SeekerSubscriptionError('Flutterwave could not match this transaction to the payment', 422);
   }
 
-  if (currency !== payment.currency) {
-    await markVerificationFailure({ reason: 'currency_mismatch', providerStatus: providerPayment.status, resolvedTransactionId: providerTransactionId, metadata: { providerCurrency: currency, expectedCurrency: payment.currency } });
-    throw new SeekerSubscriptionError('Currency mismatch detected during subscription verification', 422);
+  const providerStatus = String(providerPayment.status ?? '').toLowerCase();
+  if (['pending', 'processing', 'queued', 'incomplete'].includes(providerStatus)) {
+    return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
+  }
+  if (providerStatus !== 'successful') {
+    const transitioned = await markVerificationFailure({ reason: 'provider_payment_not_successful', providerStatus, resolvedTransactionId: String(returnedTransactionId ?? resolvedTransactionId) });
+    if (returnProviderFailure || returnFailureState) {
+      if (transitioned) {
+        return {
+          payment: serializePayment({ ...payment, status: 'FAILED', transactionId: String(returnedTransactionId ?? resolvedTransactionId) }),
+          subscription: serializeSubscription({ ...subscription, status: 'FAILED' }),
+          failed: true,
+          ...(returnFailureState ? { failureType: ['cancelled', 'canceled'].includes(providerStatus) ? 'cancelled' : 'failed' } : {}),
+        };
+      }
+      const currentPayment = await prisma.payment.findUnique({
+        where: { id: payment.id },
+        select: { ...paymentSelect, subscription: { select: subscriptionSelect } },
+      });
+      const currentSubscription = currentPayment?.subscription;
+      if (currentPayment?.status === 'SUCCESSFUL' && currentSubscription?.status === 'ACTIVE') {
+        return { payment: serializePayment(currentPayment), subscription: serializeSubscription(currentSubscription), alreadyVerified: true };
+      }
+      if (currentPayment?.status === 'FAILED' && currentSubscription?.status === 'FAILED') {
+        return {
+          payment: serializePayment(currentPayment),
+          subscription: serializeSubscription(currentSubscription),
+          failed: true,
+          ...(returnFailureState ? { failureType: ['cancelled', 'canceled'].includes(providerStatus) ? 'cancelled' : 'failed' } : {}),
+        };
+      }
+      return {
+        payment: serializePayment(currentPayment ?? payment),
+        subscription: currentSubscription ? serializeSubscription(currentSubscription) : serializeSubscription(subscription),
+        pending: true,
+      };
+    }
+    throw new SeekerSubscriptionError('Flutterwave could not confirm a successful payment', 422);
+  }
+
+  const amount = String(providerPayment.amount ?? providerPayment.amount_paid ?? '0');
+  const currency = normalizeCurrency(providerPayment.currency);
+  const providerTransactionId = String(returnedTransactionId ?? transactionId);
+  const providerMetadata = providerPayment.meta ?? providerPayment.metadata;
+  const expectedPlanKey = subscription.plan?.key;
+  const providerCustomerEmail = providerPayment.customer?.email;
+  const expectedCustomerEmail = String(storedMetadata.customerEmail ?? (await prisma.user.findUnique({ where: { id: userId }, select: { email: true } }))?.email ?? '').trim().toLowerCase();
+  const providerCustomerEmailNormalized = String(providerCustomerEmail ?? '').trim().toLowerCase();
+  let amountMatches = false;
+  try {
+    amountMatches = new Prisma.Decimal(amount).eq(new Prisma.Decimal(String(payment.amount)));
+  } catch {
+    amountMatches = false;
+  }
+
+  const metadataMatches = !providerMetadata || typeof providerMetadata !== 'object'
+    || ((providerMetadata.userId === undefined || String(providerMetadata.userId) === userId)
+      && (providerMetadata.planId === undefined || String(providerMetadata.planId) === subscription.planId)
+      && (providerMetadata.subscriptionId === undefined || String(providerMetadata.subscriptionId) === subscription.id)
+      && (providerMetadata.planKey === undefined || !expectedPlanKey || String(providerMetadata.planKey) === expectedPlanKey));
+  const customerMatches = !providerCustomerEmailNormalized || !expectedCustomerEmail || providerCustomerEmailNormalized === expectedCustomerEmail;
+  const subscriptionSnapshotMatches = (!subscription.priceSnapshot || new Prisma.Decimal(String(subscription.priceSnapshot)).eq(new Prisma.Decimal(String(payment.amount))))
+    && (!subscription.currencySnapshot || normalizeCurrency(subscription.currencySnapshot) === normalizeCurrency(payment.currency));
+
+  if (!amountMatches || currency !== normalizeCurrency(payment.currency) || !metadataMatches || !customerMatches || !subscriptionSnapshotMatches) {
+    const reason = !amountMatches ? 'amount_mismatch'
+      : currency !== normalizeCurrency(payment.currency) ? 'currency_mismatch'
+        : !customerMatches ? 'customer_mismatch'
+          : !metadataMatches ? 'provider_metadata_mismatch'
+            : 'subscription_snapshot_mismatch';
+    console.warn('Subscription payment verification mismatch', { paymentId: payment.id, reason });
+    await markVerificationFailure({
+      reason,
+      providerStatus,
+      resolvedTransactionId: providerTransactionId,
+      metadata: {
+        ...(currency !== normalizeCurrency(payment.currency) ? { providerCurrency: currency, expectedCurrency: payment.currency } : {}),
+        ...(providerCustomerEmailNormalized && !customerMatches ? { customerEmailMismatch: true } : {}),
+      },
+    });
+    throw new SeekerSubscriptionError('Flutterwave payment details did not match this subscription', 422);
   }
 
   return prisma.$transaction(async (transaction) => {
     const currentPayment = await transaction.payment.findUnique({ where: { id: payment.id }, select: { ...paymentSelect, subscription: { select: subscriptionSelect } } });
+    if (!currentPayment) throw new SeekerSubscriptionError('Subscription payment record not found', 404);
     if (currentPayment.status === 'SUCCESSFUL') {
       const subscription = currentPayment.subscription ?? await transaction.subscription.findUnique({ where: { id: currentPayment.subscriptionId }, select: subscriptionSelect });
       return { payment: serializePayment(currentPayment), subscription: subscription ? serializeSubscription(subscription) : null, alreadyVerified: true };
+    }
+    if (currentPayment.status !== 'PENDING'
+      || currentPayment.userId !== userId
+      || currentPayment.subscriptionId !== subscription.id
+      || currentPayment.subscription?.userId !== userId
+      || currentPayment.subscription?.planId !== subscription.planId
+      || currentPayment.providerReference !== payment.providerReference
+      || !new Prisma.Decimal(String(currentPayment.amount)).eq(new Prisma.Decimal(String(payment.amount)))
+      || normalizeCurrency(currentPayment.currency) !== normalizeCurrency(payment.currency)) {
+      throw new SeekerSubscriptionError('Subscription payment state changed during verification', 409);
     }
 
     const activeSubscription = await getCurrentActiveSubscription(userId, transaction);
@@ -437,6 +616,16 @@ export const verifySeekerSubscriptionPayment = async ({ userId, providerReferenc
       },
     });
     if (activated.count !== 1) {
+      const racedPayment = await transaction.payment.findUnique({
+        where: { id: currentPayment.id },
+        select: { ...paymentSelect, subscription: { select: subscriptionSelect } },
+      });
+      if (racedPayment?.status === 'SUCCESSFUL'
+        && racedPayment.subscription?.status === 'ACTIVE'
+        && racedPayment.userId === userId
+        && racedPayment.subscription.userId === userId) {
+        return { payment: serializePayment(racedPayment), subscription: serializeSubscription(racedPayment.subscription), alreadyVerified: true };
+      }
       throw new SeekerSubscriptionError('This subscription is no longer pending', 409);
     }
 
@@ -446,7 +635,7 @@ export const verifySeekerSubscriptionPayment = async ({ userId, providerReferenc
         status: 'SUCCESSFUL',
         transactionId: providerTransactionId,
         verifiedAt: new Date(),
-        metadata: { ...(currentPayment.metadata ?? {}), providerStatus: providerPayment.status, verifiedAt: new Date().toISOString() },
+        metadata: { ...(currentPayment.metadata ?? {}), providerStatus, verifiedAt: new Date().toISOString() },
       },
       select: paymentSelect,
     });

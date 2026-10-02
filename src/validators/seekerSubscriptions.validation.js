@@ -18,6 +18,7 @@ export const validateSeekerSubscriptionVerification = (req, res, next) => {
   const result = z.object({
     providerReference: z.string().trim().min(1).optional(),
     transactionId: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+    returnFailureState: z.boolean().optional(),
   }).passthrough().refine((value) => Boolean(value.providerReference || value.transactionId), {
     message: 'providerReference or transactionId is required',
     path: ['providerReference'],
@@ -30,6 +31,7 @@ export const validateSeekerSubscriptionVerification = (req, res, next) => {
   req.validatedBody = {
     providerReference: result.data.providerReference,
     transactionId: result.data.transactionId ? String(result.data.transactionId) : undefined,
+    returnFailureState: result.data.returnFailureState === true,
   };
   return next();
 };
