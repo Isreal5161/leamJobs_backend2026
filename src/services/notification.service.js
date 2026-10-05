@@ -71,6 +71,10 @@ const emailTypeForNotification = (notification) => {
   if (eventKey.startsWith('employerVerification:declined:')) return EMAIL_TYPES.EMPLOYER_VERIFICATION_DECLINED;
   if (eventKey.startsWith('application:submitted:')) return EMAIL_TYPES.APPLICATION_SUBMITTED;
   if (eventKey.startsWith('application:status:') || eventKey.startsWith('application:accepted:') || eventKey.startsWith('application:selected:')) return EMAIL_TYPES.APPLICATION_STATUS_CHANGED;
+  if (eventKey.startsWith('interview:scheduled:')) return EMAIL_TYPES.INTERVIEW_SCHEDULED;
+  if (eventKey.startsWith('interview:rescheduled:')) return EMAIL_TYPES.INTERVIEW_RESCHEDULED;
+  if (eventKey.startsWith('interview:updated:')) return EMAIL_TYPES.INTERVIEW_UPDATED;
+  if (eventKey.startsWith('interview:cancelled:')) return EMAIL_TYPES.INTERVIEW_CANCELLED;
   if (eventKey.startsWith('invitation:pending:')) return EMAIL_TYPES.JOB_INVITATION_RECEIVED;
   if (eventKey.startsWith('invitation:accepted:')) return EMAIL_TYPES.JOB_INVITATION_ACCEPTED;
   if (eventKey.startsWith('invitation:declined:')) return EMAIL_TYPES.JOB_INVITATION_DECLINED;
@@ -114,6 +118,7 @@ const queueNotificationEmail = async (notification, recipientEmail) => {
       title: notification.title,
       message: notification.message,
       link: normalizeFrontendNotificationLink(notification.link),
+      metadata: notification.metadata,
       ...(emailType === EMAIL_TYPES.NEW_JOB_MATCH ? { isMarketing: true, unsubscribeUrl: `${process.env.FRONTEND_URL || process.env.FRONTEND_URL_PROD || 'http://localhost:5173'}/unsubscribe-marketing?token=${encodeURIComponent(createMarketingUnsubscribeToken(notification.recipientUserId))}` } : {}),
     },
   });

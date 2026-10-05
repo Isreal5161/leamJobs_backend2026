@@ -98,7 +98,25 @@ Key variables:
 
 ## API Documentation
 
-API endpoints will be documented as they are implemented.
+### Interview scheduling
+
+All routes require a bearer token. Employer routes require the `EMPLOYER` role; seeker routes require `SEEKER`.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/employer/jobs/:jobId/applications/:applicationId/interviews` | Schedule an interview for an application owned by the employer |
+| `GET` | `/api/employer/interviews` | List the employer's interviews |
+| `GET` | `/api/employer/interviews/:interviewId` | Get an employer-owned interview |
+| `PATCH` | `/api/employer/interviews/:interviewId` | Update details or reschedule an active interview |
+| `POST` | `/api/employer/interviews/:interviewId/cancel` | Cancel an active interview |
+| `GET` | `/api/seeker/interviews` | List the seeker's interviews |
+| `GET` | `/api/seeker/interviews/:interviewId` | Get a seeker-owned interview |
+
+Create requests require `localDate` (`YYYY-MM-DD`), `localTime` (`HH:mm`), `timezone` (a named IANA time zone), and `method`. The server converts the supplied local date/time into the authoritative UTC `scheduledAt` instant; past times, invalid zones, and ambiguous or nonexistent local times during daylight-saving transitions are rejected. Optional fields are `durationMinutes` (5–480, default 30), `message`, `meetingUrl`, `phoneNumber`, and `location`. `VIDEO` requires an HTTPS `meetingUrl`; `PHONE` and `WHATSAPP` require `phoneNumber`; `IN_PERSON` requires `location`; `OTHER` requires at least one of those contact fields. Phone numbers must be international (leading `+`) and are normalized before storage. Seeker responses include `whatsappNumber` and a server-generated HTTPS `whatsappUrl`; when an application conversation exists, they also include a safe internal `messageUrl`. `LEAMJOBS` creates or reuses the application conversation server-side.
+
+Updates that change the schedule must provide `localDate`, `localTime`, and `timezone` together. Cancellation accepts an optional `{ "reason": "..." }` body (maximum 1000 characters). Interview response objects contain ordered `events` with `eventType`, `createdAt`, and old/new schedule snapshots where applicable, alongside the UTC `scheduledAt` ISO string, timezone, application, contact details, timestamps, job/company context, and role-specific applicant or employer details. Rescheduling remains a scheduled interview and is identified by its `RESCHEDULED` event. Employer responses include `actions.canEdit` and `actions.canCancel`; seeker responses never expose employer-only actions.
+
+Lists accept `page`, `limit` (1–50; defaults to 1 and 20), `status`, `from`, and `to`. They return `data.interviews` and `data.pagination`; create and detail responses return `data.interview`. Interview identities are derived from the authenticated employer and application records, never from request-body IDs.
 
 ## Database
 

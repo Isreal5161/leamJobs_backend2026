@@ -36,7 +36,10 @@ model User {
   employerConversations Conversation[]  @relation("EmployerConversations")
   sentInvitations       JobInvitation[] @relation("EmployerInvitations")
   receivedInvitations   JobInvitation[] @relation("SeekerInvitations")
-  sentMessages          Message[]       @relation("MessageSenders")
+  employerInterviews   Interview[]        @relation("EmployerInterviews")
+  seekerInterviews     Interview[]        @relation("SeekerInterviews")
+  interviewHistory     InterviewHistory[] @relation("InterviewHistoryActors")
+  sentMessages         Message[]          @relation("MessageSenders")
   subscriptions         Subscription[]
   payments              Payment[]
   subscriptionTrials    UserSubscriptionTrial[]
@@ -496,6 +499,7 @@ model Job {
   employer               User                    @relation("EmployerJobs", fields: [employerId], references: [id], onDelete: Restrict)
   reviewedBy             User?                   @relation("JobReviewers", fields: [reviewedById], references: [id], onDelete: SetNull)
   applications           Application[]
+  interviews             Interview[]
   contracts              Contract[]
   conversations          Conversation[]
   invitations            JobInvitation[]
@@ -562,6 +566,7 @@ model Application {
   conversation Conversation?
   invitation   JobInvitation?
   cvSnapshot   ApplicationCvSnapshot?
+  interviews   Interview[]
 
   @@unique([seekerId, jobId])
   @@index([seekerId, createdAt])
@@ -692,6 +697,74 @@ model Conversation {
   @@index([seekerId, lastMessageAt])
   @@index([employerId, lastMessageAt])
   @@index([jobId, lastMessageAt])
+}
+
+enum InterviewMethod {
+  LEAMJOBS
+  WHATSAPP
+  VIDEO
+  PHONE
+  IN_PERSON
+  OTHER
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+enum InterviewHistoryEvent {
+  CREATED
+  UPDATED
+  RESCHEDULED
+  CANCELLED
+}
+
+model Interview {
+  id                         String          @id @default(uuid())
+  applicationId              String
+  jobId                      String
+  employerId                 String
+  seekerId                   String
+  method                     InterviewMethod
+  status                     InterviewStatus @default(SCHEDULED)
+  scheduledAt                DateTime
+  timezone                   String          @db.VarChar(100)
+  durationMinutes            Int             @default(30)
+  message                    String?         @db.VarChar(2000)
+  meetingUrl                 String?         @db.VarChar(2048)
+  phoneNumber                String?         @db.VarChar(40)
+  location                   String?         @db.VarChar(300)
+  previousApplicationStatus ApplicationStatus
+  cancelledAt                DateTime?
+  createdAt                  DateTime        @default(now())
+  updatedAt                  DateTime        @updatedAt
+
+  application Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  job         Job               @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  employer    User              @relation("EmployerInterviews", fields: [employerId], references: [id], onDelete: Restrict)
+  seeker      User              @relation("SeekerInterviews", fields: [seekerId], references: [id], onDelete: Restrict)
+  history     InterviewHistory[]
+
+  @@index([employerId, status, scheduledAt])
+  @@index([seekerId, status, scheduledAt])
+  @@index([applicationId, status])
+  @@index([jobId, scheduledAt])
+}
+
+model InterviewHistory {
+  id          String                @id @default(uuid())
+  interviewId String
+  actorId     String?
+  event       InterviewHistoryEvent
+  before      Json?
+  after       Json?
+  createdAt   DateTime              @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("InterviewHistoryActors", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([interviewId, createdAt])
 }
 
 model Message {

@@ -50,6 +50,19 @@ import {
   submitVerification,
   uploadVerificationDocument,
 } from '../controllers/employerVerification.controller.js';
+import {
+  cancelEmployerInterview,
+  createEmployerInterview,
+  getEmployerInterview,
+  listEmployerInterviewsController,
+  updateEmployerInterview,
+} from '../controllers/interviews.controller.js';
+import {
+  validateCreateInterview,
+  validateCancelInterview,
+  validateInterviewList,
+  validateUpdateInterview,
+} from '../validators/interviews.validation.js';
 
 const employerRouter = Router();
 
@@ -71,6 +84,10 @@ employerRouter.post('/contracts/:contractId/payment', authenticate, requireRole(
 employerRouter.post('/contracts/:contractId/payment/verify', authenticate, requireRole('EMPLOYER'), validateContractPaymentVerification, verifyEmployerContractPayment);
 employerRouter.post('/contracts/:contractId/confirm-completion', authenticate, requireRole('EMPLOYER'), confirmCompletion);
 employerRouter.get('/dashboard', authenticate, requireRole('EMPLOYER'), dashboard);
+employerRouter.get('/interviews', authenticate, requireRole('EMPLOYER'), validateInterviewList, listEmployerInterviewsController);
+employerRouter.get('/interviews/:interviewId', authenticate, requireRole('EMPLOYER'), getEmployerInterview);
+employerRouter.patch('/interviews/:interviewId', authenticate, requireRole('EMPLOYER'), validateUpdateInterview, updateEmployerInterview);
+employerRouter.post('/interviews/:interviewId/cancel', authenticate, requireRole('EMPLOYER'), validateCancelInterview, cancelEmployerInterview);
 employerRouter.get('/candidates', authenticate, requireRole('EMPLOYER'), validateEmployerCandidatesQuery, listCandidates);
 employerRouter.get('/candidates/:candidateId/profile-picture', authenticate, requireRole('EMPLOYER'), getCandidateProfilePicture);
 employerRouter.post('/invitations', authenticate, requireRole('EMPLOYER'), validateCreateJobInvitation, createInvitation);
@@ -81,6 +98,7 @@ employerRouter.patch('/jobs/:jobId', authenticate, requireRole('EMPLOYER'), vali
 employerRouter.patch('/jobs/:jobId/close', authenticate, requireRole('EMPLOYER'), closeJob);
 employerRouter.get('/jobs/:jobId/applications', authenticate, requireRole('EMPLOYER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listApplications);
 employerRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requireRole('EMPLOYER'), getApplication);
+employerRouter.post('/jobs/:jobId/applications/:applicationId/interviews', authenticate, requireRole('EMPLOYER'), validateCreateInterview, createEmployerInterview);
 employerRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('EMPLOYER'), validateEmployerApplicationStatus, updateApplicationStatus);
 employerRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('EMPLOYER'), selectContractApplication);
 employerRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('EMPLOYER'), getApplicationResume);

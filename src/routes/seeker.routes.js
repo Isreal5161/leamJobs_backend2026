@@ -56,6 +56,8 @@ import { createPageLimitValidator } from '../validators/collectionPagination.val
 import { analyzeSkillsGap, askCareerAssistant, createJobAlert, createSupportRequest, deleteJobAlert, getAdvancedProfileStrength, getCareerRecommendations, getSalaryInsights, listJobAlerts, listSavedJobs, listSupportRequests, prepareInterview, saveJob, unsaveJob, updateJobAlert } from '../services/premiumSeeker.service.js';
 import { deleteSavedJob, getCareerRecommendationResults, getJobAlerts, getPersonalizedJobMatches, getProfileStrength, getSalaryInsightResults, getSavedJobs, getSupportRequests, patchJobAlert, postCareerAssistant, postInterviewEvaluation, postInterviewPreparation, postInterviewStart, postJobAlert, postSavedJob, postSkillsGap, postSupportRequest, removeJobAlert } from '../controllers/premiumSeeker.controller.js';
 import { validateAssistant, validateInterviewEvaluation, validateInterviewStart, validateJobAlert, validateJobAlertUpdate, validateJobInput, validateSupportRequest } from '../validators/premiumSeeker.validation.js';
+import { getSeekerInterview, listSeekerInterviewsController } from '../controllers/interviews.controller.js';
+import { validateInterviewList } from '../validators/interviews.validation.js';
 
 const seekerRouter = Router();
 
@@ -100,6 +102,8 @@ seekerRouter.get('/recommendations', authenticate, requireRole('SEEKER'), valida
 seekerRouter.get('/jobs/:jobId', authenticate, requireRole('SEEKER'), getJob);
 seekerRouter.get('/applications', authenticate, requireRole('SEEKER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listApplications);
 seekerRouter.post('/applications', authenticate, requireRole('SEEKER'), validateCreateApplication, createApplication);
+seekerRouter.get('/interviews', authenticate, requireRole('SEEKER'), validateInterviewList, listSeekerInterviewsController);
+seekerRouter.get('/interviews/:interviewId', authenticate, requireRole('SEEKER'), getSeekerInterview);
 seekerRouter.get('/conversations', authenticate, requireRole('SEEKER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listConversations);
 seekerRouter.post('/conversations/from-application/:applicationId', authenticate, requireRole('SEEKER'), createConversationFromApplication);
 seekerRouter.get('/conversations/:conversationId', authenticate, requireRole('SEEKER'), getConversation);

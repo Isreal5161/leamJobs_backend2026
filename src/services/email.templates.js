@@ -21,19 +21,19 @@ const renderMessage = (message) => escapeHtml(message)
 const frontendBaseUrl = () => (process.env.FRONTEND_URL || process.env.FRONTEND_URL_PROD || 'https://leamjobs.com').replace(/\/$/, '');
 const logoUrl = () => `${frontendBaseUrl()}/leamjobs-2.png`;
 
-const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing }) => `<!doctype html>
+const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing, isInterview }) => `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)}</title></head>
-<body style="margin:0;background:#f4f7f5;color:#1d2924;font-family:Arial,sans-serif;line-height:1.6">
+<body style="margin:0;background:${isInterview ? '#f5f4fb' : '#f4f7f5'};color:#1d2924;font-family:Arial,sans-serif;line-height:1.6">
   <div style="max-width:620px;width:100%;margin:0 auto;background:transparent">
-    <div style="background:#0B1F3A;color:#fff;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
+    <div style="background:${isInterview ? '#322F6A' : '#0B1F3A'};color:#fff;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
       <img src="${escapeHtml(logoUrl())}" alt="LeamJobs" style="display:block;width:auto;height:28px;border:0;max-width:160px;" />
     </div>
     <main style="background:#fff;padding:0;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
       <div style="padding:28px 32px 34px;box-sizing:border-box;width:100%">
-      <h1 style="margin:8px 0 18px;font-size:24px;line-height:1.25;color:#17352b">${escapeHtml(heading)}</h1>
+      <h1 style="margin:8px 0 18px;font-size:24px;line-height:1.25;color:${isInterview ? '#322F6A' : '#17352b'}">${escapeHtml(heading)}</h1>
       ${body}
-      ${ctaLabel && ctaUrl ? `<p style="margin:26px 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d79a3d;color:#1d2924;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:6px">${escapeHtml(ctaLabel)}</a></p>` : ''}
+      ${ctaLabel && ctaUrl ? `<p style="margin:26px 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:${isInterview ? '#EF5036' : '#d79a3d'};color:${isInterview ? '#fff' : '#1d2924'};text-decoration:none;font-weight:700;padding:12px 18px;border-radius:6px">${escapeHtml(ctaLabel)}</a></p>` : ''}
       <p style="margin:28px 0 0;color:#63736c;font-size:13px">${isMarketing ? 'You are receiving this optional LeamJobs job-update email.' : 'You are receiving this important LeamJobs account or service message.'}</p>
       </div>
     </main>
@@ -52,7 +52,7 @@ const normalizeTemplateLink = (link) => {
   return `${baseUrl.replace(/\/$/, '')}${value.startsWith('/') ? value : `/${value}`}`;
 };
 
-const generic = ({ title, heading = title, message, link, linkLabel = 'Open LeamJobs', unsubscribeUrl, isMarketing }) => {
+const generic = ({ title, heading = title, message, link, linkLabel = 'Open LeamJobs', unsubscribeUrl, isMarketing, isInterview }) => {
   const normalizedLink = normalizeTemplateLink(link);
   return {
     subject: title,
@@ -64,6 +64,7 @@ const generic = ({ title, heading = title, message, link, linkLabel = 'Open Leam
       ctaUrl: normalizedLink,
       unsubscribeUrl,
       isMarketing,
+      isInterview,
     }),
   };
 };
@@ -71,6 +72,41 @@ const generic = ({ title, heading = title, message, link, linkLabel = 'Open Leam
 export const renderEmailTemplate = (emailType, context = {}) => {
   const title = context.title || 'LeamJobs notification';
   const message = context.message || 'There is new activity on your LeamJobs account.';
+
+  if (['INTERVIEW_SCHEDULED', 'INTERVIEW_RESCHEDULED', 'INTERVIEW_UPDATED', 'INTERVIEW_CANCELLED'].includes(emailType)) {
+    const details = context.metadata && typeof context.metadata === 'object' ? context.metadata : {};
+    const date = details.scheduledAt ? new Date(details.scheduledAt) : null;
+    const formattedDate = date && !Number.isNaN(date.getTime())
+      ? new Intl.DateTimeFormat('en', { dateStyle: 'full', timeStyle: 'short', timeZone: typeof details.timezone === 'string' ? details.timezone : 'UTC' }).format(date)
+      : null;
+    const detailLines = [
+      details.jobTitle ? `Job: ${details.jobTitle}` : null,
+      details.companyName ? `Company: ${details.companyName}` : null,
+      formattedDate ? `Date and time: ${formattedDate}` : null,
+      details.timezone ? `Timezone: ${details.timezone}` : null,
+      details.method ? `Method: ${String(details.method).replaceAll('_', ' ').toLowerCase()}` : null,
+      details.durationMinutes ? `Duration: ${details.durationMinutes} minutes` : null,
+      details.location ? `Location: ${details.location}` : null,
+      details.meetingUrl ? `Meeting link: ${details.meetingUrl}` : null,
+      details.phoneNumber ? `Contact number: ${details.phoneNumber}` : null,
+      details.message ? `Employer instructions: ${details.message}` : null,
+    ].filter((line) => typeof line === 'string');
+    const interviewHeading = {
+      INTERVIEW_SCHEDULED: 'Interview Invitation',
+      INTERVIEW_RESCHEDULED: 'Interview Rescheduled',
+      INTERVIEW_UPDATED: 'Interview Details Updated',
+      INTERVIEW_CANCELLED: 'Interview Cancelled',
+    }[emailType];
+    return generic({
+      title,
+      heading: interviewHeading,
+      message: [message, ...detailLines].join('\n\n'),
+      link: context.link,
+      linkLabel: 'View interview',
+      isInterview: true,
+      isMarketing: false,
+    });
+  }
 
   if (emailType === 'EMPLOYER_VERIFICATION_APPROVED') {
     return generic({
