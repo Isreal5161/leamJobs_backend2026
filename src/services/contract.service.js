@@ -12,9 +12,20 @@ export const contractSelect = {
   status: true,
   startDate: true,
   expectedEndDate: true,
-  job: { select: { id: true, title: true } },
+  completedAt: true,
+  endedAt: true,
+  cancelledAt: true,
+  job: { select: { id: true, title: true, description: true, jobType: true, engagementType: true } },
+  application: { select: { id: true, status: true, createdAt: true } },
   employer: { select: { id: true, firstName: true, lastName: true } },
-  seeker: { select: { id: true, firstName: true, lastName: true } },
+  seeker: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      seekerProfile: { select: { professionalTitle: true, profilePictureUrl: true } },
+    },
+  },
   createdAt: true,
   updatedAt: true,
   freelanceDetails: {
@@ -33,6 +44,7 @@ export const contractSelect = {
       completionSubmittedAt: true,
       completionNote: true,
       workStatus: true,
+      expectedCompletionDate: true,
       escrow: {
         select: {
           id: true,
@@ -45,14 +57,19 @@ export const contractSelect = {
           refundedAmount: true,
           status: true,
           fundedAt: true,
+          releasedAt: true,
+          cancelledAt: true,
           releaseEligibleAt: true,
           payments: {
+            where: { paymentType: 'CONTRACT_FUNDING' },
             select: {
               id: true,
               amount: true,
               currency: true,
               status: true,
               paymentType: true,
+              provider: true,
+              providerReference: true,
               verifiedAt: true,
               createdAt: true,
             },
@@ -90,8 +107,33 @@ export class ContractProgressError extends Error {
 
 const decimalToString = (value) => value === null || value === undefined ? null : value.toFixed(2);
 
+const fundingPaymentAmount = (details) => {
+  if (!details?.agreedAmount || details.platformFeeAmount === null || details.platformFeeAmount === undefined
+    || details.seekerNetAmount === null || details.seekerNetAmount === undefined) return null;
+  const amount = new Prisma.Decimal(details.agreedAmount);
+  const additive = new Prisma.Decimal(details.seekerNetAmount).eq(amount);
+  return decimalToString(additive ? amount.plus(details.platformFeeAmount) : amount);
+};
+
+const contractActions = (contract) => {
+  const details = contract.freelanceDetails;
+  const escrow = details?.escrow;
+  const fundableStatus = contract.type === 'CONTRACT_PROJECT' ? contract.status === 'PENDING' : contract.status === 'ACTIVE';
+  return {
+    fund: Boolean(fundableStatus && escrow && ['UNFUNDED', 'FUNDING'].includes(escrow.status)),
+    confirmCompletion: Boolean(
+      contract.status === 'ACTIVE'
+      && escrow?.status === 'FUNDED'
+      && details?.completionSubmittedAt
+      && !details?.employerCompletionConfirmedAt
+      && (escrow.payments ?? []).some((payment) => payment.status === 'SUCCESSFUL'),
+    ),
+  };
+};
+
 export const mapContract = (contract) => ({
   id: contract.id,
+  contractId: contract.id,
   applicationId: contract.applicationId,
   jobId: contract.jobId,
   employerId: contract.employerId,
@@ -100,9 +142,19 @@ export const mapContract = (contract) => ({
   status: contract.status,
   startDate: contract.startDate,
   expectedEndDate: contract.expectedEndDate,
+  completedAt: contract.completedAt ?? null,
+  endedAt: contract.endedAt ?? null,
+  cancelledAt: contract.cancelledAt ?? null,
   job: contract.job,
+  application: contract.application ?? null,
   employer: contract.employer,
-  seeker: contract.seeker,
+  seeker: contract.seeker ? {
+    id: contract.seeker.id,
+    firstName: contract.seeker.firstName,
+    lastName: contract.seeker.lastName,
+    professionalTitle: contract.seeker.seekerProfile?.professionalTitle ?? null,
+    profilePictureUrl: contract.seeker.seekerProfile?.profilePictureUrl ?? null,
+  } : null,
   createdAt: contract.createdAt,
   updatedAt: contract.updatedAt,
   freelance: contract.freelanceDetails ? {
@@ -120,6 +172,7 @@ export const mapContract = (contract) => ({
     completionSubmittedAt: contract.freelanceDetails.completionSubmittedAt,
     completionNote: contract.freelanceDetails.completionNote,
     workStatus: contract.freelanceDetails.workStatus,
+    expectedCompletionDate: contract.freelanceDetails.expectedCompletionDate ?? null,
     escrow: contract.freelanceDetails.escrow ? {
       id: contract.freelanceDetails.escrow.id,
       grossAmount: decimalToString(contract.freelanceDetails.escrow.grossAmount),
@@ -132,17 +185,35 @@ export const mapContract = (contract) => ({
       status: contract.freelanceDetails.escrow.status,
       fundedAt: contract.freelanceDetails.escrow.fundedAt,
       releaseEligibleAt: contract.freelanceDetails.escrow.releaseEligibleAt,
+      releasedAt: contract.freelanceDetails.escrow.releasedAt ?? null,
+      cancelledAt: contract.freelanceDetails.escrow.cancelledAt ?? null,
       payments: (contract.freelanceDetails.escrow.payments ?? []).map((payment) => ({
         id: payment.id,
         amount: decimalToString(payment.amount),
         currency: payment.currency,
         status: payment.status,
         paymentType: payment.paymentType,
+        provider: payment.provider ?? null,
+        providerReference: payment.providerReference ?? null,
         verifiedAt: payment.verifiedAt,
         createdAt: payment.createdAt,
       })),
     } : null,
   } : null,
+  funding: contract.freelanceDetails ? {
+    projectAmount: decimalToString(contract.freelanceDetails.agreedAmount),
+    percentage: decimalToString(contract.freelanceDetails.platformFeePercentage),
+    feeAmount: decimalToString(contract.freelanceDetails.platformFeeAmount),
+    totalEmployerPayment: contract.freelanceDetails.escrow?.payments?.[0]?.amount
+      ? decimalToString(contract.freelanceDetails.escrow.payments[0].amount)
+      : fundingPaymentAmount(contract.freelanceDetails),
+    seekerEntitlement: decimalToString(contract.freelanceDetails.seekerNetAmount),
+    currency: contract.freelanceDetails.currency,
+    fundedAmount: decimalToString(contract.freelanceDetails.escrow?.fundedAmount),
+    escrowStatus: contract.freelanceDetails.escrow?.status ?? null,
+    paymentStatus: contract.freelanceDetails.escrow?.payments?.[0]?.status ?? null,
+  } : null,
+  availableActions: contractActions(contract),
 });
 
 const lockContract = async (transaction, contractId) => {
@@ -165,6 +236,32 @@ export const getContractForParty = async ({ contractId, userId, role }) => {
   const ownerId = role === 'EMPLOYER' ? contract.employerId : contract.seekerId;
   if (ownerId !== userId) throw new ContractNotFoundError();
   return mapContract(contract);
+};
+
+export const listEmployerContracts = async ({ employerId, page, limit, status }) => {
+  const where = {
+    employerId,
+    ...(status ? { status } : {}),
+  };
+  const [contracts, total] = await Promise.all([
+    prisma.contract.findMany({
+      where,
+      select: contractSelect,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.contract.count({ where }),
+  ]);
+  return {
+    contracts: contracts.map(mapContract),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
 };
 
 export const confirmContract = async ({ contractId, userId, role }) => {

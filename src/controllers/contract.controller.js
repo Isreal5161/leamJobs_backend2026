@@ -2,6 +2,7 @@ import { confirmContract } from '../services/contract.service.js';
 import {
   confirmContractCompletion,
   getContractForParty,
+  listEmployerContracts,
   submitContractCompletion,
 } from '../services/contract.service.js';
 import {
@@ -21,6 +22,16 @@ export const getEmployerContract = async (req, res, next) => {
   try {
     const contract = await getContractForParty({ contractId: req.params.contractId, userId: req.user.sub, role: 'EMPLOYER' });
     return res.status(200).json({ success: true, data: { contract } });
+  } catch (error) { return next(error); }
+};
+
+export const getEmployerContracts = async (req, res, next) => {
+  try {
+    const data = await listEmployerContracts({
+      employerId: req.user.sub,
+      ...req.validatedContractQuery,
+    });
+    return res.status(200).json({ success: true, data });
   } catch (error) { return next(error); }
 };
 

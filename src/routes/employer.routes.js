@@ -30,6 +30,7 @@ import {
 	confirmCompletion,
 	confirmEmployerContract,
 	getEmployerContract,
+	getEmployerContracts,
 	initializeEmployerContractPayment,
 	verifyEmployerContractPayment,
 } from '../controllers/contract.controller.js';
@@ -40,6 +41,7 @@ import { validateCreateJobInvitation } from '../validators/jobInvitation.validat
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
+import { validateEmployerContractsQuery } from '../validators/employerContracts.validation.js';
 import { validateSubmitEmployerVerification } from '../validators/employerVerification.validation.js';
 import {
   deleteVerificationDocument,
@@ -62,6 +64,7 @@ employerRouter.delete('/verification/documents/:documentId', authenticate, requi
 employerRouter.post('/profile/logo', authenticate, requireRole('EMPLOYER'), singleUpload('file'), uploadLogo);
 employerRouter.delete('/profile/logo', authenticate, requireRole('EMPLOYER'), deleteLogo);
 employerRouter.get('/profile/logo', authenticate, requireRole('EMPLOYER'), getLogo);
+employerRouter.get('/contracts', authenticate, requireRole('EMPLOYER'), validateEmployerContractsQuery, getEmployerContracts);
 employerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('EMPLOYER'), confirmEmployerContract);
 employerRouter.get('/contracts/:contractId', authenticate, requireRole('EMPLOYER'), getEmployerContract);
 employerRouter.post('/contracts/:contractId/payment', authenticate, requireRole('EMPLOYER'), validateContractPayment, initializeEmployerContractPayment);

@@ -132,7 +132,16 @@ describe('Phase 1 freelance contract acceptance', () => {
   test('acceptance creates a pending contract with Decimal fee snapshots and no escrow', async () => {
     mockPrisma.application.findFirst
       .mockResolvedValueOnce({ id: applicationId })
-      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce({
+        ...acceptanceApplication,
+        job: {
+          ...acceptanceApplication.job,
+          freelanceCompensation: {
+            projectAmount: new Prisma.Decimal('500000.00'),
+            currency: 'NGN',
+          },
+        },
+      })
       .mockResolvedValueOnce(applicationDetail());
 
     const response = await request(app)
@@ -151,11 +160,11 @@ describe('Phase 1 freelance contract acceptance', () => {
         status: 'PENDING',
         freelanceDetails: {
           create: expect.objectContaining({
-            agreedAmount: new Prisma.Decimal('100000.00'),
+            agreedAmount: new Prisma.Decimal('500000.00'),
             currency: 'NGN',
             platformFeePercentage: new Prisma.Decimal('5.00'),
-            platformFeeAmount: new Prisma.Decimal('5000.00'),
-            seekerNetAmount: new Prisma.Decimal('100000.00'),
+            platformFeeAmount: new Prisma.Decimal('25000.00'),
+            seekerNetAmount: new Prisma.Decimal('500000.00'),
             employerConfirmedAt: null,
             seekerConfirmedAt: null,
           }),

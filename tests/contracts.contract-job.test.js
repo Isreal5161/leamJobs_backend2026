@@ -159,7 +159,15 @@ test('contract selection creates protected engagement and leaves application pay
     platformFeeAmount: new Prisma.Decimal('25000.00'),
     seekerNetAmount: new Prisma.Decimal('500000.00'),
   }));
-  expect(mockPrisma.escrow.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ freelanceContractId: contractId, status: 'UNFUNDED' }) }));
+  expect(mockPrisma.escrow.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      freelanceContractId: contractId,
+      grossAmount: new Prisma.Decimal('500000.00'),
+      platformFeeAmount: new Prisma.Decimal('25000.00'),
+      seekerNetAmount: new Prisma.Decimal('500000.00'),
+      status: 'UNFUNDED',
+    }),
+  }));
   expect(mockPrisma.application.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'PAYMENT_PENDING' } }));
   expect(result.status).toBe('PAYMENT_PENDING');
 });
@@ -274,8 +282,50 @@ test('contract payment initialization uses the snapshot amount and does not use 
   expect(result.payment.checkoutUrl).toBe('https://checkout.test');
 });
 
+test('freelance project payment initialization adds the snapshotted fee to the project amount', async () => {
+  const freelanceContract = contractRecord({ status: 'ACTIVE' });
+  freelanceContract.type = 'FREELANCE_PROJECT';
+  mockPrisma.contract.findUnique.mockResolvedValue(freelanceContract);
+
+  const result = await initializeContractPayment({
+    contractId,
+    employerId,
+    idempotencyKey: 'freelance-additive-payment-key',
+  });
+
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      amount: new Prisma.Decimal('525000.00'),
+      currency: 'NGN',
+      paymentType: 'CONTRACT_FUNDING',
+    }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '525000.00', currency: 'NGN' }));
+  expect(result.fundingBreakdown).toEqual(expect.objectContaining({
+    projectAmount: '500000.00',
+    fundingCharge: '25000.00',
+    totalEmployerPayment: '525000.00',
+    seekerEntitlement: '500000.00',
+  }));
+});
+
 test('payment request validation rejects client-supplied amount and fee fields', () => {
-  const req = { body: { idempotencyKey: 'client-key', amount: 100000, percentage: 1, total: 100000 } };
+  const req = {
+    body: {
+      idempotencyKey: 'client-key',
+      agreedAmount: 100000,
+      platformFeePercentage: 1,
+      platformFeeAmount: 1000,
+      seekerNetAmount: 99000,
+      amount: 100000,
+      total: 100000,
+      currency: 'USD',
+      employerId: 'attacker-employer',
+      seekerId: 'attacker-seeker',
+      status: 'SUCCESSFUL',
+      escrowAmount: 100000,
+    },
+  };
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
   const next = jest.fn();
 
