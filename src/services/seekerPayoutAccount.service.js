@@ -44,6 +44,12 @@ const resolvePayoutDetails = async (payload) => {
     });
   } catch (error) {
     if (error instanceof FlutterwaveRequestError && error.status === 422) {
+      console.error('flutterwave_payout_account_verification_failed', {
+        originalHttpStatus: error.originalHttpStatus ?? null,
+        providerStatus: error.providerStatus ?? null,
+        providerCode: error.providerCode ?? null,
+        normalizedStatus: error.status,
+      });
       throw new PayoutAccountValidationError('Flutterwave could not verify this bank account. Check the bank and account number.');
     }
     throw error;

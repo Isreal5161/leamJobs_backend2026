@@ -10,13 +10,30 @@ export class FlutterwaveConfigurationError extends Error {
 }
 
 export class FlutterwaveRequestError extends Error {
-  constructor(message, { outcomeUnknown = false, status = 502 } = {}) {
+  constructor(message, {
+    outcomeUnknown = false,
+    status = 502,
+    originalHttpStatus,
+    providerStatus,
+    providerCode,
+  } = {}) {
     super(message);
     this.name = 'FlutterwaveRequestError';
     this.status = status;
     this.outcomeUnknown = outcomeUnknown;
+    if (originalHttpStatus !== undefined) this.originalHttpStatus = originalHttpStatus;
+    if (providerStatus !== undefined) this.providerStatus = providerStatus;
+    if (providerCode !== undefined) this.providerCode = providerCode;
   }
 }
+
+const safeProviderStatus = (value) => (
+  value === 'error' || value === 'success' ? value : undefined
+);
+
+const safeProviderCode = (value) => (
+  typeof value === 'string' && /^[A-Z][A-Z_]{0,63}$/.test(value) ? value : undefined
+);
 
 const requireSecretKey = () => {
   if (!env.FLUTTERWAVE_SECRET_KEY) {
@@ -62,6 +79,9 @@ const requestFlutterwave = async (path, options = {}) => {
     throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed', {
       outcomeUnknown: unknownOutcome,
       status,
+      originalHttpStatus: response.status,
+      providerStatus: safeProviderStatus(payload?.status),
+      providerCode: safeProviderCode(payload?.code),
     });
   }
   return payload;

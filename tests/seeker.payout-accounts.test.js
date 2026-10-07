@@ -306,6 +306,69 @@ describe('POST /api/seeker/payout-accounts', () => {
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
+  test('returns the generic verification error and logs only allowlisted diagnostics', async () => {
+    const accountNumber = '9876543210';
+    const providerResponse = {
+      status: 'error',
+      message: 'provider message must not be logged',
+      code: 'ACCOUNT_INVALID',
+      data: { accountNumber: 'provider-data-must-not-be-logged' },
+    };
+    const tx = buildTransaction({ existingAccount: { id: defaultAccountId, isDefault: true, country: 'Nigeria' } });
+    mockPrisma.payoutAccount.findFirst.mockResolvedValue({ id: defaultAccountId });
+    mockPrisma.$transaction.mockImplementation((callback) => callback(tx));
+    fetchMock.mockImplementation(async (url) => String(url).endsWith('/banks/NG')
+      ? { ok: true, status: 200, json: async () => ({ status: 'success', data: [{ code: '044', name: 'Access Bank' }] }) }
+      : { ok: false, status: 422, json: async () => providerResponse });
+    const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await request(app)
+        .patch(`/api/seeker/payout-accounts/${defaultAccountId}`)
+        .set('Authorization', `Bearer ${token()}`)
+        .send({ country: 'Nigeria', bankCode: '044', accountNumber });
+
+      expect(response.status).toBe(422);
+      expect(response.body).toEqual({
+        message: 'Flutterwave could not verify this bank account. Check the bank and account number.',
+        status: 422,
+      });
+      expect(response.body).not.toHaveProperty('diagnostics');
+      expect(errorLog).toHaveBeenCalledWith('flutterwave_payout_account_verification_failed', {
+        originalHttpStatus: 422,
+        providerStatus: 'error',
+        providerCode: 'ACCOUNT_INVALID',
+        normalizedStatus: 422,
+      });
+
+      const logs = JSON.stringify(errorLog.mock.calls);
+      for (const sensitiveValue of [
+        accountNumber,
+        '044',
+        'test-flutterwave-secret',
+        'provider message must not be logged',
+        'provider-data-must-not-be-logged',
+      ]) {
+        expect(logs).not.toContain(sensitiveValue);
+      }
+      expect(logs).not.toContain('Authorization');
+      expect(logs).not.toContain('account_number');
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  test('rejects an empty account number before contacting Flutterwave', async () => {
+    const response = await request(app)
+      .patch(`/api/seeker/payout-accounts/${defaultAccountId}`)
+      .set('Authorization', `Bearer ${token()}`)
+      .send({ country: 'Nigeria', bankCode: '044', accountNumber: '' });
+
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
   test('does not accept payout details for unsupported Ghana destination', async () => {
     const response = await request(app)
       .post('/api/seeker/payout-accounts')
