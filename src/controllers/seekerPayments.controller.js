@@ -4,7 +4,16 @@ import {
   getSeekerTransactions,
   getSeekerWithdrawals,
 } from '../services/seekerPayments.service.js';
-import { createSeekerWithdrawal } from '../services/seekerWithdrawal.service.js';
+import { createSeekerWithdrawal, getSeekerWithdrawalQuote } from '../services/seekerWithdrawal.service.js';
+
+export const getWithdrawalQuote = async (req, res, next) => {
+  try {
+    const withdrawalQuote = await getSeekerWithdrawalQuote(req.user.sub, req.validatedWithdrawalQuote);
+    return res.status(200).json({ success: true, data: { withdrawalQuote } });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 export const getPaymentSummary = async (req, res, next) => {
   try {

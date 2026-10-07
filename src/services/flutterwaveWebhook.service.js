@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { handleFlutterwaveWebhook as handleContractFlutterwaveWebhook } from './contractPayment.service.js';
 import { verifySeekerSubscriptionPayment } from './seekerSubscription.service.js';
+import { reconcileWithdrawal } from './withdrawalExecution.service.js';
 
 export class FlutterwaveWebhookError extends Error {
   constructor(message, status = 400) {
@@ -43,6 +44,16 @@ export const handleFlutterwaveWebhook = async ({ payload }) => {
     ? null
     : String(transactionIdValue);
 
+  if (providerReference) {
+    const withdrawal = await prisma.withdrawal.findUnique({
+      where: { providerReference },
+      select: { id: true, provider: true, status: true, payout: { select: { id: true } } },
+    });
+    if (withdrawal?.provider === 'FLUTTERWAVE') {
+      return handleFlutterwaveWithdrawalWebhook({ payload, withdrawal, transferId: transactionId });
+    }
+  }
+
   const payment = await resolveWebhookPayment({ providerReference, transactionId });
   if (payment?.provider === 'FLUTTERWAVE' && payment.paymentType === 'SUBSCRIPTION') {
     return handleSeekerSubscriptionWebhook({
@@ -53,6 +64,61 @@ export const handleFlutterwaveWebhook = async ({ payload }) => {
   }
 
   return handleContractFlutterwaveWebhook({ payload });
+};
+
+const handleFlutterwaveWithdrawalWebhook = async ({ payload, withdrawal, transferId }) => {
+  if (!transferId || !/^\d+$/.test(transferId) || !withdrawal.payout) {
+    throw new FlutterwaveWebhookError('Flutterwave withdrawal transfer identifiers are incomplete', 400);
+  }
+
+  const eventType = String(payload?.event ?? '').trim();
+  const status = String(payload?.data?.status ?? '').trim().toUpperCase();
+  const providerEventId = `withdrawal:${payload?.id ?? `${transferId}:${eventType}:${status}`}`;
+  const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const eventWhere = { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId } };
+  try {
+    await prisma.providerWebhookEvent.create({
+      data: { provider: 'FLUTTERWAVE', providerEventId, eventType: eventType || null, payloadHash },
+    });
+  } catch (error) {
+    if (error?.code !== 'P2002') throw error;
+    const existingEvent = await prisma.providerWebhookEvent.findUnique({
+      where: eventWhere,
+      select: { payloadHash: true, processedAt: true },
+    });
+    if (!existingEvent) throw error;
+    if (existingEvent.payloadHash !== payloadHash) {
+      throw new FlutterwaveWebhookError('Flutterwave reused a webhook event identifier with different content', 409);
+    }
+    if (existingEvent.processedAt) return { duplicate: true };
+  }
+
+  try {
+    const attempt = await prisma.payoutAttempt.findFirst({
+      where: { payoutId: withdrawal.payout.id },
+      orderBy: [{ attemptNumber: 'desc' }],
+      select: { id: true, providerReference: true },
+    });
+    if (!attempt) throw new FlutterwaveWebhookError('Flutterwave withdrawal attempt not found', 409);
+    if (attempt.providerReference && attempt.providerReference !== transferId) {
+      throw new FlutterwaveWebhookError('Flutterwave transfer ID does not match the withdrawal attempt', 409);
+    }
+    if (!attempt.providerReference) {
+      await prisma.payoutAttempt.update({
+        where: { id: attempt.id },
+        data: { providerReference: transferId },
+      });
+    }
+
+    const result = await reconcileWithdrawal(withdrawal.id);
+    await prisma.providerWebhookEvent.update({ where: eventWhere, data: { processedAt: new Date() } });
+    return { duplicate: false, withdrawalId: withdrawal.id, ...result };
+  } catch (error) {
+    if (!error?.status || error.status >= 500) {
+      await prisma.providerWebhookEvent.delete({ where: eventWhere }).catch(() => undefined);
+    }
+    throw error;
+  }
 };
 
 const getSubscriptionWebhookEventId = ({ payload, transactionId, eventType, providerStatus }) => {

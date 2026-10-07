@@ -1,6 +1,7 @@
 import { prisma } from '../config/database.js';
 import { decryptPayoutIdentifier, encryptPayoutIdentifier } from '../utils/payoutEncryption.js';
-import { isNigeria } from '../config/payoutCountries.js';
+import { getPayoutCapability, isSupportedPayoutAccount } from '../config/payoutCountries.js';
+import { FlutterwaveRequestError, getFlutterwaveBanks, resolveFlutterwaveBankAccount } from './flutterwave.service.js';
 
 export class PayoutAccountValidationError extends Error {
   constructor(message) {
@@ -26,6 +27,39 @@ export class PayoutAccountConflictError extends Error {
   }
 }
 
+const resolvePayoutDetails = async (payload) => {
+  const capability = getPayoutCapability(payload.country);
+  if (!capability) {
+    throw new PayoutAccountValidationError('Withdrawals are not currently supported for this country.');
+  }
+
+  const banks = await getFlutterwaveBanks(capability.countryCode);
+  const bank = banks.find((entry) => entry.code === payload.bankCode);
+  if (!bank) throw new PayoutAccountValidationError('Select a valid Nigerian bank from the list.');
+  let verification;
+  try {
+    verification = await resolveFlutterwaveBankAccount({
+      accountNumber: payload.accountNumber,
+      bankCode: bank.code,
+    });
+  } catch (error) {
+    if (error instanceof FlutterwaveRequestError && error.status === 422) {
+      throw new PayoutAccountValidationError('Flutterwave could not verify this bank account. Check the bank and account number.');
+    }
+    throw error;
+  }
+  return {
+    payoutMethod: 'BANK_ACCOUNT',
+    provider: 'FLUTTERWAVE',
+    currency: capability.currency,
+    bankName: bank.name,
+    bankCode: bank.code,
+    identifier: payload.accountNumber,
+    accountName: verification.accountName,
+    verifiedAt: new Date(),
+  };
+};
+
 // Additive vs. the original shape: existing consumers (withdrawal dropdown) only read the
 // fields that already existed, so adding columns here cannot break them.
 const payoutAccountSelect = {
@@ -44,12 +78,18 @@ const payoutAccountSelect = {
   createdAt: true,
 };
 
-// Kept separate from `verifiedAt`/`disabledAt` (the real source of truth the withdrawal
-// service already trusts) so this is purely a read-side convenience, never a stored flag.
+const isWithdrawalSupported = (account) => isSupportedPayoutAccount(account) && !account.disabledAt;
+
 const deriveStatus = (account) => {
   if (account.disabledAt) return 'DISABLED';
-  if (account.verifiedAt) return 'ACTIVE';
-  return 'PENDING_VERIFICATION';
+  const capability = getPayoutCapability(account.country);
+  if (!capability || account.provider !== capability.provider
+    || account.payoutMethod !== capability.payoutMethod || account.currency !== capability.currency) {
+    return 'UNSUPPORTED';
+  }
+  if (capability.verifiedBeforeWithdrawal && !account.verifiedAt) return 'PENDING_VERIFICATION';
+  if (isWithdrawalSupported(account)) return account.verifiedAt ? 'ACTIVE' : 'SUPPORTED_FOR_PAYOUT';
+  return 'UNSUPPORTED';
 };
 
 const mapPayoutAccount = (account) => ({
@@ -58,14 +98,15 @@ const mapPayoutAccount = (account) => ({
   payoutMethod: account.payoutMethod,
   country: account.country,
   currency: account.currency,
-  bankCode: account.bankCode,
+  bankCode: null,
   bankName: account.bankName,
   accountName: account.accountName,
   accountNumberLast4: account.accountNumberLast4,
   maskedAccountNumber: `****${account.accountNumberLast4}`,
   isDefault: account.isDefault,
   verifiedAt: account.verifiedAt,
-  verified: Boolean(account.verifiedAt),
+  verified: Boolean(account.verifiedAt && getPayoutCapability(account.country)?.verifiedBeforeWithdrawal && isWithdrawalSupported(account)),
+  withdrawalSupported: isWithdrawalSupported(account),
   status: deriveStatus(account),
 });
 
@@ -73,8 +114,12 @@ export const getEligibleSeekerPayoutAccounts = async (seekerId) => {
   const accounts = await prisma.payoutAccount.findMany({
     where: {
       userId: seekerId,
-      disabledAt: null,
+      provider: 'FLUTTERWAVE',
+      payoutMethod: 'BANK_ACCOUNT',
+      country: 'Nigeria',
+      currency: 'NGN',
       verifiedAt: { not: null },
+      disabledAt: null,
     },
     orderBy: [
       { isDefault: 'desc' },
@@ -103,29 +148,6 @@ export const listAllSeekerPayoutAccounts = async (seekerId) => {
   return accounts.map(mapPayoutAccount);
 };
 
-// Country is always the source of truth for method/currency/provider - never trust the client's copy.
-const resolveMethodFields = (payload) => {
-  if (isNigeria(payload.country)) {
-    return {
-      payoutMethod: 'BANK_ACCOUNT',
-      provider: 'PAYSTACK',
-      currency: 'NGN',
-      bankName: payload.bankName,
-      bankCode: payload.bankCode,
-      identifier: payload.accountNumber,
-    };
-  }
-
-  return {
-    payoutMethod: 'OTHER',
-    provider: 'OTHER',
-    currency: payload.currency,
-    bankName: null,
-    bankCode: null,
-    identifier: payload.payoutIdentifier,
-  };
-};
-
 const normalizeIdentifier = (value) => value.replace(/\s+/g, '').toUpperCase();
 
 const isDuplicateOfExisting = (existingAccounts, country, payoutMethod, normalizedIdentifier) => existingAccounts.some((existing) => {
@@ -145,7 +167,7 @@ const mapKnownPrismaError = (error) => {
 };
 
 export const createSeekerPayoutAccount = async (seekerId, payload) => {
-  const resolved = resolveMethodFields(payload);
+  const resolved = await resolvePayoutDetails(payload);
   const normalizedIdentifier = normalizeIdentifier(resolved.identifier);
   const last4 = normalizedIdentifier.slice(-4);
 
@@ -179,10 +201,11 @@ export const createSeekerPayoutAccount = async (seekerId, payload) => {
           bankCode: resolved.bankCode,
           bankName: resolved.bankName,
           encryptedAccountNumber: encryptPayoutIdentifier(normalizedIdentifier),
+          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata ?? null,
           accountNumberLast4: last4,
-          accountName: payload.accountHolderName,
+          accountName: resolved.accountName,
           isDefault: shouldBeDefault,
-          verifiedAt: null,
+          verifiedAt: resolved.verifiedAt,
         },
         select: payoutAccountSelect,
       });
@@ -194,9 +217,17 @@ export const createSeekerPayoutAccount = async (seekerId, payload) => {
   }
 };
 
-const isDefaultOnlyPayload = (payload) => Object.keys(payload).length === 1 && 'isDefault' in payload;
-
 export const updateSeekerPayoutAccount = async (seekerId, accountId, payload) => {
+  const defaultOnly = Object.keys(payload).length === 1 && 'isDefault' in payload;
+  let resolved = null;
+  if (!defaultOnly) {
+    const ownedAccount = await prisma.payoutAccount.findFirst({
+      where: { id: accountId, userId: seekerId, disabledAt: null },
+      select: { id: true },
+    });
+    if (!ownedAccount) throw new PayoutAccountNotFoundError();
+    resolved = await resolvePayoutDetails(payload);
+  }
   try {
     return await prisma.$transaction(async (transaction) => {
       const existing = await transaction.payoutAccount.findFirst({
@@ -205,7 +236,7 @@ export const updateSeekerPayoutAccount = async (seekerId, accountId, payload) =>
 
       if (!existing) throw new PayoutAccountNotFoundError();
 
-      if (isDefaultOnlyPayload(payload)) {
+      if (defaultOnly) {
         if (payload.isDefault) {
           await transaction.payoutAccount.updateMany({
             where: { userId: seekerId, isDefault: true },
@@ -222,7 +253,14 @@ export const updateSeekerPayoutAccount = async (seekerId, accountId, payload) =>
         return mapPayoutAccount(updated);
       }
 
-      const resolved = resolveMethodFields(payload);
+      const activeWithdrawal = await transaction.withdrawal.findFirst({
+        where: { payoutAccountId: accountId, status: { in: ['PENDING', 'PROCESSING'] } },
+        select: { id: true },
+      });
+      if (activeWithdrawal) {
+        throw new PayoutAccountConflictError('Payout details cannot be changed while a withdrawal is processing.');
+      }
+
       const normalizedIdentifier = normalizeIdentifier(resolved.identifier);
       const last4 = normalizedIdentifier.slice(-4);
 
@@ -254,11 +292,11 @@ export const updateSeekerPayoutAccount = async (seekerId, accountId, payload) =>
           bankCode: resolved.bankCode,
           bankName: resolved.bankName,
           encryptedAccountNumber: encryptPayoutIdentifier(normalizedIdentifier),
+          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata ?? null,
           accountNumberLast4: last4,
-          accountName: payload.accountHolderName,
+          accountName: resolved.accountName,
           isDefault: shouldBeDefault,
-          // Details changed since the last verification, if any - it no longer attests to these values.
-          verifiedAt: null,
+          verifiedAt: resolved.verifiedAt,
         },
         select: payoutAccountSelect,
       });

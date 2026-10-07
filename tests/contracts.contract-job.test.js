@@ -35,7 +35,12 @@ const contractJobApplication = ({ status = 'SHORTLISTED', id = applicationId, se
   },
 });
 
-const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED' } = {}) => ({
+const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED', amountValue = '500000.00', feePercentageValue = '5.00', legacyDeducted = false } = {}) => {
+  const amount = new Prisma.Decimal(amountValue);
+  const feePercentage = new Prisma.Decimal(feePercentageValue);
+  const feeAmount = amount.mul(feePercentage).dividedBy(100).toDecimalPlaces(2);
+  const seekerEntitlement = legacyDeducted ? amount.minus(feeAmount) : amount;
+  return ({
   id: contractId,
   applicationId,
   jobId,
@@ -52,11 +57,11 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED' } = {}) 
   seeker: { id: seekerId, firstName: 'Seeker', lastName: 'One' },
   freelanceDetails: {
     id: freelanceContractId,
-    agreedAmount: new Prisma.Decimal('500000.00'),
+    agreedAmount: amount,
     currency: 'NGN',
-    platformFeePercentage: new Prisma.Decimal('5.00'),
-    platformFeeAmount: new Prisma.Decimal('25000.00'),
-    seekerNetAmount: new Prisma.Decimal('500000.00'),
+    platformFeePercentage: feePercentage,
+    platformFeeAmount: feeAmount,
+    seekerNetAmount: seekerEntitlement,
     employerConfirmedAt: null,
     seekerConfirmedAt: null,
     employerCompletionConfirmedAt: null,
@@ -65,9 +70,9 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED' } = {}) 
     workStatus: 'PENDING',
     escrow: {
       id: escrowId,
-      grossAmount: new Prisma.Decimal('500000.00'),
-      platformFeeAmount: new Prisma.Decimal('25000.00'),
-      seekerNetAmount: new Prisma.Decimal('500000.00'),
+      grossAmount: amount,
+      platformFeeAmount: feeAmount,
+      seekerNetAmount: seekerEntitlement,
       currency: 'NGN',
       fundedAmount: escrowStatus === 'FUNDED' ? new Prisma.Decimal('500000.00') : new Prisma.Decimal('0.00'),
       releasedAmount: new Prisma.Decimal('0.00'),
@@ -78,7 +83,8 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED' } = {}) 
       payments: escrowStatus === 'FUNDED' ? [{ id: paymentId, amount: new Prisma.Decimal('525000.00'), currency: 'NGN', status: 'SUCCESSFUL', paymentType: 'CONTRACT_FUNDING', verifiedAt: new Date(), createdAt: new Date() }] : [],
     },
   },
-});
+  });
+};
 
 const payment = ({ status = 'PENDING' } = {}) => ({
   id: paymentId,
@@ -306,6 +312,57 @@ test('freelance project payment initialization adds the snapshotted fee to the p
     fundingCharge: '25000.00',
     totalEmployerPayment: '525000.00',
     seekerEntitlement: '500000.00',
+  }));
+});
+
+test.each([
+  ['5.00', '10000.00', '210000.00'],
+  ['10.00', '20000.00', '220000.00'],
+])('uses the saved additive funding snapshot for a 200000 project at %s percent', async (percentage, fee, total) => {
+  mockPrisma.contract.findUnique.mockResolvedValue(contractRecord({
+    amountValue: '200000.00',
+    feePercentageValue: percentage,
+  }));
+
+  const result = await initializeContractPayment({
+    contractId,
+    employerId,
+    idempotencyKey: `additive-${percentage}`,
+  });
+
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ amount: new Prisma.Decimal(total) }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: total, currency: 'NGN' }));
+  expect(result.fundingBreakdown).toEqual({
+    projectAmount: '200000.00',
+    fundingPercentage: percentage,
+    fundingCharge: fee,
+    totalEmployerPayment: total,
+    seekerEntitlement: '200000.00',
+    currency: 'NGN',
+  });
+});
+
+test('historical deducted funding snapshots are not repriced or converted to additive terms', async () => {
+  mockPrisma.contract.findUnique.mockResolvedValue(contractRecord({
+    amountValue: '200000.00',
+    feePercentageValue: '5.00',
+    legacyDeducted: true,
+  }));
+
+  const result = await initializeContractPayment({
+    contractId,
+    employerId,
+    idempotencyKey: 'legacy-deducted-snapshot',
+  });
+
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '200000.00', currency: 'NGN' }));
+  expect(result.fundingBreakdown).toEqual(expect.objectContaining({
+    projectAmount: '200000.00',
+    fundingCharge: '10000.00',
+    totalEmployerPayment: '200000.00',
+    seekerEntitlement: '190000.00',
   }));
 });
 

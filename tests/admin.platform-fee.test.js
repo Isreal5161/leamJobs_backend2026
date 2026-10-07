@@ -31,12 +31,14 @@ beforeEach(() => {
   mockPrisma.platformFeeConfiguration.findUnique.mockResolvedValue({
     key: 'default',
     percentage: new Prisma.Decimal('5.00'),
+    withdrawalPercentage: new Prisma.Decimal('0.00'),
     isActive: true,
     updatedAt: new Date('2026-10-01T00:00:00.000Z'),
   });
   mockPrisma.platformFeeConfiguration.upsert.mockImplementation(async ({ create, update }) => ({
     key: 'default',
     percentage: update.percentage ?? create.percentage,
+    withdrawalPercentage: update.withdrawalPercentage ?? create.withdrawalPercentage,
     isActive: true,
     updatedAt: new Date('2026-10-01T00:00:00.000Z'),
   }));
@@ -49,6 +51,7 @@ test('admin can read the active platform fee configuration', async () => {
 
   expect(response.status).toBe(200);
   expect(response.body.data.configuration.percentage).toBe('5.00');
+  expect(response.body.data.configuration.withdrawalPercentage).toBe('0.00');
 });
 
 test('admin can update a valid percentage in the existing configuration record', async () => {
@@ -64,10 +67,26 @@ test('admin can update a valid percentage in the existing configuration record',
   }));
 });
 
+test('admin can update the withdrawal charge independently of the project funding charge', async () => {
+  const response = await request(app)
+    .patch('/api/admin/platform-fee')
+    .set('Authorization', authorization('ADMIN', adminId))
+    .send({ withdrawalPercentage: '5.00' });
+
+  expect(response.status).toBe(200);
+  expect(mockPrisma.platformFeeConfiguration.upsert).toHaveBeenCalledWith(expect.objectContaining({
+    where: { key: 'default' },
+    update: { withdrawalPercentage: new Prisma.Decimal('5.00'), isActive: true },
+  }));
+});
+
 test.each([
   ['negative', { percentage: -1 }],
   ['above 100%', { percentage: 100.01 }],
   ['excess precision', { percentage: 5.555 }],
+  ['invalid withdrawal percentage', { withdrawalPercentage: '100.01' }],
+  ['excess withdrawal precision', { withdrawalPercentage: '1.001' }],
+  ['empty configuration update', {}],
   ['client-controlled fee fields', { percentage: 5, amount: 1 }],
 ])('admin fee update rejects %s input', async (_label, body) => {
   const response = await request(app)
@@ -84,6 +103,16 @@ test('non-admin users cannot change the platform fee', async () => {
     .patch('/api/admin/platform-fee')
     .set('Authorization', authorization('EMPLOYER', employerId))
     .send({ percentage: 5 });
+
+  expect(response.status).toBe(403);
+  expect(mockPrisma.platformFeeConfiguration.upsert).not.toHaveBeenCalled();
+});
+
+test('non-admin users cannot change withdrawal fee configuration', async () => {
+  const response = await request(app)
+    .patch('/api/admin/platform-fee')
+    .set('Authorization', authorization('SEEKER', '33333333-3333-4333-8333-333333333333'))
+    .send({ withdrawalPercentage: 5 });
 
   expect(response.status).toBe(403);
   expect(mockPrisma.platformFeeConfiguration.upsert).not.toHaveBeenCalled();

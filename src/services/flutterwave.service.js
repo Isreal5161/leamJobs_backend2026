@@ -10,10 +10,10 @@ export class FlutterwaveConfigurationError extends Error {
 }
 
 export class FlutterwaveRequestError extends Error {
-  constructor(message, { outcomeUnknown = false } = {}) {
+  constructor(message, { outcomeUnknown = false, status = 502 } = {}) {
     super(message);
     this.name = 'FlutterwaveRequestError';
-    this.status = 502;
+    this.status = status;
     this.outcomeUnknown = outcomeUnknown;
   }
 }
@@ -23,6 +23,8 @@ const requireSecretKey = () => {
     throw new FlutterwaveConfigurationError('Flutterwave payment configuration is unavailable');
   }
 };
+
+export const isFlutterwaveConfigured = () => Boolean(env.FLUTTERWAVE_SECRET_KEY);
 
 const requestFlutterwave = async (path, options = {}) => {
   requireSecretKey();
@@ -48,7 +50,19 @@ const requestFlutterwave = async (path, options = {}) => {
     payload = null;
   }
   if (!response.ok || payload?.status === 'error') {
-    throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed', { outcomeUnknown: response.status >= 500 });
+    const providerRejected = payload?.status === 'error';
+    const unknownOutcome = response.status >= 500;
+    const status = unknownOutcome
+      ? 502
+      : response.status === 401 || response.status === 403
+        ? 503
+        : providerRejected || (response.status >= 400 && response.status < 500)
+          ? 422
+          : 502;
+    throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed', {
+      outcomeUnknown: unknownOutcome,
+      status,
+    });
   }
   return payload;
 };
@@ -81,6 +95,89 @@ export const verifyFlutterwaveTransaction = async (transactionId) => {
   const payload = await requestFlutterwave(`/transactions/${encodeURIComponent(transactionId)}/verify`, { method: 'GET' });
   if (!payload?.data) throw new FlutterwaveRequestError('Flutterwave returned no transaction data');
   return payload.data;
+};
+
+export const getFlutterwaveBanks = async (countryCode = 'NG') => {
+  const payload = await requestFlutterwave(`/banks/${encodeURIComponent(countryCode)}`, { method: 'GET' });
+  if (!Array.isArray(payload?.data)) {
+    throw new FlutterwaveRequestError('Flutterwave returned an invalid bank list');
+  }
+  return payload.data
+    .filter((bank) => bank && bank.code !== undefined && typeof bank.name === 'string')
+    .map((bank) => ({ code: String(bank.code), name: bank.name }));
+};
+
+export const resolveFlutterwaveBankAccount = async ({ accountNumber, bankCode }) => {
+  const payload = await requestFlutterwave('/accounts/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ account_number: accountNumber, account_bank: bankCode }),
+  });
+  const accountName = payload?.data?.account_name;
+  if (typeof accountName !== 'string' || !accountName.trim()) {
+    throw new FlutterwaveRequestError('Flutterwave could not verify the bank account', { outcomeUnknown: false });
+  }
+  return { accountName: accountName.trim() };
+};
+
+export const createFlutterwaveTransfer = async ({
+  amount,
+  accountNumber,
+  bankCode,
+  beneficiaryName,
+  reference,
+  narration,
+  currency = 'NGN',
+  debitCurrency = currency,
+}) => {
+  if (currency !== 'NGN' || debitCurrency !== 'NGN') {
+    throw new FlutterwaveRequestError('Flutterwave withdrawals currently support NGN only', { status: 422 });
+  }
+  const payload = await requestFlutterwave('/transfers', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: Number(amount),
+      ...(bankCode ? { account_bank: bankCode } : {}),
+      account_number: accountNumber,
+      beneficiary_name: beneficiaryName,
+      currency,
+      debit_currency: debitCurrency,
+      reference,
+      narration,
+    }),
+  });
+  if (!payload?.data || payload.data.id === undefined || payload.data.id === null || !payload.data.reference) {
+    throw new FlutterwaveRequestError('Flutterwave did not return a transfer result', { outcomeUnknown: true });
+  }
+  return payload.data;
+};
+
+export const getFlutterwaveTransferById = async (transferId) => {
+  if (!transferId || !/^\d+$/.test(String(transferId))) {
+    throw new FlutterwaveRequestError('A valid Flutterwave transfer ID is required');
+  }
+  const payload = await requestFlutterwave(`/transfers/${encodeURIComponent(transferId)}`, { method: 'GET' });
+  if (!payload?.data) throw new FlutterwaveRequestError('Flutterwave returned no transfer data');
+  return payload.data;
+};
+
+export const normalizeFlutterwaveTransferStatus = (status) => {
+  switch (String(status ?? '').trim().toUpperCase()) {
+    case 'SUCCESSFUL':
+    case 'SUCCESS':
+      return 'SUCCESSFUL';
+    case 'FAILED':
+    case 'CANCELLED':
+      return 'FAILED';
+    case 'REVERSED':
+      return 'REVERSED';
+    case 'NEW':
+    case 'PENDING':
+    case 'QUEUED':
+    case 'PROCESSING':
+    case 'RETRYING':
+    default:
+      return 'PROCESSING';
+  }
 };
 
 export const assertFlutterwaveWebhookSignature = (signature) => {

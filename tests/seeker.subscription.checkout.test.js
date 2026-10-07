@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  withdrawal: { findUnique: jest.fn().mockResolvedValue(null) },
   subscriptionPlan: { findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn() },
   subscription: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   payment: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
@@ -19,9 +20,16 @@ const mockPrisma = {
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
+  FlutterwaveRequestError: class FlutterwaveRequestError extends Error {},
+  getFlutterwaveBanks: jest.fn(),
+  resolveFlutterwaveBankAccount: jest.fn(),
   initializeFlutterwavePayment: jest.fn(),
   verifyFlutterwaveTransaction: jest.fn(),
   assertFlutterwaveWebhookSignature: jest.fn(),
+  createFlutterwaveTransfer: jest.fn(),
+  getFlutterwaveTransferById: jest.fn(),
+  isFlutterwaveConfigured: jest.fn(),
+  normalizeFlutterwaveTransferStatus: jest.fn(),
 }));
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
 const { default: app } = await import('../src/app.js');

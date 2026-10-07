@@ -73,6 +73,7 @@ let currentSubscriptionStatus = 'PENDING';
 let webhookEvents;
 
 const mockPrisma = {
+  withdrawal: { findUnique: jest.fn().mockResolvedValue(null) },
   payment: {
     findUnique: jest.fn(),
     findFirst: jest.fn(),
@@ -111,6 +112,10 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   initializeFlutterwavePayment: mockInitializeFlutterwavePayment,
   verifyFlutterwaveTransaction: mockVerifyFlutterwaveTransaction,
   assertFlutterwaveWebhookSignature: mockAssertFlutterwaveWebhookSignature,
+  createFlutterwaveTransfer: jest.fn(),
+  getFlutterwaveTransferById: jest.fn(),
+  isFlutterwaveConfigured: jest.fn(),
+  normalizeFlutterwaveTransferStatus: jest.fn(),
 }));
 
 const { handleFlutterwaveWebhook } = await import('../src/services/flutterwaveWebhook.service.js');

@@ -30,13 +30,15 @@ import { validateMessagePagination, validateSendMessage } from '../validators/me
 import {
 	createWithdrawal,
 	getPaymentSummary,
+	getWithdrawalQuote,
 	listPayments,
 	listTransactions,
 	listWithdrawals,
 } from '../controllers/seekerPayments.controller.js';
 import { validateSeekerPaymentPagination } from '../validators/seekerPayments.validation.js';
 import { validateSeekerWithdrawal } from '../validators/seekerWithdrawal.validation.js';
-import { listSeekerPayoutAccounts, createPayoutAccount, updatePayoutAccount } from '../controllers/seekerPayoutAccount.controller.js';
+import { validateSeekerWithdrawalQuote } from '../validators/seekerWithdrawalQuote.validation.js';
+import { listSeekerPayoutAccounts, listSeekerPayoutBanks, listSeekerPayoutCapabilities, createPayoutAccount, updatePayoutAccount } from '../controllers/seekerPayoutAccount.controller.js';
 import { validateCreatePayoutAccount, validateUpdatePayoutAccount } from '../validators/seekerPayoutAccount.validation.js';
 import { validateSeekerJobsQuery } from '../validators/seekerJobs.validation.js';
 import { listSeekerRecommendations } from '../controllers/seekerRecommendations.controller.js';
@@ -115,6 +117,7 @@ seekerRouter.get('/payments/summary', authenticate, requireRole('SEEKER'), getPa
 seekerRouter.get('/payments', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listPayments);
 seekerRouter.get('/payments/transactions', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listTransactions);
 seekerRouter.get('/payments/withdrawals', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listWithdrawals);
+seekerRouter.get('/payments/withdrawal-quote', authenticate, requireRole('SEEKER'), validateSeekerWithdrawalQuote, getWithdrawalQuote);
 seekerRouter.post('/payments/withdrawals', authenticate, requireRole('SEEKER'), validateSeekerWithdrawal, createWithdrawal);
 seekerRouter.get('/notifications', authenticate, requireRole('SEEKER'), validateNotificationPagination, listNotifications);
 seekerRouter.patch('/notifications/read-all', authenticate, requireRole('SEEKER'), readAllNotifications);
@@ -148,6 +151,8 @@ seekerRouter.get('/salary-insights', authenticate, requireRole('SEEKER'), requir
 seekerRouter.get('/support/requests', authenticate, requireRole('SEEKER'), requireEntitlement('PREMIUM_SUPPORT'), getSupportRequests);
 seekerRouter.post('/support/requests', authenticate, requireRole('SEEKER'), requireEntitlement('PREMIUM_SUPPORT'), validateSupportRequest, postSupportRequest);
 seekerRouter.get('/payout-accounts', authenticate, requireRole('SEEKER'), listSeekerPayoutAccounts);
+seekerRouter.get('/payout-accounts/capabilities', authenticate, requireRole('SEEKER'), listSeekerPayoutCapabilities);
+seekerRouter.get('/payout-accounts/banks', authenticate, requireRole('SEEKER'), listSeekerPayoutBanks);
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
 seekerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('SEEKER'), confirmSeekerContract);

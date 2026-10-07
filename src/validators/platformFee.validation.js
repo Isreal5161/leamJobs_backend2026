@@ -8,7 +8,10 @@ const percentage = z.union([
 );
 
 export const validatePlatformFeeUpdate = (req, res, next) => {
-  const result = z.object({ percentage }).strict().safeParse(req.body ?? {});
+  const result = z.object({
+    percentage: percentage.optional(),
+    withdrawalPercentage: percentage.optional(),
+  }).strict().refine((value) => value.percentage !== undefined || value.withdrawalPercentage !== undefined).safeParse(req.body ?? {});
   if (!result.success) {
     return res.status(400).json({
       message: 'Validation failed',

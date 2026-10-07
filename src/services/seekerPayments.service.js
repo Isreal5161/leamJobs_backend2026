@@ -71,6 +71,9 @@ export const getSeekerPaymentSummary = async (seekerId) => {
 const paymentLedgerSelect = {
   id: true,
   amount: true,
+  withdrawalFeePercentage: true,
+  withdrawalFeeAmount: true,
+  payoutAmount: true,
   currency: true,
   description: true,
   createdAt: true,
@@ -153,6 +156,9 @@ export const getSeekerTransactions = async (seekerId, { limit, cursor }) => {
 const withdrawalSelect = {
   id: true,
   amount: true,
+  withdrawalFeePercentage: true,
+  withdrawalFeeAmount: true,
+  payoutAmount: true,
   currency: true,
   status: true,
   requestedAt: true,
@@ -166,6 +172,9 @@ const withdrawalSelect = {
 const mapWithdrawal = (withdrawal) => ({
   id: withdrawal.id,
   amount: decimalToString(withdrawal.amount),
+  withdrawalFeePercentage: decimalToString(withdrawal.withdrawalFeePercentage),
+  withdrawalFeeAmount: decimalToString(withdrawal.withdrawalFeeAmount),
+  payoutAmount: decimalToString(withdrawal.payoutAmount),
   currency: withdrawal.currency,
   status: withdrawal.status,
   requestedAt: withdrawal.requestedAt,

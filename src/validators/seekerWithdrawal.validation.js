@@ -1,9 +1,7 @@
 import { z } from 'zod';
 
 const withdrawalBodySchema = z.object({
-  amount: z.string().trim().regex(/^\d+(?:\.\d{1,2})?$/, 'Amount must be a positive decimal with no more than 2 decimal places'),
-  currency: z.string().trim().toUpperCase().length(3, 'Currency must be a 3-letter code'),
-  payoutAccountId: z.string().uuid('A valid payout account is required'),
+  quoteReference: z.string().min(1).max(4096),
 }).strict();
 
 export const validateSeekerWithdrawal = (req, res, next) => {

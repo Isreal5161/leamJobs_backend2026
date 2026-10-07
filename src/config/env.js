@@ -69,7 +69,7 @@ export const env = {
   FLUTTERWAVE_BASE_URL: process.env.FLUTTERWAVE_BASE_URL || 'https://api.flutterwave.com/v3',
   FLUTTERWAVE_REDIRECT_URL: process.env.FLUTTERWAVE_REDIRECT_URL || '',
 
-  // Paystack transfers (kept server-side; never expose this value to clients)
+  // Legacy Paystack transfer support for withdrawals created before the Flutterwave switch.
   PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
   PAYSTACK_BASE_URL: process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co',
 };
