@@ -5,6 +5,7 @@ import { discovery } from 'openid-client';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
+import { initializeSeekerWallet } from './wallet.service.js';
 
 const GOOGLE_PROVIDER = 'GOOGLE';
 const PENDING_LINK_TTL_MINUTES = 15;
@@ -368,6 +369,10 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
         }
       }
       throw error;
+    }
+
+    if (createdUser.role === 'SEEKER') {
+      await initializeSeekerWallet(transaction, createdUser.id);
     }
 
     try {

@@ -18,6 +18,9 @@ const mockPrisma = {
     findUnique: jest.fn(),
     update: jest.fn(),
   },
+  wallet: {
+    upsert: jest.fn(),
+  },
   emailVerificationCode: {
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -47,7 +50,14 @@ jest.unstable_mockModule('../src/services/email.service.js', () => ({
 const { registerUser, loginUser } = await import('../src/services/auth.service.js');
 const { createEmailVerificationChallenge, verifyEmailWithCode, resendEmailVerification } = await import('../src/services/emailVerification.service.js');
 
-afterEach(() => { jest.clearAllMocks(); });
+beforeEach(() => {
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
+});
+
+afterEach(() => {
+  jest.clearAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
+});
 
 test('registration creates a pending unverified user and queues an email verification challenge', async () => {
   const createdUser = {
@@ -63,14 +73,11 @@ test('registration creates a pending unverified user and queues an email verific
   };
 
   mockPrisma.user.create.mockResolvedValue(createdUser);
+  mockPrisma.wallet.upsert.mockResolvedValue({ id: 'wallet-1', userId: 'user-1' });
   mockPrisma.user.findUnique.mockResolvedValue(createdUser);
-  mockPrisma.$transaction.mockImplementation(async (callback) => callback({
-    emailVerificationCode: {
-      findUnique: jest.fn().mockResolvedValue(null),
-      create: jest.fn().mockResolvedValue({ id: 'verification-1', userId: 'user-1' }),
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-    },
-  }));
+  mockPrisma.emailVerificationCode.findUnique = jest.fn().mockResolvedValue(null);
+  mockPrisma.emailVerificationCode.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+  mockPrisma.emailVerificationCode.create = jest.fn().mockResolvedValue({ id: 'verification-1', userId: 'user-1' });
 
   const created = await registerUser({
     firstName: 'Ada',
@@ -83,10 +90,77 @@ test('registration creates a pending unverified user and queues an email verific
 
   expect(created.isActive).toBe(false);
   expect(created.isVerified).toBe(false);
+  expect(mockPrisma.user.create).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
+    where: { userId: 'user-1' },
+    create: { userId: 'user-1' },
+    update: {},
+  });
   expect(mockQueueEmail).toHaveBeenCalledWith(expect.objectContaining({
     emailType: 'EMAIL_VERIFICATION_CODE',
     recipientEmail: 'ada@example.com',
   }));
+});
+
+test('employer registration creates no wallet', async () => {
+  const createdEmployer = {
+    id: 'employer-1',
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: 'ada.employer@example.com',
+    role: 'EMPLOYER',
+    isActive: false,
+    isVerified: false,
+  };
+  mockPrisma.user.create.mockResolvedValue(createdEmployer);
+  mockPrisma.emailVerificationCode.findUnique = jest.fn().mockResolvedValue(null);
+  mockPrisma.emailVerificationCode.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+  mockPrisma.emailVerificationCode.create = jest.fn().mockResolvedValue({ id: 'verification-employer', userId: createdEmployer.id });
+
+  await expect(registerUser({
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: createdEmployer.email,
+    password: 'ValidPassword1!',
+    role: 'EMPLOYER',
+  })).resolves.toMatchObject({ id: createdEmployer.id, role: 'EMPLOYER' });
+
+  expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+});
+
+test('wallet initialization failure rolls seeker registration back before email verification', async () => {
+  const transactionState = { users: [] };
+  const transaction = {
+    user: {
+      create: jest.fn(async ({ data }) => {
+        const user = { id: 'rollback-seeker', ...data };
+        transactionState.users.push(user);
+        return user;
+      }),
+    },
+    wallet: {
+      upsert: jest.fn().mockRejectedValue(new Error('wallet initialization failed')),
+    },
+  };
+  mockPrisma.$transaction.mockImplementation(async (callback) => {
+    try {
+      return await callback(transaction);
+    } catch (error) {
+      transactionState.users.length = 0;
+      throw error;
+    }
+  });
+
+  await expect(registerUser({
+    firstName: 'Rollback',
+    lastName: 'Seeker',
+    email: 'rollback@example.com',
+    password: 'ValidPassword1!',
+    role: 'SEEKER',
+  })).rejects.toThrow('wallet initialization failed');
+
+  expect(transactionState.users).toEqual([]);
+  expect(mockQueueEmail).not.toHaveBeenCalled();
 });
 
 test('newly registered users cannot log in before verification', async () => {

@@ -15,6 +15,10 @@ const mockPrisma = {
     update: jest.fn(),
     create: jest.fn(),
   },
+  wallet: {
+    upsert: jest.fn(),
+  },
+  $transaction: jest.fn(),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -36,6 +40,7 @@ const createToken = (role = 'SEEKER', subject = 'user-123') =>
 describe('Employer authentication and authorization', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   });
 
   test('valid SEEKER login returns role SEEKER', async () => {
@@ -174,6 +179,7 @@ describe('Employer authentication and authorization', () => {
         role: 'EMPLOYER',
       }),
     }));
+    expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
   });
 
   test('SEEKER token is rejected from the Employer endpoint', async () => {

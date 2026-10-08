@@ -26,6 +26,9 @@ const mockPrisma = {
     findUnique: jest.fn(),
     update: jest.fn(),
   },
+  wallet: {
+    upsert: jest.fn(),
+  },
   $transaction: jest.fn(),
 };
 
@@ -184,6 +187,7 @@ test('handleGoogleCallback creates a user and keeps the email-verification workf
     isActive: false,
     isVerified: false,
   });
+  mockPrisma.wallet.upsert.mockResolvedValue({ id: 'wallet-1', userId: 'user-1' });
   mockPrisma.pendingOAuthRegistration.update.mockResolvedValue({ id: 'pending-1' });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
 
@@ -195,6 +199,7 @@ test('handleGoogleCallback creates a user and keeps the email-verification workf
 
   expect(result.email).toBe('alice@example.com');
   expect(result.role).toBe('SEEKER');
+  expect(mockPrisma.user.create).toHaveBeenCalledTimes(1);
   expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({
       email: 'alice@example.com',
@@ -203,10 +208,103 @@ test('handleGoogleCallback creates a user and keeps the email-verification workf
       isActive: false,
     }),
   }));
+  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
+    where: { userId: 'user-1' },
+    create: { userId: 'user-1' },
+    update: {},
+  });
   expect(mockRegisterEmailVerificationOnUser).toHaveBeenCalledWith(expect.objectContaining({
     id: 'user-1',
     email: 'alice@example.com',
   }));
+});
+
+test('Google employer registration does not initialize a wallet', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-employer',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'EMPLOYER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oauthAccount.findUnique.mockResolvedValue(null);
+  mockPrisma.user.findUnique.mockResolvedValue(null);
+  mockPrisma.user.create.mockResolvedValue({
+    id: 'employer-1',
+    email: 'alice@example.com',
+    firstName: 'Alice',
+    lastName: 'Example',
+    role: 'EMPLOYER',
+    isActive: false,
+    isVerified: false,
+  });
+  mockPrisma.oauthAccount.create.mockResolvedValue({ id: 'oauth-employer-1' });
+  mockPrisma.pendingOAuthRegistration.update.mockResolvedValue({ id: 'pending-employer' });
+
+  const result = await handleGoogleCallback({
+    code: 'auth-code-123',
+    state: 'state-123',
+    nonce: 'nonce-123',
+  });
+
+  expect(result.role).toBe('EMPLOYER');
+  expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+});
+
+test('Google seeker wallet initialization failure aborts the registration transaction', async () => {
+  const transactionState = { users: [], oauthAccounts: [] };
+  const transaction = {
+    ...mockPrisma,
+    user: {
+      ...mockPrisma.user,
+      create: jest.fn(async ({ data }) => {
+        const user = { id: 'google-rollback-seeker', ...data };
+        transactionState.users.push(user);
+        return user;
+      }),
+    },
+    wallet: {
+      upsert: jest.fn().mockRejectedValue(new Error('wallet initialization failed')),
+    },
+    oauthAccount: {
+      ...mockPrisma.oauthAccount,
+      create: jest.fn(async (args) => {
+        transactionState.oauthAccounts.push(args);
+        return { id: 'oauth-rollback' };
+      }),
+    },
+  };
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-rollback',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'SEEKER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oauthAccount.findUnique.mockResolvedValue(null);
+  mockPrisma.user.findUnique.mockResolvedValue(null);
+  mockPrisma.$transaction.mockImplementation(async (callback) => {
+    try {
+      return await callback(transaction);
+    } catch (error) {
+      transactionState.users.length = 0;
+      transactionState.oauthAccounts.length = 0;
+      throw error;
+    }
+  });
+
+  await expect(handleGoogleCallback({
+    code: 'auth-code-123',
+    state: 'state-123',
+    nonce: 'nonce-123',
+  })).rejects.toThrow('wallet initialization failed');
+
+  expect(transactionState).toEqual({ users: [], oauthAccounts: [] });
+  expect(mockRegisterEmailVerificationOnUser).not.toHaveBeenCalled();
 });
 
 test('existing same-email password accounts are not auto-linked during Google callback', async () => {

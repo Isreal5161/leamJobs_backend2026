@@ -4,6 +4,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { queueWelcomeEmail } from './adminCommunications.service.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
+import { initializeSeekerWallet } from './wallet.service.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -78,17 +79,25 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
   try {
-    const user = await prisma.user.create({
-      data: {
-        firstName: normalizedFirstName,
-        lastName: normalizedLastName,
-        email: normalizedEmail,
-        passwordHash,
-        phone,
-        role: normalizedRole,
-        isActive: false,
-        isVerified: false,
-      },
+    const user = await prisma.$transaction(async (transaction) => {
+      const createdUser = await transaction.user.create({
+        data: {
+          firstName: normalizedFirstName,
+          lastName: normalizedLastName,
+          email: normalizedEmail,
+          passwordHash,
+          phone,
+          role: normalizedRole,
+          isActive: false,
+          isVerified: false,
+        },
+      });
+
+      if (normalizedRole === 'SEEKER') {
+        await initializeSeekerWallet(transaction, createdUser.id);
+      }
+
+      return createdUser;
     });
 
     await registerEmailVerificationOnUser(user);
