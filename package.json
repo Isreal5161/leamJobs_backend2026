@@ -42,15 +42,17 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
+    "ip-address": "^10.7.3",
     "jsonwebtoken": "^9.0.3",
-    "mammoth": "^1.12.2",
-    "multer": "^2.3.0",
+    "mammoth": "^1.13.0",
+    "multer": "^2.4.0",
     "node-cron": "^4.6.0",
-    "nodemailer": "^9.1.0",
+    "nodemailer": "^10.0.16",
     "openid-client": "^6.8.8",
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.20.2",
     "pg": "^8.23.0",
+    "proxy-addr": "^2.0.8",
     "zod": "^4.5.4"
   },
   "devDependencies": {
@@ -59,5 +61,8 @@
     "nodemon": "^3.1.14",
     "prisma": "^6.19.3",
     "supertest": "^6.3.4"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.2"
   }
 }
