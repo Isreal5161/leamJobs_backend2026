@@ -18,7 +18,7 @@ const mockPrisma = {
     update: jest.fn(),
   },
 };
-
+const mockReadObject = jest.fn(async () => Buffer.from('profile-picture'));
 const mockDeleteObject = jest.fn();
 
 // Mock the S3Client
@@ -34,7 +34,7 @@ jest.unstable_mockModule('@aws-sdk/client-s3', () => ({
 jest.unstable_mockModule('../src/services/storage/storage.service.js', () => ({
   createObjectKey: ({ userId, category, extension }) => `seekers/${userId}/${category}/stub-${Date.now()}.${extension}`,
   uploadObject: jest.fn(async ({ objectKey, buffer }) => ({ objectKey, buffer })),
-  readObject: jest.fn(async () => Buffer.from('pdf-content')),
+  readObject: mockReadObject,
   deleteObject: mockDeleteObject,
 }));
 
@@ -43,12 +43,13 @@ jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrism
 const { default: app } = await import('../src/app.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
-const createToken = (role = 'SEEKER') => jwt.sign({ sub: seekerId, role }, process.env.JWT_SECRET, {
+const createToken = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockReadObject.mockResolvedValue(Buffer.from('profile-picture'));
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ profilePictureKey: null, resumeObjectKey: null });
   mockPrisma.seekerProfile.upsert.mockResolvedValue({
     profilePictureUrl: '/api/seeker/profile/picture',
@@ -60,6 +61,36 @@ beforeEach(() => {
 });
 
 describe('seeker profile file endpoints', () => {
+  test('profile picture retrieval is scoped to the authenticated seeker and is not browser-cached', async () => {
+    const userA = '11111111-1111-4111-8111-111111111111';
+    const userB = '22222222-2222-4222-8222-222222222222';
+    mockPrisma.seekerProfile.findUnique.mockImplementation(async ({ where }) => ({
+      profilePictureKey: `seekers/${where.userId}/picture/avatar.png`,
+      resumeObjectKey: null,
+    }));
+    mockReadObject.mockImplementation(async (key) => Buffer.from(key));
+
+    const responseA = await request(app)
+      .get('/api/seeker/profile/picture')
+      .set('Authorization', `Bearer ${createToken('SEEKER', userA)}`);
+    const responseB = await request(app)
+      .get('/api/seeker/profile/picture')
+      .set('Authorization', `Bearer ${createToken('SEEKER', userB)}`);
+
+    expect(responseA.status).toBe(200);
+    expect(responseA.body.toString()).toBe(`seekers/${userA}/picture/avatar.png`);
+    expect(responseB.status).toBe(200);
+    expect(responseB.body.toString()).toBe(`seekers/${userB}/picture/avatar.png`);
+    expect(mockPrisma.seekerProfile.findUnique).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      where: { userId: userA },
+    }));
+    expect(mockPrisma.seekerProfile.findUnique).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: { userId: userB },
+    }));
+    expect(responseA.headers['cache-control']).toBe('private, no-store, max-age=0');
+    expect(responseB.headers['cache-control']).toBe('private, no-store, max-age=0');
+  });
+
   test('uploads a valid PDF resume for the authenticated seeker', async () => {
     const response = await request(app)
       .post('/api/seeker/profile/resume')

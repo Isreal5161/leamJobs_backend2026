@@ -53,6 +53,7 @@ export const deleteLogo = async (req, res, next) => {
 
 export const getLogo = async (req, res, next) => {
   try {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
     return sendLogo(res, await readEmployerCompanyLogoForUser(req.user.sub));
   } catch (error) {
     return next(error);

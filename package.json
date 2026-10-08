@@ -19,6 +19,7 @@
     "job-alerts:process": "node src/scripts/process-job-alerts.js",
     "withdrawals:process": "node src/scripts/process-withdrawals.js",
     "withdrawals:reconcile": "node src/scripts/reconcile-withdrawals.js",
+    "wallets:backfill": "node src/scripts/backfill-seeker-wallets.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",

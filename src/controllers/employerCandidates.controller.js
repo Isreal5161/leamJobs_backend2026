@@ -12,6 +12,7 @@ export const listCandidates = async (req, res, next) => {
 export const getCandidateProfilePicture = async (req, res, next) => {
   try {
     const result = await getEmployerCandidateProfilePicture(req.params.candidateId);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
     const extension = result.objectKey.split('.').pop()?.toLowerCase();
     const contentTypes = { jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
     res.type(contentTypes[extension] ?? 'application/octet-stream');

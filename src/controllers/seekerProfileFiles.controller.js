@@ -52,6 +52,7 @@ export const deleteProfilePicture = async (req, res, next) => {
 
 export const getProfilePicture = async (req, res, next) => {
   try {
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
     return sendFile(res, await readSeekerFileForUser(req.user.sub, 'profilePictureKey'), 'profile picture');
   } catch (error) {
     return next(error);
