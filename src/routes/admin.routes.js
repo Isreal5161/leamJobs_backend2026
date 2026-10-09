@@ -14,6 +14,8 @@ import { requireRole } from '../middleware/authorization.middleware.js';
 import { getAdminSupportRequests, patchAdminSupportRequest } from '../controllers/premiumSeeker.controller.js';
 import { validateSupportUpdate } from '../validators/premiumSeeker.validation.js';
 import { listReleaseCandidates, releaseContract } from '../controllers/adminRelease.controller.js';
+import { getAdminDispute, listAdminDisputes, resolveDispute } from '../controllers/contractDispute.controller.js';
+import { validateAdminDisputeId, validateDisputeResolution } from '../validators/contractDispute.validation.js';
 import { listUsers } from '../controllers/adminUsers.controller.js';
 import { validateAdminUsersQuery } from '../validators/adminUsers.validation.js';
 import { getCompanyLogo, getLeamJobsEmployer, listCompanies } from '../controllers/adminCompanies.controller.js';
@@ -98,6 +100,9 @@ adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', aut
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', authenticate, requireRole('ADMIN'), getAdminApplicationProfilePictureController);
 adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listReleaseCandidates);
+adminRouter.get('/disputes', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listAdminDisputes);
+adminRouter.get('/disputes/:disputeId', authenticate, requireRole('ADMIN'), validateAdminDisputeId, getAdminDispute);
+adminRouter.patch('/contracts/:contractId/disputes/:disputeId', authenticate, requireRole('ADMIN'), validateDisputeResolution, resolveDispute);
 adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
 adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);
 adminRouter.post('/contracts/:contractId/payment', authenticate, requireRole('ADMIN'), validateContractPayment, initializeAdminContractPayment);

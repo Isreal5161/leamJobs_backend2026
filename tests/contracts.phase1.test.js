@@ -118,18 +118,20 @@ const mockPrisma = {
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 
 const { default: app } = await import('../src/app.js');
+const { mapContract } = await import('../src/services/contract.service.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.application.findFirst.mockResolvedValue(null);
   mockPrisma.application.update.mockResolvedValue(applicationDetail());
+  mockPrisma.contract.create.mockResolvedValue({ id: contractId });
   mockPrisma.platformFeeConfiguration.findUnique.mockResolvedValue({ percentage: new Prisma.Decimal('5.00'), isActive: true });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: applicationId }]);
 });
 
 describe('Phase 1 freelance contract acceptance', () => {
-  test('acceptance creates a pending contract with Decimal fee snapshots and no escrow', async () => {
+  test('acceptance creates a pending contract and its unfunded escrow atomically', async () => {
     mockPrisma.application.findFirst
       .mockResolvedValueOnce({ id: applicationId })
       .mockResolvedValueOnce({
@@ -171,7 +173,33 @@ describe('Phase 1 freelance contract acceptance', () => {
         },
       }),
     }));
-    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        freelanceContractId: contractId,
+        grossAmount: new Prisma.Decimal('500000.00'),
+        platformFeeAmount: new Prisma.Decimal('25000.00'),
+        seekerNetAmount: new Prisma.Decimal('500000.00'),
+        currency: 'NGN',
+        status: 'UNFUNDED',
+      }),
+    }));
+    expect(mockPrisma.escrow.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('pending freelance contract exposes funding only when an unfunded escrow exists', () => {
+    const pendingContract = contractRecord();
+    expect(mapContract({
+      ...pendingContract,
+      freelanceDetails: { ...pendingContract.freelanceDetails, escrow: escrowRecord },
+    }).availableActions.fund).toBe(true);
+    expect(mapContract(pendingContract).availableActions.fund).toBe(false);
+    expect(mapContract({
+      ...pendingContract,
+      freelanceDetails: {
+        ...pendingContract.freelanceDetails,
+        escrow: { ...escrowRecord, status: 'FUNDED' },
+      },
+    }).availableActions.fund).toBe(false);
   });
 
   test('non-freelance status updates retain the existing path', async () => {
@@ -200,6 +228,7 @@ describe('Phase 1 freelance contract acceptance', () => {
 
     expect(response.status).toBe(200);
     expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
   });
 });
 

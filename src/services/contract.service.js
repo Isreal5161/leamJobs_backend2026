@@ -118,7 +118,9 @@ const fundingPaymentAmount = (details) => {
 const contractActions = (contract) => {
   const details = contract.freelanceDetails;
   const escrow = details?.escrow;
-  const fundableStatus = contract.type === 'CONTRACT_PROJECT' ? contract.status === 'PENDING' : contract.status === 'ACTIVE';
+  const fundableStatus = contract.type === 'CONTRACT_PROJECT'
+    ? contract.status === 'PENDING'
+    : contract.type === 'FREELANCE_PROJECT' && ['PENDING', 'ACTIVE'].includes(contract.status);
   return {
     fund: Boolean(fundableStatus && escrow && ['UNFUNDED', 'FUNDING'].includes(escrow.status)),
     confirmCompletion: Boolean(

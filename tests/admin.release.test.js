@@ -42,6 +42,7 @@ const escrowRecord = ({ status = 'RELEASE_ELIGIBLE', releasedAmount = '0.00', re
 
 const mockPrisma = {
   escrow: { findUnique: jest.fn(), update: jest.fn() },
+  dispute: { findFirst: jest.fn() },
   wallet: { update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   financialLedgerEntry: { create: jest.fn() },
@@ -59,6 +60,7 @@ beforeEach(() => {
     .mockResolvedValueOnce([{ id: escrowId }])
     .mockResolvedValueOnce([{ id: walletId, currency: 'NGN', availableBalance: new Prisma.Decimal('1000.00'), pendingWithdrawalBalance: new Prisma.Decimal('0.00') }]);
   mockPrisma.escrow.findUnique.mockResolvedValue(escrowRecord());
+  mockPrisma.dispute.findFirst.mockResolvedValue(null);
   mockPrisma.wallet.update.mockResolvedValue({ availableBalance: new Prisma.Decimal('96000.00') });
   mockPrisma.financialLedgerEntry.create.mockResolvedValue({ id: 'ledger-id' });
   mockPrisma.escrow.update.mockResolvedValue(escrowRecord({ status: 'RELEASED', releasedAmount: '95000.00', releasedAt: new Date('2026-09-11T12:00:00.000Z') }));
@@ -163,6 +165,23 @@ test('release rejects an escrow that is not release eligible', async () => {
   expect(mockPrisma.wallet.update).not.toHaveBeenCalled();
   expect(mockPrisma.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
+
+test.each(['OPEN', 'UNDER_REVIEW', 'RESOLVED_FOR_EMPLOYER', 'RESOLVED_FOR_SEEKER', 'PARTIALLY_RESOLVED', 'CLOSED'])(
+  'release rejects a dispute record in %s status',
+  async (status) => {
+    mockPrisma.dispute.findFirst.mockResolvedValue({ id: 'dispute-id', status });
+
+    const response = await request(app)
+      .post(`/api/admin/contracts/${contractId}/release`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(409);
+    expect(response.body.message).toContain('dispute record');
+    expect(mockPrisma.wallet.update).not.toHaveBeenCalled();
+    expect(mockPrisma.financialLedgerEntry.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  },
+);
 
 test('release requires a seeker wallet and never creates one implicitly', async () => {
   mockPrisma.$queryRaw

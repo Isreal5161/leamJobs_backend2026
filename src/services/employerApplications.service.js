@@ -368,7 +368,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
     const platformFeeAmount = agreedAmount.mul(platformFeePercentage).dividedBy(100).toDecimalPlaces(2);
     const seekerNetAmount = agreedAmount;
 
-    await transaction.contract.create({
+    const contract = await transaction.contract.create({
       data: {
         applicationId: application.id,
         jobId: application.job.id,
@@ -389,6 +389,19 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
           },
         },
       },
+      select: { id: true },
+    });
+
+    await transaction.escrow.create({
+      data: {
+        freelanceContractId: contract.id,
+        grossAmount: agreedAmount,
+        platformFeeAmount,
+        seekerNetAmount,
+        currency,
+        status: 'UNFUNDED',
+      },
+      select: { id: true, status: true },
     });
 
     const updated = await transaction.application.update({

@@ -99,8 +99,12 @@ const assertPaymentContract = (contract, employerId) => {
   if (!contract || contract.employerId !== employerId) throw new ContractNotFoundError();
   if (contract.type === 'CONTRACT_PROJECT') {
     if (contract.status !== 'PENDING') throw new ContractPaymentError('This Contract Job is not awaiting payment');
-  } else if (contract.status !== 'ACTIVE') {
-    throw new ContractPaymentError('Only active contracts can be funded');
+  } else if (contract.type === 'FREELANCE_PROJECT') {
+    if (!['PENDING', 'ACTIVE'].includes(contract.status)) {
+      throw new ContractPaymentError('This freelance project is not eligible for funding');
+    }
+  } else {
+    throw new ContractPaymentError('This contract type cannot be funded');
   }
   if (!contract.freelanceDetails?.escrow) throw new ContractPaymentError('The contract escrow is unavailable', 422);
   if (!['UNFUNDED', 'FUNDING'].includes(contract.freelanceDetails.escrow.status)) {
@@ -553,6 +557,17 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
         data: { status: 'ACCEPTED' },
       });
       if (accepted.count !== 1) throw new ContractPaymentError('Contract Job application is not awaiting payment');
+    } else if (finalizedContract?.type === 'FREELANCE_PROJECT') {
+      if (!['PENDING', 'ACTIVE'].includes(finalizedContract.status)) {
+        throw new ContractPaymentError('Freelance project is no longer eligible for funding');
+      }
+      if (finalizedContract.status === 'PENDING') {
+        await transaction.contract.update({ where: { id: resolvedContractId }, data: { status: 'ACTIVE' } });
+      }
+      await transaction.freelanceContract.update({
+        where: { contractId: resolvedContractId },
+        data: { workStatus: 'IN_PROGRESS' },
+      });
     }
     return { payment: paymentResponse(updatedPayment), contract: await getContractForPayment(resolvedContractId, employerId, transaction) };
   });

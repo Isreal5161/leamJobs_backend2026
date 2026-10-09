@@ -137,6 +137,40 @@ test('verified payment atomically funds the escrow', async () => {
   expect(result.payment.status).toBe('SUCCESSFUL');
 });
 
+test('verified funding activates a pending freelance contract and starts work', async () => {
+  const pending = contract({ escrowStatus: 'UNFUNDED' });
+  pending.status = 'PENDING';
+  mockPrisma.contract.findFirst.mockResolvedValue({
+    ...pending,
+    freelanceDetails: {
+      ...pending.freelanceDetails,
+      escrow: { ...pending.freelanceDetails.escrow, payments: [payment()] },
+    },
+  });
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(pending);
+  mockPrisma.payment.findUnique.mockResolvedValueOnce(payment()).mockResolvedValueOnce({ ...payment(), escrowId });
+
+  const result = await verifyContractPayment({
+    contractId,
+    employerId,
+    providerReference,
+    transactionId: '987654',
+  });
+
+  expect(mockPrisma.contract.update).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: contractId },
+    data: { status: 'ACTIVE' },
+  }));
+  expect(mockPrisma.freelanceContract.update).toHaveBeenCalledWith(expect.objectContaining({
+    where: { contractId },
+    data: { workStatus: 'IN_PROGRESS' },
+  }));
+  expect(mockPrisma.escrow.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'FUNDED', fundedAmount: new Prisma.Decimal('100000.00') }),
+  }));
+  expect(result.payment.status).toBe('SUCCESSFUL');
+});
+
 test('wrong provider amount does not fund escrow', async () => {
   mockPrisma.contract.findFirst.mockResolvedValue({ ...contract(), freelanceDetails: { ...contract().freelanceDetails, escrow: { ...contract().freelanceDetails.escrow, payments: [payment()] } } });
   mockPrisma.payment.findUnique.mockResolvedValue(payment());

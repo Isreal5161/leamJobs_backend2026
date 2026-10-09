@@ -45,6 +45,8 @@ import { listSeekerRecommendations } from '../controllers/seekerRecommendations.
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
 import { confirmSeekerContract, getSeekerContract, submitCompletion } from '../controllers/contract.controller.js';
 import { validateCompletionSubmission } from '../validators/contract.validation.js';
+import { submitDispute } from '../controllers/contractDispute.controller.js';
+import { validateDisputeSubmission } from '../validators/contractDispute.validation.js';
 import { cancelSubscriptionPayment, checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, startTrial, trialOffer, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
 import { validateSeekerSubscriptionCancellation, validateSeekerSubscriptionCheckout, validateSeekerSubscriptionVerification } from '../validators/seekerSubscriptions.validation.js';
 import { respondToInvitation } from '../controllers/jobInvitation.controller.js';
@@ -156,6 +158,7 @@ seekerRouter.get('/payout-accounts/banks', authenticate, requireRole('SEEKER'), 
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
 seekerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('SEEKER'), confirmSeekerContract);
+seekerRouter.post('/contracts/:contractId/disputes', authenticate, requireRole('SEEKER'), validateDisputeSubmission, submitDispute);
 seekerRouter.get('/contracts/:contractId', authenticate, requireRole('SEEKER'), getSeekerContract);
 seekerRouter.post('/contracts/:contractId/submit-completion', authenticate, requireRole('SEEKER'), validateCompletionSubmission, submitCompletion);
 

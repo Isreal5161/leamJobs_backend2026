@@ -142,6 +142,13 @@ export const releaseContractFunds = async (contractId) => {
     if (!escrow) throw new AdminReleaseNotFoundError();
 
     const contract = escrow.freelanceContract.contract;
+    const dispute = await transaction.dispute.findFirst({
+      where: { OR: [{ contractId: contract.id }, { escrowId: escrow.id }] },
+      select: { id: true, status: true },
+    });
+    if (dispute) {
+      throw new AdminReleaseConflictError('This escrow has a dispute record and cannot be released until a separate refund or release decision is authorized.');
+    }
     if (escrow.status === 'RELEASED') {
       return { alreadyReleased: true, escrow: releaseResult(escrow) };
     }

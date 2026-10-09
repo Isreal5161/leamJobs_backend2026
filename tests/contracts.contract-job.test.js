@@ -315,6 +315,31 @@ test('freelance project payment initialization adds the snapshotted fee to the p
   }));
 });
 
+test('new pending freelance project can initialize funding before candidate confirmation', async () => {
+  const freelanceContract = contractRecord({ status: 'PENDING' });
+  freelanceContract.type = 'FREELANCE_PROJECT';
+  mockPrisma.contract.findUnique.mockResolvedValue(freelanceContract);
+
+  const result = await initializeContractPayment({
+    contractId,
+    employerId,
+    idempotencyKey: 'pending-freelance-funding-key',
+  });
+
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      amount: new Prisma.Decimal('525000.00'),
+      currency: 'NGN',
+      paymentType: 'CONTRACT_FUNDING',
+    }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({
+    amount: '525000.00',
+    currency: 'NGN',
+  }));
+  expect(result.payment.checkoutUrl).toBe('https://checkout.test');
+});
+
 test.each([
   ['5.00', '10000.00', '210000.00'],
   ['10.00', '20000.00', '220000.00'],
