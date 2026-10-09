@@ -240,7 +240,11 @@ const extractDateRange = (value) => {
   const matches = stringValue.match(new RegExp(`(?:19|20)\\d{2}(?:[-/]\\d{1,2})?|(?:${monthPattern})(?:[\\s-]*\\d{4})?|present|current|now`, 'gi')) ?? [];
   const startDate = sanitizeRangeValue(matches[0] ?? '');
   const endDate = sanitizeRangeValue(matches[1] ?? '');
-  const currentlyWorking = /present|current|now/i.test(stringValue);
+  const currentlyWorking = /present|current|now/i.test(stringValue)
+    ? true
+    : matches.length > 1
+      ? false
+      : null;
   return { startDate, endDate: currentlyWorking ? '' : endDate, currentlyWorking };
 };
 
@@ -248,10 +252,11 @@ const parseContactInfo = (text) => {
   const phone = text.match(/(?:\+?\d[\d\s().-]{7,}\d)/)?.[0]?.replace(/[\s]/g, ' ').trim() ?? null;
   const email = text.match(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/)?.[0] ?? null;
   const linkedinUrl = text.match(/https?:\/\/(?:www\.)?linkedin\.com\/in\/[\w-]+/i)?.[0] ?? null;
-  const website = text.match(/https?:\/\/(?:www\.)?[^\s]+/i)?.[0] ?? null;
+  const website = (text.match(/https?:\/\/(?:www\.)?[^\s]+/gi) ?? [])
+    .find((url) => !/linkedin\.com\/in\//i.test(url)) ?? null;
   const location = (() => {
     const blocks = text.split('\n').map((line) => line.trim()).filter(Boolean);
-    const locationCandidate = blocks.find((line) => /[A-Za-z]+,\s*[A-Za-z]+|[A-Za-z]+\s+[A-Za-z]+/i.test(line) && !/https?:\/\//.test(line) && !/@/.test(line));
+    const locationCandidate = blocks.find((line) => /[A-Za-z]+,\s*[A-Za-z]+/i.test(line) && !/https?:\/\//.test(line) && !/@/.test(line));
     return locationCandidate && !/\b(?:experience|education|skills|certifications|projects|languages)\b/i.test(locationCandidate) ? locationCandidate : null;
   })();
 
@@ -305,7 +310,7 @@ const parseExperience = (lines) => {
     const company = companyLine.replace(/,\s*[A-Za-z].*$/, '').trim();
     const description = nonDateParts.slice(2).join(' ').replace(/\s+/g, ' ').trim();
 
-    if (!jobTitle || !company || !dates.startDate && !dates.endDate && !dates.currentlyWorking) {
+    if (!jobTitle || !company) {
       return [];
     }
 
@@ -475,8 +480,6 @@ const computeConfidence = (cv) => {
 };
 
 const shouldUseAiExtraction = (confidence, deterministicData) => {
-  const settings = getAiSettings();
-  if (!settings.enabled || !settings.apiKey) return false;
   const lowConfidence = confidence.overall < 0.72;
   const sparseExperience = Array.isArray(deterministicData.experience) && deterministicData.experience.length === 0;
   const sparseSkills = Array.isArray(deterministicData.skills) && deterministicData.skills.length < 3;
@@ -524,7 +527,7 @@ const normalizeAiObject = (value) => {
       company: toStringOrNull(item?.company, 200) || '',
       startDate: toStringOrNull(item?.startDate, 50) || '',
       endDate: toStringOrNull(item?.endDate, 50) || '',
-      currentlyWorking: Boolean(item?.currentlyWorking),
+      currentlyWorking: typeof item?.currentlyWorking === 'boolean' ? item.currentlyWorking : null,
       description: toStringOrNull(item?.description, 2000) || '',
     })).filter((item) => item.jobTitle || item.company || item.description) : [],
     education: Array.isArray(safe.education) ? safe.education.map((item) => ({
@@ -543,7 +546,7 @@ const normalizeAiObject = (value) => {
     languages: Array.isArray(safe.languages) ? safe.languages.map((item) => ({
       id: randomUUID(),
       name: toStringOrNull(item?.name, 100) || '',
-      proficiency: toStringOrNull(item?.proficiency, 50) || 'Professional',
+      proficiency: toStringOrNull(item?.proficiency, 50) || '',
     })).filter((item) => item.name) : [],
     projects: Array.isArray(safe.projects) ? safe.projects.map((item) => ({
       id: randomUUID(),
@@ -574,7 +577,7 @@ const aiSchema = z.object({
     company: z.string().max(200).optional(),
     startDate: z.string().max(50).optional(),
     endDate: z.string().max(50).optional(),
-    currentlyWorking: z.boolean().optional(),
+    currentlyWorking: z.boolean().nullable().optional(),
     description: z.string().max(2000).optional(),
   })).default([]),
   education: z.array(z.object({
@@ -590,7 +593,7 @@ const aiSchema = z.object({
   })).default([]),
   languages: z.array(z.object({
     name: z.string().max(100).optional(),
-    proficiency: z.string().max(50).optional(),
+    proficiency: z.string().max(50).nullable().optional(),
   })).default([]),
   projects: z.array(z.object({
     name: z.string().max(200).optional(),
@@ -637,7 +640,7 @@ const callAiExtraction = async (text, deterministicCandidate) => {
 };
 
 const mergeCvData = (deterministic, ai) => {
-  const result = { ...emptyCv() };
+  const result = { ...emptyCv()   };
   const prefer = (primary, fallback) => {
     if (primary && (typeof primary === 'string' ? primary.trim() : true)) return primary;
     return fallback ?? null;
@@ -667,6 +670,16 @@ const mergeCvData = (deterministic, ai) => {
 
   return result;
 };
+
+const hasExtractedValue = (value) => Array.isArray(value)
+  ? value.length > 0
+  : typeof value === 'string'
+    ? value.trim().length > 0
+    : value !== null && value !== undefined;
+
+const aiContributedToExtraction = (deterministic, ai) => Object.entries(ai ?? {}).some(([field, value]) => (
+  !hasExtractedValue(deterministic[field]) && hasExtractedValue(value)
+));
 
 const parseStructuredCv = (text) => {
   const cleanedText = removeVendorNoiseFromText(text);
@@ -755,21 +768,30 @@ export const importSeekerResumeForUser = async (userId) => {
   const deterministic = parseStructuredCv(normalized.text);
   const warnings = [...normalized.warnings, ...deterministic.warnings];
   const shouldUseAI = shouldUseAiExtraction(deterministic.confidence, deterministic.cv);
-  let aiUsed = false;
+  const aiSettings = getAiSettings();
+  let aiAttempted = false;
   let aiData = null;
   let aiWarnings = [];
 
-  if (shouldUseAI) {
-    try {
-      aiUsed = true;
-      aiData = await callAiExtraction(normalized.text, deterministic.cv);
-    } catch (error) {
-      aiWarnings.push(`AI extraction failed; fell back to deterministic parsing: ${error.message || 'provider error'}`);
-      aiData = null;
+  if (shouldUseAI && aiSettings.enabled) {
+    aiAttempted = true;
+    if (!aiSettings.apiKey || aiSettings.provider !== 'openai') {
+      aiWarnings.push('AI extraction was enabled but unavailable; deterministic parsing was used.');
+    } else {
+      try {
+        aiData = await callAiExtraction(normalized.text, deterministic.cv);
+      } catch (error) {
+        aiWarnings.push(`AI extraction failed; fell back to deterministic parsing: ${error.message || 'provider error'}`);
+        aiData = null;
+      }
     }
   }
 
   const merged = mergeCvData(deterministic.cv, aiData);
+  const aiUsed = aiContributedToExtraction(deterministic.cv, aiData);
+  if (aiData && !aiUsed) {
+    aiWarnings.push('AI extraction returned no additional usable fields; deterministic results were retained.');
+  }
   const confidence = computeConfidence(merged);
   const finalWarnings = [...new Set([...warnings, ...aiWarnings])];
 
@@ -781,7 +803,7 @@ export const importSeekerResumeForUser = async (userId) => {
     source: { format, filename: null },
     requiresReview: true,
     extraction: {
-      method: aiUsed && aiData ? 'hybrid' : 'deterministic',
+      method: aiUsed ? 'hybrid' : aiAttempted ? 'deterministic-fallback' : 'deterministic',
       aiUsed,
     },
     confidence,

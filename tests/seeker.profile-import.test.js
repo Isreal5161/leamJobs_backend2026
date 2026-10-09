@@ -236,7 +236,7 @@ describe('seeker resume import endpoint', () => {
     expect(mockPrisma.seekerProfile.upsert).not.toHaveBeenCalled();
   });
 
-  test('keeps deterministic extraction working when AI is unavailable or fails', async () => {
+  test('reports deterministic fallback when AI is enabled but unavailable', async () => {
     const originalValue = process.env.CV_IMPORT_AI_ENABLED;
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.CV_IMPORT_AI_ENABLED = 'true';
@@ -246,8 +246,30 @@ describe('seeker resume import endpoint', () => {
       .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111144')}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.extraction.method).toBe('deterministic-fallback');
+    expect(response.body.data.extraction.aiUsed).toBe(false);
+    expect(response.body.data.warnings.join(' ')).toMatch(/AI.*unavailable/i);
+    expect(response.body.data.extraction.aiUsed).toBe(false);
     expect(response.body.data.cv.fullName).toBe('John Doe');
+
+    if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
+    else process.env.CV_IMPORT_AI_ENABLED = originalValue;
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+  });
+
+  test('reports deterministic extraction when AI is disabled', async () => {
+    const originalValue = process.env.CV_IMPORT_AI_ENABLED;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.CV_IMPORT_AI_ENABLED = 'false';
+    process.env.OPENAI_API_KEY = 'test-api-key';
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111148')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.extraction).toEqual({ method: 'deterministic', aiUsed: false });
 
     if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
     else process.env.CV_IMPORT_AI_ENABLED = originalValue;
@@ -270,7 +292,8 @@ describe('seeker resume import endpoint', () => {
       .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111145')}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.extraction.method).toBe('deterministic-fallback');
+    expect(response.body.data.extraction.aiUsed).toBe(false);
     expect(response.body.data.cv.fullName).toBe('John Doe');
     expect(response.body.data.warnings.join(' ')).toMatch(/AI|fallback|deterministic/i);
 
@@ -295,8 +318,34 @@ describe('seeker resume import endpoint', () => {
       .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111146')}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data.extraction.method).toBe('deterministic');
+    expect(response.body.data.extraction.method).toBe('deterministic-fallback');
+    expect(response.body.data.extraction.aiUsed).toBe(false);
     expect(response.body.data.cv.fullName).toBe('John Doe');
+
+    if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
+    else process.env.CV_IMPORT_AI_ENABLED = originalValue;
+    if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = originalApiKey;
+    delete global.fetch;
+  });
+
+  test('reports successful AI extraction only when it contributes a valid imported field', async () => {
+    const originalValue = process.env.CV_IMPORT_AI_ENABLED;
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.CV_IMPORT_AI_ENABLED = 'true';
+    process.env.OPENAI_API_KEY = 'test-api-key';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ website: 'https://john.example' }) } }] }),
+    });
+
+    const response = await request(app)
+      .post('/api/seeker/profile/resume/import')
+      .set('Authorization', `Bearer ${createToken('SEEKER', '11111111-1111-4111-8111-111111111147')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.extraction).toEqual({ method: 'hybrid', aiUsed: true });
+    expect(response.body.data.cv.website).toBe('https://john.example');
 
     if (originalValue === undefined) delete process.env.CV_IMPORT_AI_ENABLED;
     else process.env.CV_IMPORT_AI_ENABLED = originalValue;

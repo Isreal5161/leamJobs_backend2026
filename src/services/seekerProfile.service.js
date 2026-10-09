@@ -21,6 +21,7 @@ const profileSelect = {
   projects: true,
   cvTemplate: true,
   linkedinUrl: true,
+  website: true,
   resumeUrl: true,
   resumeObjectKey: true,
   profilePictureUrl: true,
@@ -157,6 +158,7 @@ export const getSeekerProfileForUser = async (userId) => {
     projects: profile.projects ?? null,
     cvTemplate: profile.cvTemplate ?? null,
     linkedinUrl: profile.linkedinUrl ?? null,
+    website: profile.website ?? null,
     resumeUrl: profile.resumeUrl ?? null,
     profilePictureUrl: profile.profilePictureUrl ?? null,
   } : {
@@ -176,6 +178,7 @@ export const getSeekerProfileForUser = async (userId) => {
     projects: null,
     cvTemplate: null,
     linkedinUrl: null,
+    website: null,
     resumeUrl: null,
     profilePictureUrl: null,
   };
@@ -259,6 +262,7 @@ export const upsertSeekerProfileForUser = async (userId, payload) => {
     projects: profile.projects ?? null,
     cvTemplate: profile.cvTemplate ?? null,
     linkedinUrl: profile.linkedinUrl ?? null,
+    website: profile.website ?? null,
     resumeUrl: profile.resumeUrl ?? null,
     profilePictureUrl: profile.profilePictureUrl ?? null,
   };
@@ -304,6 +308,10 @@ export const updateSeekerCVForUser = async (userId, payload) => {
     normalizedPayload.linkedinUrl = payload.linkedinUrl ? payload.linkedinUrl.trim() || null : null;
   }
 
+  if (payload.website !== undefined) {
+    normalizedPayload.website = payload.website ? payload.website.trim() || null : null;
+  }
+
   if (payload.cvTemplate !== undefined) {
     normalizedPayload.cvTemplate = payload.cvTemplate ?? null;
   }
@@ -330,6 +338,7 @@ export const updateSeekerCVForUser = async (userId, payload) => {
     languages: profile.languages ?? null,
     projects: profile.projects ?? null,
     linkedinUrl: profile.linkedinUrl ?? null,
+    website: profile.website ?? null,
     cvTemplate: profile.cvTemplate ?? null,
   };
 };

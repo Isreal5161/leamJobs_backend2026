@@ -303,6 +303,7 @@ describe('seeker profile onboarding endpoints', () => {
       projects: null,
       cvTemplate: null,
       linkedinUrl: null,
+      website: null,
       resumeUrl: null,
       profilePictureUrl: null,
     });
@@ -579,7 +580,7 @@ describe('seeker profile CV endpoints', () => {
 
   test('PATCH /api/seeker/profile/cv updates education', async () => {
     const education = [
-      { id: '1', degree: 'B.Sc. Computer Science', school: 'University', year: '2020' },
+      { id: '1', degree: 'B.Sc. Computer Science', school: 'University', year: '2020', details: 'Relevant coursework' },
     ];
 
     mockPrisma.seekerProfile.upsert.mockResolvedValue({
@@ -599,6 +600,28 @@ describe('seeker profile CV endpoints', () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.data.education).toEqual(education);
+    expect(mockPrisma.seekerProfile.upsert.mock.calls[0][0].update.education).toEqual(education);
+  });
+
+  test('PATCH /api/seeker/profile/cv persists an optional website and keeps old payloads compatible', async () => {
+    mockPrisma.seekerProfile.upsert.mockResolvedValue({
+      id: 'profile-1',
+      bio: null,
+      education: null,
+      experience: null,
+      linkedinUrl: null,
+      website: 'https://janedoe.example',
+      cvTemplate: null,
+    });
+
+    const response = await request(app)
+      .patch('/api/seeker/profile/cv')
+      .set('Authorization', `Bearer ${createToken('SEEKER')}`)
+      .send({ website: 'https://janedoe.example' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.website).toBe('https://janedoe.example');
+    expect(mockPrisma.seekerProfile.upsert.mock.calls[0][0].update.website).toBe('https://janedoe.example');
   });
 
   test('PATCH /api/seeker/profile/cv updates experience', async () => {
@@ -709,6 +732,7 @@ describe('seeker profile CV endpoints', () => {
     [{ projects: [{ name: '', technologies: [] }] }],
     [{ projects: [{ name: 'Demo', projectUrl: 'not-a-url' }] }],
     [{ projects: [{ name: 'Demo', technologies: ['React', 'react'] }] }],
+    [{ website: 'not-a-url' }],
   ])('rejects malformed language/project payloads: %j', async (payload) => {
     const response = await request(app)
       .patch('/api/seeker/profile/cv')

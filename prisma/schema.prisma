@@ -384,6 +384,7 @@ model SeekerProfile {
   projects          Json?
   cvTemplate        String?
   linkedinUrl       String?
+  website           String?
   resumeUrl         String?
   resumeObjectKey   String?
   profilePictureUrl String?

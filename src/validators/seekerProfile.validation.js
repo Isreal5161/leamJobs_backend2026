@@ -65,6 +65,7 @@ const educationItemSchema = z.object({
   degree: z.string().min(1, 'Degree is required'),
   school: z.string().min(1, 'School is required'),
   year: z.string().min(1, 'Year is required'),
+  details: z.string().max(2000, 'Education details must not exceed 2000 characters').optional().or(z.literal('')),
 });
 
 const experienceItemSchema = z.object({
@@ -78,6 +79,7 @@ const experienceItemSchema = z.object({
 });
 
 const linkedinUrlSchema = z.string().trim().url('Invalid LinkedIn URL').optional().or(z.literal('').optional()).or(z.null());
+const websiteSchema = z.string().trim().url('Invalid website URL').optional().or(z.literal('').optional()).or(z.null());
 
 const cvTemplateSchema = z.enum(cvTemplateIds).optional().nullable();
 
@@ -92,6 +94,7 @@ const seekerCVUpdateSchema = z.object({
   }, 'Duplicate languages are not allowed').optional().or(z.null()),
   projects: z.array(projectItemSchema).max(50).optional().or(z.null()),
   linkedinUrl: linkedinUrlSchema,
+  website: websiteSchema,
   cvTemplate: cvTemplateSchema,
 }).strict().partial();
 
