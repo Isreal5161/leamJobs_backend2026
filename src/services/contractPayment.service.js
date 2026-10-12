@@ -474,6 +474,24 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
   return prisma.$transaction(async (transaction) => {
     await transaction.$queryRaw`
       SELECT "id"
+      FROM "Contract"
+      WHERE "id" = ${resolvedContractId}
+      FOR UPDATE
+    `;
+    const lockedContract = await transaction.contract.findFirst({
+      where: { id: resolvedContractId, employerId },
+      select: { id: true, type: true, applicationId: true, status: true },
+    });
+    if (!lockedContract) throw new ContractNotFoundError();
+    if (lockedContract.type === 'FREELANCE_PROJECT' && !['PENDING', 'ACTIVE'].includes(lockedContract.status)) {
+      throw new ContractPaymentError('Freelance project is no longer eligible for funding', 409);
+    }
+    if (lockedContract.type === 'CONTRACT_PROJECT' && lockedContract.status !== 'PENDING') {
+      throw new ContractPaymentError('Contract Job is already finalized', 409);
+    }
+
+    await transaction.$queryRaw`
+      SELECT "id"
       FROM "Escrow"
       WHERE "id" = ${payment.escrowId}
       FOR UPDATE
@@ -543,10 +561,7 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       ],
       skipDuplicates: true,
     });
-    const finalizedContract = await transaction.contract.findUnique({
-      where: { id: resolvedContractId },
-      select: { type: true, applicationId: true, status: true },
-    });
+    const finalizedContract = lockedContract;
     if (finalizedContract?.type === 'CONTRACT_PROJECT') {
       if (finalizedContract.status !== 'PENDING') {
         throw new ContractPaymentError('Contract Job is already finalized');

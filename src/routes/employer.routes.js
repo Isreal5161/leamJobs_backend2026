@@ -28,13 +28,14 @@ import { validateEmployerProfileUpdate } from '../validators/employerProfile.val
 import { singleUpload } from '../middleware/upload.middleware.js';
 import {
 	confirmCompletion,
+	cancelEmployerContract,
 	confirmEmployerContract,
 	getEmployerContract,
 	getEmployerContracts,
 	initializeEmployerContractPayment,
 	verifyEmployerContractPayment,
 } from '../controllers/contract.controller.js';
-import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
+import { validateContractId, validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
 import { submitDispute } from '../controllers/contractDispute.controller.js';
 import { validateDisputeSubmission } from '../validators/contractDispute.validation.js';
 import { validateEmployerCandidatesQuery } from '../validators/employerCandidates.validation.js';
@@ -81,6 +82,7 @@ employerRouter.delete('/profile/logo', authenticate, requireRole('EMPLOYER'), de
 employerRouter.get('/profile/logo', authenticate, requireRole('EMPLOYER'), getLogo);
 employerRouter.get('/contracts', authenticate, requireRole('EMPLOYER'), validateEmployerContractsQuery, getEmployerContracts);
 employerRouter.post('/contracts/:contractId/disputes', authenticate, requireRole('EMPLOYER'), validateDisputeSubmission, submitDispute);
+employerRouter.post('/contracts/:contractId/cancel', authenticate, requireRole('EMPLOYER'), validateContractId, cancelEmployerContract);
 employerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('EMPLOYER'), confirmEmployerContract);
 employerRouter.get('/contracts/:contractId', authenticate, requireRole('EMPLOYER'), getEmployerContract);
 employerRouter.post('/contracts/:contractId/payment', authenticate, requireRole('EMPLOYER'), validateContractPayment, initializeEmployerContractPayment);

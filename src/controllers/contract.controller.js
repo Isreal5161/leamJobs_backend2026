@@ -1,4 +1,4 @@
-import { confirmContract } from '../services/contract.service.js';
+import { cancelEmployerFreelanceContract, confirmContract } from '../services/contract.service.js';
 import {
   confirmContractCompletion,
   getContractForParty,
@@ -21,6 +21,16 @@ const getCanonicalLeamJobsEmployerId = async () => {
 export const getEmployerContract = async (req, res, next) => {
   try {
     const contract = await getContractForParty({ contractId: req.params.contractId, userId: req.user.sub, role: 'EMPLOYER' });
+    return res.status(200).json({ success: true, data: { contract } });
+  } catch (error) { return next(error); }
+};
+
+export const cancelEmployerContract = async (req, res, next) => {
+  try {
+    const contract = await cancelEmployerFreelanceContract({
+      contractId: req.params.contractId,
+      employerId: req.user.sub,
+    });
     return res.status(200).json({ success: true, data: { contract } });
   } catch (error) { return next(error); }
 };

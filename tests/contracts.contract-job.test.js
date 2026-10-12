@@ -483,7 +483,10 @@ test('checkout initialization with an unknown provider outcome retains its claim
 });
 
 test('verified contract payment funds escrow and finalizes application acceptance atomically', async () => {
-  mockPrisma.contract.findFirst.mockResolvedValue({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } });
+  mockPrisma.contract.findFirst
+    .mockResolvedValueOnce({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } })
+    .mockResolvedValueOnce({ id: contractId, type: 'CONTRACT_PROJECT', applicationId, status: 'PENDING' })
+    .mockResolvedValueOnce(contractRecord());
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
   const result = await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
 

@@ -121,7 +121,7 @@ app.use((err, req, res, next) => {
 
   res.status(status).json({
     ...(err.publicCode
-      ? { success: false, error: { code: err.publicCode, message } }
+      ? { success: false, error: { code: err.publicCode, message, ...(err.publicDetails ? { details: err.publicDetails } : {}) } }
       : { message, status }),
   });
 });

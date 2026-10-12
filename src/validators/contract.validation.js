@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 const idempotencyKey = z.string().trim().min(1).max(100).optional();
 
+export const validateContractId = (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.contractId).success) {
+    return res.status(400).json({ message: 'Contract id must be a valid UUID' });
+  }
+  return next();
+};
+
 export const validateContractPayment = (req, res, next) => {
   const result = z.object({ idempotencyKey }).strict().safeParse(req.body ?? {});
   if (!result.success) return res.status(400).json({ message: 'Validation failed', errors: result.error.issues });

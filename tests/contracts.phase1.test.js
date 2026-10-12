@@ -14,6 +14,7 @@ const seekerId = '33333333-3333-4333-8333-333333333333';
 const otherSeekerId = '44444444-4444-4444-8444-444444444444';
 const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const applicationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const secondApplicationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc';
 const contractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const freelanceContractId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const escrowId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
@@ -107,7 +108,7 @@ const escrowRecord = {
 
 const mockPrisma = {
   application: { findFirst: jest.fn(), update: jest.fn() },
-  contract: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+  contract: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   escrow: { create: jest.fn() },
   platformFeeConfiguration: { findUnique: jest.fn() },
@@ -124,6 +125,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.application.findFirst.mockResolvedValue(null);
   mockPrisma.application.update.mockResolvedValue(applicationDetail());
+  mockPrisma.contract.findMany.mockResolvedValue([]);
   mockPrisma.contract.create.mockResolvedValue({ id: contractId });
   mockPrisma.platformFeeConfiguration.findUnique.mockResolvedValue({ percentage: new Prisma.Decimal('5.00'), isActive: true });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
@@ -144,7 +146,7 @@ describe('Phase 1 freelance contract acceptance', () => {
           },
         },
       })
-      .mockResolvedValueOnce(applicationDetail());
+      .mockResolvedValueOnce(null);
 
     const response = await request(app)
       .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
@@ -227,6 +229,56 @@ describe('Phase 1 freelance contract acceptance', () => {
       .send({ status: 'ACCEPTED' });
 
     expect(response.status).toBe(200);
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('freelance selection rejects a second accepted application while holding the project lock', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce({ id: secondApplicationId });
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_UNFUNDED_CONTRACT');
+    expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('freelance selection returns a conflict for an existing pending payment attempt', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({
+        id: applicationId,
+        contract: null,
+        job: { jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+      })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      status: 'PENDING',
+      freelanceDetails: {
+        escrow: {
+          status: 'UNFUNDED',
+          fundedAmount: new Prisma.Decimal('0.00'),
+          payments: [{ status: 'PENDING' }],
+        },
+      },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_PAYMENT_PENDING');
+    expect(response.body.error.message).toMatch(/payment pending or under verification/);
     expect(mockPrisma.contract.create).not.toHaveBeenCalled();
     expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
   });

@@ -105,6 +105,16 @@ export class ContractProgressError extends Error {
   }
 }
 
+export class FreelanceContractCancellationError extends Error {
+  constructor(message, status = 409) {
+    super(message);
+    this.name = 'FreelanceContractCancellationError';
+    this.status = status;
+    this.publicCode = 'FREELANCE_CONTRACT_CANCELLATION_BLOCKED';
+    this.publicMessage = message;
+  }
+}
+
 const decimalToString = (value) => value === null || value === undefined ? null : value.toFixed(2);
 
 const fundingPaymentAmount = (details) => {
@@ -118,11 +128,21 @@ const fundingPaymentAmount = (details) => {
 const contractActions = (contract) => {
   const details = contract.freelanceDetails;
   const escrow = details?.escrow;
+  const payments = escrow?.payments ?? [];
   const fundableStatus = contract.type === 'CONTRACT_PROJECT'
     ? contract.status === 'PENDING'
     : contract.type === 'FREELANCE_PROJECT' && ['PENDING', 'ACTIVE'].includes(contract.status);
   return {
     fund: Boolean(fundableStatus && escrow && ['UNFUNDED', 'FUNDING'].includes(escrow.status)),
+    cancel: Boolean(
+      contract.type === 'FREELANCE_PROJECT'
+      && ['PENDING', 'ACTIVE'].includes(contract.status)
+      && contract.application?.status === 'ACCEPTED'
+      && details?.workStatus === 'PENDING'
+      && escrow?.status === 'UNFUNDED'
+      && new Prisma.Decimal(escrow.fundedAmount ?? 0).eq(0)
+      && payments.length === 0,
+    ),
     confirmCompletion: Boolean(
       contract.status === 'ACTIVE'
       && escrow?.status === 'FUNDED'
@@ -238,6 +258,148 @@ export const getContractForParty = async ({ contractId, userId, role }) => {
   const ownerId = role === 'EMPLOYER' ? contract.employerId : contract.seekerId;
   if (ownerId !== userId) throw new ContractNotFoundError();
   return mapContract(contract);
+};
+
+export const cancelEmployerFreelanceContract = async ({ contractId, employerId, applicationJobId }) => {
+  const existing = await prisma.contract.findFirst({
+    where: { id: contractId, employerId, ...(applicationJobId ? { jobId: applicationJobId } : {}) },
+    select: { id: true, jobId: true },
+  });
+  if (!existing) throw new ContractNotFoundError();
+
+  await prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Job"
+      WHERE "id" = ${existing.jobId}
+      FOR UPDATE
+    `;
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Contract"
+      WHERE "id" = ${contractId} AND "employerId" = ${employerId}
+      FOR UPDATE
+    `;
+
+    const contract = await transaction.contract.findFirst({
+      where: { id: contractId, employerId, jobId: existing.jobId },
+      select: {
+        ...contractSelect,
+        freelanceDetails: {
+          select: {
+            workStatus: true,
+            agreedAmount: true,
+            currency: true,
+            escrow: {
+              select: {
+                id: true,
+                status: true,
+                fundedAmount: true,
+                releasedAmount: true,
+                refundedAmount: true,
+                fundedAt: true,
+                releasedAt: true,
+                payments: {
+                  where: { paymentType: 'CONTRACT_FUNDING' },
+                  select: { status: true },
+                },
+                refunds: { select: { id: true } },
+                disputes: { select: { id: true } },
+                ledgerEntries: { select: { id: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!contract) throw new ContractNotFoundError();
+    if (contract.type !== 'FREELANCE_PROJECT' || !contract.freelanceDetails?.escrow) {
+      throw new FreelanceContractCancellationError('Only freelance contracts with an escrow can be cancelled through this action.', 409);
+    }
+
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Escrow"
+      WHERE "id" = ${contract.freelanceDetails.escrow.id}
+      FOR UPDATE
+    `;
+    const escrow = await transaction.escrow.findUnique({
+      where: { id: contract.freelanceDetails.escrow.id },
+      select: {
+        id: true,
+        status: true,
+        fundedAmount: true,
+        releasedAmount: true,
+        refundedAmount: true,
+        fundedAt: true,
+        releasedAt: true,
+        payments: {
+          where: { paymentType: 'CONTRACT_FUNDING' },
+          select: { status: true },
+        },
+        refunds: { select: { id: true } },
+        disputes: { select: { id: true } },
+        ledgerEntries: { select: { id: true } },
+      },
+    });
+    if (!escrow) throw new FreelanceContractCancellationError('The contract escrow is unavailable.');
+
+    if (escrow.payments.length > 0) {
+      throw new FreelanceContractCancellationError(
+        'This contract has a payment attempt on record. A provider may still report a late result, so resolve the payment state before cancelling.',
+      );
+    }
+
+    const hasFinancialActivity = new Prisma.Decimal(escrow.fundedAmount).gt(0)
+      || new Prisma.Decimal(escrow.releasedAmount).gt(0)
+      || new Prisma.Decimal(escrow.refundedAmount).gt(0)
+      || Boolean(escrow.fundedAt || escrow.releasedAt)
+      || escrow.refunds.length > 0
+      || escrow.disputes.length > 0
+      || escrow.ledgerEntries.length > 0
+      || escrow.payments.length > 0;
+    if (hasFinancialActivity || escrow.status !== 'UNFUNDED') {
+      throw new FreelanceContractCancellationError(
+        'This contract has financial activity or is no longer unfunded. Use its existing payment and escrow workflow instead.',
+      );
+    }
+
+    if (!['PENDING', 'ACTIVE'].includes(contract.status)
+      || contract.freelanceDetails.workStatus !== 'PENDING'
+      || contract.application?.status !== 'ACCEPTED') {
+      throw new FreelanceContractCancellationError('This freelance contract is no longer eligible for cancellation.');
+    }
+
+    const cancelledAt = new Date();
+    await transaction.contract.update({
+      where: { id: contract.id },
+      data: { status: 'CANCELLED', cancelledAt },
+    });
+    await transaction.freelanceContract.update({
+      where: { contractId: contract.id },
+      data: { workStatus: 'CANCELLED' },
+    });
+    await transaction.escrow.update({
+      where: { id: escrow.id },
+      data: { status: 'CANCELLED', cancelledAt },
+    });
+    await transaction.application.update({
+      where: { id: contract.applicationId },
+      data: { status: 'REJECTED' },
+    });
+    await createNotification({
+      recipientUserId: contract.seekerId,
+      actorUserId: employerId,
+      type: 'WARNING',
+      category: 'CONTRACT',
+      eventKey: `contract:cancelled:${contract.id}`,
+      title: 'Freelance contract cancelled before funding',
+      message: `The employer cancelled the unfunded contract for ${contract.job?.title ?? 'the project'}.`,
+      link: '/seeker/applications',
+    }, transaction);
+  });
+
+  return getContractForParty({ contractId, userId: employerId, role: 'EMPLOYER' });
 };
 
 export const listEmployerContracts = async ({ employerId, page, limit, status }) => {

@@ -5,6 +5,7 @@ import { getActivePlatformFeePercentage } from './platformFee.service.js';
 import { createNotification } from './notification.service.js';
 import { calculateSkillMatch } from '../utils/skillNormalization.js';
 import { getEmployerCandidateSubscriptionTiers } from './employerCandidates.service.js';
+import { cancelEmployerFreelanceContract } from './contract.service.js';
 
 const applicationStatuses = ['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'REJECTED', 'ACCEPTED', 'WITHDRAWN'];
 
@@ -41,10 +42,12 @@ export class FreelanceContractCreationError extends Error {
 }
 
 export class ContractJobSelectionError extends Error {
-  constructor(message) {
+  constructor(message, publicCode = 'CONTRACT_SELECTION_CONFLICT') {
     super(message);
     this.name = 'ContractJobSelectionError';
     this.status = 409;
+    this.publicCode = publicCode;
+    this.publicMessage = message;
   }
 }
 
@@ -83,7 +86,26 @@ const listSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
-  contract: { select: { id: true } },
+  contract: {
+    select: {
+      id: true,
+      status: true,
+      freelanceDetails: {
+        select: {
+          escrow: {
+            select: {
+              status: true,
+              payments: {
+                where: { paymentType: 'CONTRACT_FUNDING' },
+                select: { status: true },
+                orderBy: { createdAt: 'desc' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
   seeker: { select: applicantSelect },
   job: { select: { id: true, title: true, employerId: true, skills: true } },
 };
@@ -168,6 +190,9 @@ const mapApplicationListItem = (application, subscription) => {
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,
     contractId: application.contract?.id ?? null,
+    contractStatus: application.contract?.status ?? null,
+    escrowStatus: application.contract?.freelanceDetails?.escrow?.status ?? null,
+    paymentStatuses: application.contract?.freelanceDetails?.escrow?.payments?.map(({ status }) => status) ?? [],
   };
 };
 
@@ -268,10 +293,28 @@ export const getEmployerApplicationProfilePicture = async (employerId, jobId, ap
 
 export const updateEmployerApplicationStatus = async (employerId, jobId, applicationId, status) => {
   assertStatus(status);
-  const application = await findOwnedApplication(employerId, jobId, applicationId, { id: true });
+  const application = await findOwnedApplication(employerId, jobId, applicationId, {
+    id: true,
+    contract: { select: { id: true, type: true } },
+    job: { select: { jobType: true, engagementType: true } },
+  });
   if (!application) throw new EmployerApplicationNotFoundError();
 
   if (status !== 'ACCEPTED') {
+    if (application.contract?.type === 'FREELANCE_PROJECT') {
+      if (['REJECTED', 'WITHDRAWN'].includes(status)) {
+        await cancelEmployerFreelanceContract({
+          contractId: application.contract.id,
+          employerId,
+          applicationJobId: jobId,
+        });
+        return getEmployerApplication(employerId, jobId, applicationId);
+      }
+      throw new ContractJobSelectionError(
+        'A selected freelance candidate can only be rejected by cancelling the unfunded contract.',
+        'FREELANCE_SELECTION_REQUIRES_CANCELLATION',
+      );
+    }
     const updated = await prisma.application.update({
       where: { id: application.id },
       data: { status },
@@ -293,6 +336,13 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
   }
 
   return prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Job"
+      WHERE "id" = ${jobId}
+      FOR UPDATE
+    `;
+
     await transaction.$queryRaw`
       SELECT "id"
       FROM "Application"
@@ -360,6 +410,82 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         select: detailSelect,
       });
       return mapApplicationDetailWithSubscription(existing);
+    }
+
+    const otherAcceptedApplication = await transaction.application.findFirst({
+      where: {
+        jobId: application.job.id,
+        id: { not: application.id },
+        status: 'ACCEPTED',
+      },
+      select: { id: true },
+    });
+    if (otherAcceptedApplication) {
+      throw new ContractJobSelectionError(
+        'Another candidate is already selected for this project. Resolve the existing selection before selecting a replacement.',
+        'FREELANCE_SELECTION_UNFUNDED_CONTRACT',
+      );
+    }
+
+    const otherFreelanceContracts = await transaction.contract.findMany({
+      where: {
+        jobId: application.job.id,
+        type: 'FREELANCE_PROJECT',
+        applicationId: { not: application.id },
+      },
+      select: {
+        status: true,
+        freelanceDetails: {
+          select: {
+            escrow: {
+              select: {
+                status: true,
+                fundedAmount: true,
+                payments: {
+                  where: { paymentType: 'CONTRACT_FUNDING' },
+                  select: { status: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const blockingContract = otherFreelanceContracts.find(({ status, freelanceDetails }) => {
+      const escrow = freelanceDetails?.escrow;
+      const payments = escrow?.payments ?? [];
+      const hasInFlightPayment = payments.some(({ status: paymentStatus }) => ['PENDING', 'PROCESSING'].includes(paymentStatus));
+      const hasFinancialActivity = payments.length > 0
+        || (escrow?.fundedAmount && new Prisma.Decimal(escrow.fundedAmount).gt(0));
+      return status !== 'CANCELLED'
+        || escrow?.status !== 'CANCELLED'
+        || hasInFlightPayment
+        || hasFinancialActivity;
+    });
+    if (blockingContract) {
+      const escrow = blockingContract.freelanceDetails?.escrow;
+      const statuses = escrow?.payments?.map(({ status: paymentStatus }) => paymentStatus) ?? [];
+      const hasInFlightPayment = statuses.some((paymentStatus) => ['PENDING', 'PROCESSING'].includes(paymentStatus));
+      if (statuses.length > 0) {
+        throw new ContractJobSelectionError(
+          hasInFlightPayment
+            ? 'Another candidate has a freelance payment pending or under verification. Resolve that payment state before selecting a replacement.'
+            : 'Another candidate has a freelance payment attempt on record. Resolve its provider state before selecting a replacement.',
+          hasInFlightPayment ? 'FREELANCE_SELECTION_PAYMENT_PENDING' : 'FREELANCE_SELECTION_PAYMENT_ATTEMPT',
+        );
+      }
+      if (['FUNDED', 'RELEASE_ELIGIBLE', 'DISPUTED', 'RELEASED', 'REFUND_PENDING', 'REFUNDED'].includes(escrow?.status)
+        || (escrow?.fundedAmount && new Prisma.Decimal(escrow.fundedAmount).gt(0))
+        || statuses.some((paymentStatus) => ['SUCCESSFUL', 'REFUNDED'].includes(paymentStatus))) {
+        throw new ContractJobSelectionError(
+          'Another candidate has a funded freelance contract. Follow its existing financial workflow before selecting a replacement.',
+          'FREELANCE_SELECTION_FUNDED_CONTRACT',
+        );
+      }
+      throw new ContractJobSelectionError(
+        'Another candidate is already selected for this project. Cancel the existing unfunded contract before selecting a replacement.',
+        'FREELANCE_SELECTION_UNFUNDED_CONTRACT',
+      );
     }
 
     const agreedAmount = new Prisma.Decimal(application.job.freelanceCompensation.projectAmount);
