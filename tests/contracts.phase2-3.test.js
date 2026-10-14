@@ -10,6 +10,7 @@ const providerReference = 'leamjobs_contract_ref';
 
 const payment = ({ status = 'PENDING' } = {}) => ({
   id: paymentId,
+  userId: '11111111-1111-4111-8111-111111111111',
   escrowId,
   providerReference,
   transactionId: null,
@@ -103,7 +104,7 @@ beforeEach(() => {
     return storedPayment;
   });
   mockPrisma.payment.findUnique.mockImplementation(async () => storedPayment ?? payment());
-  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('100000.00'), platformFeeAmount: new Prisma.Decimal('5000.00'), seekerNetAmount: new Prisma.Decimal('95000.00') });
+  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', currency: 'NGN', grossAmount: new Prisma.Decimal('100000.00'), platformFeeAmount: new Prisma.Decimal('5000.00'), seekerNetAmount: new Prisma.Decimal('95000.00') });
   mockPrisma.escrow.update.mockResolvedValue(undefined);
   mockPrisma.freelanceContract.update.mockResolvedValue(undefined);
   initializeFlutterwavePayment.mockResolvedValue({ checkoutUrl: 'https://checkout.test', providerReference });
@@ -147,7 +148,6 @@ test('verified funding activates a pending freelance contract and starts work', 
       escrow: { ...pending.freelanceDetails.escrow, payments: [payment()] },
     },
   });
-  mockPrisma.contract.findUnique.mockResolvedValueOnce(pending);
   mockPrisma.payment.findUnique.mockResolvedValueOnce(payment()).mockResolvedValueOnce({ ...payment(), escrowId });
 
   const result = await verifyContractPayment({

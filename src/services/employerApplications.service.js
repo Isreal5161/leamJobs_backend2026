@@ -5,7 +5,14 @@ import { getActivePlatformFeePercentage } from './platformFee.service.js';
 import { createNotification } from './notification.service.js';
 import { calculateSkillMatch } from '../utils/skillNormalization.js';
 import { getEmployerCandidateSubscriptionTiers } from './employerCandidates.service.js';
-import { cancelEmployerFreelanceContract } from './contract.service.js';
+import {
+  canPossiblyCancelContract,
+  cancelEmployerFreelanceContract,
+  findContractFundingPayments,
+  hasNoContractFinancialHistory,
+  isContractCancellationAvailable,
+  isSafelyCancelledContract,
+} from './contract.service.js';
 
 const applicationStatuses = ['APPLIED', 'REVIEWING', 'SHORTLISTED', 'INTERVIEW', 'REJECTED', 'ACCEPTED', 'WITHDRAWN'];
 
@@ -89,15 +96,43 @@ const listSelect = {
   contract: {
     select: {
       id: true,
+      employerId: true,
+      type: true,
       status: true,
+      cancelledAt: true,
+      completedAt: true,
+      endedAt: true,
+      applicationId: true,
+      application: { select: { id: true, jobId: true, seekerId: true, status: true } },
+      job: { select: { id: true, employerId: true, jobType: true, engagementType: true } },
+      disputes: { select: { id: true } },
+      ledgerEntries: { select: { id: true } },
       freelanceDetails: {
         select: {
+          contractId: true,
+          workStatus: true,
+          completionSubmittedAt: true,
+          employerConfirmedAt: true,
+          seekerConfirmedAt: true,
+          employerCompletionConfirmedAt: true,
           escrow: {
             select: {
+              id: true,
+              freelanceContractId: true,
               status: true,
+              fundedAmount: true,
+              releasedAmount: true,
+              refundedAmount: true,
+              fundedAt: true,
+              releasedAt: true,
+              cancelledAt: true,
+              releaseEligibleAt: true,
+              refunds: { select: { id: true } },
+              disputes: { select: { id: true } },
+              ledgerEntries: { select: { id: true } },
               payments: {
                 where: { paymentType: 'CONTRACT_FUNDING' },
-                select: { status: true },
+                select: { id: true, status: true },
                 orderBy: { createdAt: 'desc' },
               },
             },
@@ -193,6 +228,9 @@ const mapApplicationListItem = (application, subscription) => {
     contractStatus: application.contract?.status ?? null,
     escrowStatus: application.contract?.freelanceDetails?.escrow?.status ?? null,
     paymentStatuses: application.contract?.freelanceDetails?.escrow?.payments?.map(({ status }) => status) ?? [],
+    availableActions: { cancel: Boolean(application.contract?.availableActions?.cancel) },
+    blocksSelection: application.contract?.blocksSelection
+      ?? ['ACCEPTED', 'PAYMENT_PENDING'].includes(application.status),
   };
 };
 
@@ -268,10 +306,35 @@ export const listEmployerApplications = async (employerId, jobId, { page = 1, li
     prisma.application.count({ where }),
   ]);
   const subscriptionTiers = await getEmployerCandidateSubscriptionTiers(applications.map(({ seeker }) => seeker.id));
+  const applicationsWithActions = await Promise.all(applications.map(async (application) => {
+    if (!application.contract) return application;
+
+    const contract = {
+      ...application.contract,
+      application: { status: application.status },
+      job: { ...application.contract.job, title: application.job.title },
+    };
+    const cancellationHistoryClear = canPossiblyCancelContract(contract)
+      && await hasNoContractFinancialHistory(
+        prisma,
+        contract.id,
+        contract.freelanceDetails?.escrow?.id,
+        contract.employerId,
+      );
+    const safelyCancelled = await isSafelyCancelledContract(prisma, contract);
+    return {
+      ...application,
+      contract: {
+        ...contract,
+        availableActions: { cancel: isContractCancellationAvailable(contract, cancellationHistoryClear) },
+        blocksSelection: !safelyCancelled,
+      },
+    };
+  }));
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
   return {
-    applications: applications.map((application) => mapApplicationListItem(application, subscriptionTiers.get(application.seeker.id))),
+    applications: applicationsWithActions.map((application) => mapApplicationListItem(application, subscriptionTiers.get(application.seeker.id))),
     pagination: { page, limit, total, totalPages, hasNextPage: page < totalPages, hasPreviousPage: page > 1 },
   };
 };
@@ -301,7 +364,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
   if (!application) throw new EmployerApplicationNotFoundError();
 
   if (status !== 'ACCEPTED') {
-    if (application.contract?.type === 'FREELANCE_PROJECT') {
+    if (['FREELANCE_PROJECT', 'CONTRACT_PROJECT'].includes(application.contract?.type)) {
       if (['REJECTED', 'WITHDRAWN'].includes(status)) {
         await cancelEmployerFreelanceContract({
           contractId: application.contract.id,
@@ -311,9 +374,12 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         return getEmployerApplication(employerId, jobId, applicationId);
       }
       throw new ContractJobSelectionError(
-        'A selected freelance candidate can only be rejected by cancelling the unfunded contract.',
-        'FREELANCE_SELECTION_REQUIRES_CANCELLATION',
+        'A selected contract candidate can only be rejected or withdrawn by cancelling the eligible, unfunded contract.',
+        'CONTRACT_SELECTION_REQUIRES_CANCELLATION',
       );
+    }
+    if (application.contract) {
+      throw new ContractJobSelectionError('This contract type cannot be rejected through the application workflow.');
     }
     const updated = await prisma.application.update({
       where: { id: application.id },
@@ -434,37 +500,82 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         applicationId: { not: application.id },
       },
       select: {
+        id: true,
+        jobId: true,
+        seekerId: true,
+        employerId: true,
         status: true,
+        cancelledAt: true,
+        applicationId: true,
+        application: { select: { id: true, jobId: true, seekerId: true, status: true } },
+        job: { select: { id: true, employerId: true } },
+        disputes: { select: { id: true } },
+        ledgerEntries: { select: { id: true } },
         freelanceDetails: {
           select: {
+            contractId: true,
+            workStatus: true,
             escrow: {
               select: {
+                freelanceContractId: true,
+                cancelledAt: true,
                 status: true,
                 fundedAmount: true,
+                releasedAmount: true,
+                refundedAmount: true,
+                fundedAt: true,
+                releasedAt: true,
                 payments: {
                   where: { paymentType: 'CONTRACT_FUNDING' },
                   select: { status: true },
                 },
+                refunds: { select: { id: true } },
+                disputes: { select: { id: true } },
+                ledgerEntries: { select: { id: true } },
               },
             },
           },
         },
       },
     });
-    const blockingContract = otherFreelanceContracts.find(({ status, freelanceDetails }) => {
+    const auditedFreelanceContracts = await Promise.all(otherFreelanceContracts.map(async (contract) => ({
+      ...contract,
+      unescrowedFundingPayments: contract.freelanceDetails?.escrow
+        ? []
+        : await findContractFundingPayments(transaction, contract.id),
+      safelyCancelled: await isSafelyCancelledContract(transaction, contract),
+    })));
+    const blockingContract = auditedFreelanceContracts.find((contract) => {
+      const {
+        disputes = [],
+        ledgerEntries = [],
+        freelanceDetails,
+        unescrowedFundingPayments,
+        safelyCancelled,
+      } = contract;
       const escrow = freelanceDetails?.escrow;
       const payments = escrow?.payments ?? [];
-      const hasInFlightPayment = payments.some(({ status: paymentStatus }) => ['PENDING', 'PROCESSING'].includes(paymentStatus));
       const hasFinancialActivity = payments.length > 0
-        || (escrow?.fundedAmount && new Prisma.Decimal(escrow.fundedAmount).gt(0));
-      return status !== 'CANCELLED'
-        || escrow?.status !== 'CANCELLED'
-        || hasInFlightPayment
-        || hasFinancialActivity;
+        || unescrowedFundingPayments.length > 0
+        || disputes.length > 0
+        || ledgerEntries.length > 0
+        || (escrow && (
+          new Prisma.Decimal(escrow.fundedAmount ?? 0).gt(0)
+          || new Prisma.Decimal(escrow.releasedAmount ?? 0).gt(0)
+          || new Prisma.Decimal(escrow.refundedAmount ?? 0).gt(0)
+          || Boolean(escrow.fundedAt || escrow.releasedAt)
+          || (escrow.refunds ?? []).length > 0
+          || (escrow.disputes ?? []).length > 0
+          || (escrow.ledgerEntries ?? []).length > 0
+        ));
+      return !safelyCancelled || hasFinancialActivity;
     });
     if (blockingContract) {
       const escrow = blockingContract.freelanceDetails?.escrow;
-      const statuses = escrow?.payments?.map(({ status: paymentStatus }) => paymentStatus) ?? [];
+      const statuses = [
+        ...(escrow?.payments?.map(({ status: paymentStatus }) => paymentStatus) ?? []),
+        ...(blockingContract.unescrowedFundingPayments?.map(({ status: paymentStatus }) => paymentStatus) ?? []),
+      ];
       const hasInFlightPayment = statuses.some((paymentStatus) => ['PENDING', 'PROCESSING'].includes(paymentStatus));
       if (statuses.length > 0) {
         throw new ContractJobSelectionError(
@@ -588,11 +699,54 @@ export const selectContractJobApplication = async (employerId, jobId, applicatio
       throw new ContractJobSelectionError('This selection flow is only for Contract Jobs');
     }
     if (!application.job.contractCompensation) throw new ContractJobSelectionError('Contract compensation is unavailable for this job');
-    const existingContract = await transaction.contract.findFirst({
-      where: { jobId: application.job.id, type: 'CONTRACT_PROJECT' },
-      select: { id: true, applicationId: true },
+    const existingContracts = await transaction.contract.findMany({
+      where: {
+        jobId: application.job.id,
+        type: 'CONTRACT_PROJECT',
+        applicationId: { not: application.id },
+      },
+      select: {
+        id: true,
+        jobId: true,
+        seekerId: true,
+        applicationId: true,
+        employerId: true,
+        status: true,
+        cancelledAt: true,
+        application: { select: { id: true, jobId: true, seekerId: true, status: true } },
+        job: { select: { id: true, employerId: true } },
+        disputes: { select: { id: true } },
+        ledgerEntries: { select: { id: true } },
+        freelanceDetails: {
+          select: {
+            contractId: true,
+            workStatus: true,
+            escrow: {
+              select: {
+                id: true,
+                freelanceContractId: true,
+                status: true,
+                fundedAmount: true,
+                releasedAmount: true,
+                refundedAmount: true,
+                fundedAt: true,
+                releasedAt: true,
+                cancelledAt: true,
+                releaseEligibleAt: true,
+                refunds: { select: { id: true } },
+                disputes: { select: { id: true } },
+                ledgerEntries: { select: { id: true } },
+                payments: { select: { id: true, status: true } },
+              },
+            },
+          },
+        },
+      },
     });
-    if (existingContract && existingContract.applicationId !== application.id) {
+    const safelyCancelledContracts = await Promise.all(
+      existingContracts.map((contract) => isSafelyCancelledContract(transaction, contract)),
+    );
+    if (safelyCancelledContracts.some((safelyCancelled) => !safelyCancelled)) {
       throw new ContractJobSelectionError('Another candidate has already been selected for this job.');
     }
     if (application.contract) throw new ContractJobSelectionError('This application already has an engagement');

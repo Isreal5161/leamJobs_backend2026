@@ -135,7 +135,7 @@ test('employer contract list scopes ownership and returns authoritative additive
       escrowStatus: 'UNFUNDED',
       paymentStatus: 'SUCCESSFUL',
     },
-    availableActions: { fund: true, confirmCompletion: false },
+    availableActions: { fund: true, cancel: false, confirmCompletion: false },
   }));
 });
 
@@ -165,7 +165,7 @@ test('management actions reflect the existing funded completion workflow', async
     .set('Authorization', `Bearer ${token()}`);
 
   expect(response.status).toBe(200);
-  expect(response.body.data.contracts[0].availableActions).toEqual({ fund: false, confirmCompletion: true });
+  expect(response.body.data.contracts[0].availableActions).toEqual({ fund: false, cancel: false, confirmCompletion: true });
   expect(response.body.data.contracts[0].funding.escrowStatus).toBe('FUNDED');
 });
 

@@ -88,6 +88,7 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED', amountV
 
 const payment = ({ status = 'PENDING' } = {}) => ({
   id: paymentId,
+  userId: employerId,
   escrowId,
   providerReference,
   transactionId: null,
@@ -102,9 +103,18 @@ const payment = ({ status = 'PENDING' } = {}) => ({
   createdAt: new Date(),
 });
 
+const paymentContractLookup = () => ({
+  id: contractId,
+  employerId,
+  freelanceDetails: {
+    currency: 'NGN',
+    escrow: { id: escrowId, currency: 'NGN', payments: [payment()] },
+  },
+});
+
 const mockPrisma = {
   application: { findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
-  contract: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+  contract: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   escrow: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   payment: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
@@ -127,7 +137,7 @@ const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await imp
 const { initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  jest.resetAllMocks();
   storedPayment = null;
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: applicationId }]);
@@ -137,6 +147,7 @@ beforeEach(() => {
   mockPrisma.application.update.mockResolvedValue({});
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
   mockPrisma.contract.findFirst.mockResolvedValue(null);
+  mockPrisma.contract.findMany.mockResolvedValue([]);
   mockPrisma.payment.create.mockImplementation(async ({ data }) => {
     storedPayment = { ...payment(), ...data };
     return storedPayment;
@@ -146,7 +157,7 @@ beforeEach(() => {
     storedPayment = { ...(storedPayment ?? payment()), ...data };
     return storedPayment;
   });
-  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', grossAmount: new Prisma.Decimal('500000.00'), platformFeeAmount: new Prisma.Decimal('25000.00'), seekerNetAmount: new Prisma.Decimal('500000.00') });
+  mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', currency: 'NGN', grossAmount: new Prisma.Decimal('500000.00'), platformFeeAmount: new Prisma.Decimal('25000.00'), seekerNetAmount: new Prisma.Decimal('500000.00') });
   mockPrisma.escrow.update.mockResolvedValue({});
   mockPrisma.contract.update.mockResolvedValue({});
   mockPrisma.application.updateMany.mockResolvedValue({ count: 1 });
@@ -213,7 +224,35 @@ test('second Contract Job candidate selection fails before creating another enga
   const contractCreateCount = mockPrisma.contract.create.mock.calls.length;
   const escrowCreateCount = mockPrisma.escrow.create.mock.calls.length;
   mockPrisma.application.findFirst.mockResolvedValueOnce(contractJobApplication({ id: secondApplicationId, selectedSeekerId: '33333333-3333-4333-8333-333333333334' }));
-  mockPrisma.contract.findFirst.mockResolvedValueOnce({ id: contractId, applicationId });
+  mockPrisma.contract.findMany.mockResolvedValueOnce([
+    {
+      id: contractId,
+      applicationId,
+      status: 'PENDING',
+      cancelledAt: null,
+      application: { status: 'PAYMENT_PENDING' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: {
+        workStatus: 'PENDING',
+        escrow: {
+          id: escrowId,
+          status: 'UNFUNDED',
+          fundedAmount: new Prisma.Decimal('0.00'),
+          releasedAmount: new Prisma.Decimal('0.00'),
+          refundedAmount: new Prisma.Decimal('0.00'),
+          fundedAt: null,
+          releasedAt: null,
+          cancelledAt: null,
+          releaseEligibleAt: null,
+          refunds: [],
+          disputes: [],
+          ledgerEntries: [],
+          payments: [],
+        },
+      },
+    },
+  ]);
 
   await expect(selectContractJobApplication(employerId, jobId, secondApplicationId)).rejects.toMatchObject({
     status: 409,
@@ -236,6 +275,33 @@ test('simultaneous Contract Job selections serialize to one selected candidate',
     return transaction;
   });
   mockPrisma.application.findFirst.mockImplementation(async ({ where }) => applications[where.id]);
+  mockPrisma.contract.findMany.mockImplementation(async () => selectedApplicationId ? [{
+    id: contractId,
+    applicationId: selectedApplicationId,
+    status: 'PENDING',
+    cancelledAt: null,
+    application: { status: 'PAYMENT_PENDING' },
+    disputes: [],
+    ledgerEntries: [],
+    freelanceDetails: {
+      workStatus: 'PENDING',
+      escrow: {
+        id: escrowId,
+        status: 'UNFUNDED',
+        fundedAmount: new Prisma.Decimal('0.00'),
+        releasedAmount: new Prisma.Decimal('0.00'),
+        refundedAmount: new Prisma.Decimal('0.00'),
+        fundedAt: null,
+        releasedAt: null,
+        cancelledAt: null,
+        releaseEligibleAt: null,
+        refunds: [],
+        disputes: [],
+        ledgerEntries: [],
+        payments: [],
+      },
+    },
+  }] : []);
   mockPrisma.contract.findFirst.mockImplementation(async () => selectedApplicationId ? { id: contractId, applicationId: selectedApplicationId } : null);
   mockPrisma.contract.create.mockImplementation(async ({ data }) => {
     selectedApplicationId = data.applicationId;
@@ -484,8 +550,8 @@ test('checkout initialization with an unknown provider outcome retains its claim
 
 test('verified contract payment funds escrow and finalizes application acceptance atomically', async () => {
   mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } })
-    .mockResolvedValueOnce({ id: contractId, type: 'CONTRACT_PROJECT', applicationId, status: 'PENDING' })
+    .mockResolvedValueOnce(paymentContractLookup())
+    .mockResolvedValueOnce({ id: contractId, type: 'CONTRACT_PROJECT', applicationId, status: 'PENDING', employerId, freelanceDetails: { currency: 'NGN' } })
     .mockResolvedValueOnce(contractRecord());
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
   const result = await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
@@ -520,10 +586,10 @@ test('a zero-percent snapshot charges only the project amount', async () => {
 });
 
 test('pending provider status remains recoverable instead of becoming failed', async () => {
-  mockPrisma.contract.findFirst.mockResolvedValue({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } });
-  mockPrisma.contract.findFirst.mockResolvedValueOnce({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } })
+  mockPrisma.contract.findFirst.mockResolvedValue(paymentContractLookup());
+  mockPrisma.contract.findFirst.mockResolvedValueOnce(paymentContractLookup())
     .mockResolvedValue(contractRecord());
-  verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, status: 'pending' });
+  verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'pending' });
 
   const result = await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
 
@@ -537,9 +603,9 @@ test('pending provider status remains recoverable instead of becoming failed', a
 
 test('a provider-confirmed terminal failure is marked failed and remains unfunded', async () => {
   mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } })
+    .mockResolvedValueOnce(paymentContractLookup())
     .mockResolvedValue(contractRecord());
-  verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, status: 'failed' });
+  verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'failed' });
 
   await expect(verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' }))
     .rejects.toMatchObject({ status: 422 });
@@ -551,7 +617,7 @@ test('a provider-confirmed terminal failure is marked failed and remains unfunde
 });
 
 test('wrong provider amount does not finalize a Contract Job', async () => {
-  mockPrisma.contract.findFirst.mockResolvedValue({ id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [payment()] } } });
+  mockPrisma.contract.findFirst.mockResolvedValue(paymentContractLookup());
   verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, amount: 500000, currency: 'NGN', status: 'successful' });
   await expect(verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' })).rejects.toMatchObject({ status: 422 });
   expect(mockPrisma.application.updateMany).not.toHaveBeenCalled();
@@ -564,7 +630,14 @@ test('a late failed verification cannot downgrade a successful funded payment', 
   let resolveStaleVerification;
   mockPrisma.contract.findFirst.mockImplementation(async ({ select }) => select?.applicationId
     ? contractRecord()
-    : { id: contractId, employerId, freelanceDetails: { escrow: { id: escrowId, payments: [currentPayment] } } });
+    : {
+      id: contractId,
+      employerId,
+      freelanceDetails: {
+        currency: 'NGN',
+        escrow: { id: escrowId, currency: 'NGN', payments: [currentPayment] },
+      },
+    });
   mockPrisma.payment.findUnique.mockImplementation(async () => currentPayment);
   mockPrisma.payment.update.mockImplementation(async ({ data }) => {
     currentPayment = { ...currentPayment, ...data };
@@ -573,6 +646,7 @@ test('a late failed verification cannot downgrade a successful funded payment', 
   mockPrisma.escrow.findUnique.mockImplementation(async () => ({
     id: escrowId,
     status: escrowStatus,
+    currency: 'NGN',
     grossAmount: new Prisma.Decimal('500000.00'),
     platformFeeAmount: new Prisma.Decimal('25000.00'),
     seekerNetAmount: new Prisma.Decimal('500000.00'),
@@ -587,7 +661,7 @@ test('a late failed verification cannot downgrade a successful funded payment', 
   await new Promise((resolve) => setImmediate(resolve));
   verifyFlutterwaveTransaction.mockResolvedValueOnce({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'successful' });
   await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
-  resolveStaleVerification({ id: 456789, tx_ref: providerReference, amount: 500000, currency: 'NGN', status: 'failed' });
+  resolveStaleVerification({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'failed' });
   const staleResult = await staleVerification;
 
   expect(staleResult.payment.status).toBe('SUCCESSFUL');

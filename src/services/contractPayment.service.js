@@ -16,6 +16,7 @@ export class ContractPaymentError extends Error {
 
 const paymentSelect = {
   id: true,
+  userId: true,
   escrowId: true,
   providerReference: true,
   transactionId: true,
@@ -46,6 +47,9 @@ const paymentResponse = (payment) => ({
 
 const MAX_PAYMENT_AMOUNT = new Prisma.Decimal('9999999999.99');
 const INITIALIZATION_CLAIM_KEY = 'checkoutInitialization';
+const MAX_WEBHOOK_ATTEMPTS = 6;
+const WEBHOOK_LEASE_MS = 15 * 60 * 1000;
+const WEBHOOK_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000];
 
 // Legacy snapshots store a lower seeker net; zero-fee rows are equivalent under either model.
 const isAdditiveFundingSnapshot = (details) => (
@@ -344,23 +348,56 @@ const validateProviderPayment = (providerPayment, payment, transactionId) => {
   if (!referenceMatches || !transactionMatches) {
     throw new ContractPaymentError('Flutterwave payment verification failed', 422);
   }
+  const amountMatches = new Prisma.Decimal(providerPayment.amount ?? 0).eq(payment.amount);
+  const currencyMatches = String(providerPayment.currency || '').toUpperCase() === String(payment.currency || '').toUpperCase();
+  if (!amountMatches || !currencyMatches) {
+    throw new ContractPaymentError('Flutterwave payment verification failed', 422);
+  }
   if (status === 'successful') {
-    const amountMatches = new Prisma.Decimal(providerPayment.amount ?? 0).eq(payment.amount);
-    const currencyMatches = String(providerPayment.currency || '').toUpperCase() === payment.currency;
-    if (!amountMatches || !currencyMatches) throw new ContractPaymentError('Flutterwave payment verification failed', 422);
     return 'SUCCESSFUL';
   }
   if (['failed', 'cancelled', 'canceled'].includes(status)) return 'FAILED';
   return 'PROCESSING';
 };
 
-const transitionPaymentStatus = async (payment, status, metadata) => prisma.$transaction(async (transaction) => {
+const assertContractFundingPayment = (payment, contract, escrow) => {
+  if (
+    payment.provider !== 'FLUTTERWAVE'
+    || payment.paymentType !== 'CONTRACT_FUNDING'
+    || payment.userId !== contract.employerId
+    || payment.escrowId !== escrow.id
+  ) {
+    throw new ContractPaymentError('Payment is not consistently associated with its contract escrow', 409);
+  }
+  const paymentCurrency = String(payment.currency || '').toUpperCase();
+  const escrowCurrency = String(escrow.currency || '').toUpperCase();
+  const contractCurrency = String(contract.freelanceDetails?.currency || '').toUpperCase();
+  if (!paymentCurrency || paymentCurrency !== escrowCurrency || paymentCurrency !== contractCurrency) {
+    throw new ContractPaymentError('Payment currency does not match its contract escrow', 409);
+  }
+};
+
+const assertWebhookClaim = async (transaction, webhookClaim) => {
+  if (!webhookClaim) return;
+  const rows = await transaction.$queryRaw`
+    SELECT "id"
+    FROM "ProviderWebhookEvent"
+    WHERE "id" = ${webhookClaim.id}
+      AND "claimToken" = ${webhookClaim.token}
+      AND "processedAt" IS NULL
+    FOR UPDATE
+  `;
+  if (rows.length !== 1) throw new ContractPaymentError('Webhook recovery claim expired; retry reconciliation', 503);
+};
+
+const transitionPaymentStatus = async (payment, status, metadata, webhookClaim = null) => prisma.$transaction(async (transaction) => {
   await transaction.$queryRaw`
     SELECT "id"
     FROM "Escrow"
     WHERE "id" = ${payment.escrowId}
     FOR UPDATE
   `;
+  await assertWebhookClaim(transaction, webhookClaim);
   const [current, escrow] = await Promise.all([
     transaction.payment.findUnique({ where: { id: payment.id }, select: paymentSelect }),
     transaction.escrow.findUnique({ where: { id: payment.escrowId }, select: { id: true, status: true } }),
@@ -382,11 +419,28 @@ const findPaymentForVerification = async ({ contractId, employerId, providerRefe
       where: { providerReference },
       select: {
         ...paymentSelect,
-        escrow: { select: { freelanceContract: { select: { contract: { select: { id: true, employerId: true } } } } } },
+        escrow: {
+          select: {
+            id: true,
+            currency: true,
+            freelanceContract: {
+              select: {
+                contract: {
+                  select: {
+                    id: true,
+                    employerId: true,
+                    freelanceDetails: { select: { currency: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     const resolvedContract = payment?.escrow?.freelanceContract?.contract;
     if (!payment || !resolvedContract || (employerId && resolvedContract.employerId !== employerId)) throw new ContractNotFoundError();
+    assertContractFundingPayment(payment, resolvedContract, payment.escrow);
     const fullContract = await prisma.contract.findUnique({ where: { id: resolvedContract.id }, select: contractSelect });
     return { contract: fullContract, payment };
   }
@@ -396,7 +450,18 @@ const findPaymentForVerification = async ({ contractId, employerId, providerRefe
     select: {
       id: true,
       employerId: true,
-      freelanceDetails: { select: { escrow: { select: { id: true, payments: { where: { paymentType: 'CONTRACT_FUNDING' }, orderBy: { createdAt: 'desc' }, select: paymentSelect } } } } },
+      freelanceDetails: {
+        select: {
+          currency: true,
+          escrow: {
+            select: {
+              id: true,
+              currency: true,
+              payments: { where: { paymentType: 'CONTRACT_FUNDING' }, orderBy: { createdAt: 'desc' }, select: paymentSelect },
+            },
+          },
+        },
+      },
     },
   });
   if (!contract?.freelanceDetails?.escrow) throw new ContractNotFoundError();
@@ -404,24 +469,32 @@ const findPaymentForVerification = async ({ contractId, employerId, providerRefe
     ? contract.freelanceDetails.escrow.payments.find((item) => item.providerReference === providerReference)
     : contract.freelanceDetails.escrow.payments.find((item) => ['PENDING', 'PROCESSING'].includes(item.status));
   if (!payment) throw new ContractPaymentError('Payment attempt not found', 404);
+  assertContractFundingPayment(payment, contract, contract.freelanceDetails.escrow);
   return { contract, payment };
 };
 
-export const verifyContractPayment = async ({ contractId, employerId, providerReference, transactionId }) => {
+export const verifyContractPayment = async ({ contractId, employerId, providerReference, transactionId, webhookClaim = null }) => {
   const { contract, payment } = await findPaymentForVerification({ contractId, employerId, providerReference });
   const resolvedContractId = contractId || contract.id;
-  if (payment.status === 'SUCCESSFUL') return { payment: paymentResponse(payment), contract: await getContractForPayment(resolvedContractId, employerId) };
+  if (payment.status === 'SUCCESSFUL') {
+    if (payment.transactionId !== String(transactionId)) {
+      throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+    }
+    return { payment: paymentResponse(payment), contract: await getContractForPayment(resolvedContractId, employerId) };
+  }
   const providerPayment = await verifyFlutterwaveTransaction(transactionId);
   let providerStatus;
   try {
     providerStatus = validateProviderPayment(providerPayment, payment, transactionId);
   } catch (error) {
-    await transitionPaymentStatus(payment, 'PROCESSING', {
-      ...(payment.metadata ?? {}),
-      contractId: resolvedContractId,
-      verificationFailure: error.message,
-      providerTransactionId: String(transactionId),
-    });
+    if (!webhookClaim) {
+      await transitionPaymentStatus(payment, 'PROCESSING', {
+        ...(payment.metadata ?? {}),
+        contractId: resolvedContractId,
+        verificationFailure: error.message,
+        providerTransactionId: String(transactionId),
+      });
+    }
     await createNotification({
       recipientUserId: employerId,
       type: 'ALERT',
@@ -440,8 +513,11 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       contractId: resolvedContractId,
       providerStatus: String(providerPayment.status ?? ''),
       providerTransactionId: String(providerPayment.id),
-    });
+    }, webhookClaim);
     if (updatedPayment.status === 'SUCCESSFUL') {
+      if (updatedPayment.transactionId !== String(transactionId)) {
+        throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+      }
       return { payment: paymentResponse(updatedPayment), contract: await getContractForPayment(resolvedContractId, employerId) };
     }
     await createNotification({
@@ -453,7 +529,9 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       message: 'Flutterwave confirmed that the funding payment failed. You can start a new payment attempt.',
       link: `/employer/contracts/${resolvedContractId}`,
     }).catch(() => undefined);
-    throw new ContractPaymentError('Flutterwave payment verification failed', 422);
+    const error = new ContractPaymentError('Flutterwave payment verification failed', 422);
+    error.reconciliationComplete = true;
+    throw error;
   }
 
   if (providerStatus === 'PROCESSING') {
@@ -462,7 +540,10 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       contractId: resolvedContractId,
       providerStatus: String(providerPayment.status ?? ''),
       providerTransactionId: String(providerPayment.id),
-    });
+    }, webhookClaim);
+    if (updatedPayment.status === 'SUCCESSFUL' && updatedPayment.transactionId !== String(transactionId)) {
+      throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+    }
     return {
       payment: paymentResponse(updatedPayment),
       pending: ['PENDING', 'PROCESSING'].includes(updatedPayment.status),
@@ -480,7 +561,14 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
     `;
     const lockedContract = await transaction.contract.findFirst({
       where: { id: resolvedContractId, employerId },
-      select: { id: true, type: true, applicationId: true, status: true },
+      select: {
+        id: true,
+        type: true,
+        applicationId: true,
+        status: true,
+        employerId: true,
+        freelanceDetails: { select: { currency: true } },
+      },
     });
     if (!lockedContract) throw new ContractNotFoundError();
     if (lockedContract.type === 'FREELANCE_PROJECT' && !['PENDING', 'ACTIVE'].includes(lockedContract.status)) {
@@ -496,15 +584,21 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       WHERE "id" = ${payment.escrowId}
       FOR UPDATE
     `;
+    await assertWebhookClaim(transaction, webhookClaim);
     const locked = await transaction.payment.findUnique({ where: { id: payment.id }, select: { ...paymentSelect, escrowId: true } });
     const escrow = await transaction.escrow.findUnique({
       where: { id: payment.escrowId },
-      select: { id: true, status: true, grossAmount: true, platformFeeAmount: true, seekerNetAmount: true },
+      select: { id: true, status: true, currency: true, grossAmount: true, platformFeeAmount: true, seekerNetAmount: true },
     });
     if (!locked || !escrow) throw new ContractPaymentError('Payment escrow is unavailable', 422);
-    if (locked.status === 'SUCCESSFUL' || escrow.status === 'FUNDED') {
+    assertContractFundingPayment(locked, lockedContract, escrow);
+    if (locked.status === 'SUCCESSFUL') {
+      if (locked.transactionId !== String(transactionId) || escrow.status !== 'FUNDED') {
+        throw new ContractPaymentError('The reconciled payment and escrow state do not match', 409);
+      }
       return { payment: paymentResponse(locked), contract: await getContractForPayment(resolvedContractId, employerId, transaction) };
     }
+    if (escrow.status === 'FUNDED') throw new ContractPaymentError('The escrow is funded without a matching successful payment', 409);
     const projectAmount = new Prisma.Decimal(escrow.grossAmount);
     const platformFeeAmount = new Prisma.Decimal(escrow.platformFeeAmount);
     const isAdditiveFunding = isAdditiveFundingSnapshot({
@@ -597,34 +691,208 @@ const getContractForPayment = async (contractId, employerId, transaction = prism
   return mapContract(contract);
 };
 
-export const handleFlutterwaveWebhook = async ({ payload }) => {
-  const eventId = payload?.id ?? payload?.data?.id;
-  const providerReference = payload?.data?.tx_ref || payload?.data?.reference;
-  const transactionId = payload?.data?.id;
-  if (!eventId || !providerReference || !transactionId) throw new ContractPaymentError('Incomplete Flutterwave webhook payload', 400);
-  const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-  try {
-    await prisma.providerWebhookEvent.create({ data: { provider: 'FLUTTERWAVE', providerEventId: String(eventId), eventType: payload.event || null, payloadHash } });
-  } catch (error) {
-    if (error?.code === 'P2002') return { duplicate: true };
-    throw error;
+const webhookEventWhere = (eventId) => ({
+  provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) },
+});
+
+const webhookLeaseCutoff = (now) => new Date(now.getTime() - WEBHOOK_LEASE_MS);
+
+const retryableWebhookError = (error) => (
+  !error?.status
+  || error.status >= 500
+  || error.status === 408
+  || error.status === 429
+  || error.status === 404
+);
+
+const claimContractWebhookEvent = async (eventId, now = new Date()) => {
+  const token = crypto.randomUUID();
+  return prisma.$transaction(async (transaction) => {
+    const where = webhookEventWhere(eventId);
+    const event = await transaction.providerWebhookEvent.findUnique({ where });
+    if (!event || event.processedAt) return { state: 'processed' };
+    if (!event.paymentReference || !event.transactionId) return { state: 'unrecoverable' };
+    if (event.attempts >= MAX_WEBHOOK_ATTEMPTS) return { state: 'exhausted' };
+    if (event.processingStartedAt && event.processingStartedAt > webhookLeaseCutoff(now)) return { state: 'busy' };
+    const leaseExpired = event.processingStartedAt && event.processingStartedAt <= webhookLeaseCutoff(now);
+    if (!leaseExpired && !event.processingStartedAt && !event.nextAttemptAt) return { state: 'rejected' };
+    if (!leaseExpired && (!event.nextAttemptAt || event.nextAttemptAt > now)) return { state: 'not-due' };
+
+    const claimed = await transaction.providerWebhookEvent.updateMany({
+      where: {
+        ...where,
+        processedAt: null,
+        attempts: { lt: MAX_WEBHOOK_ATTEMPTS },
+        OR: [
+          { processingStartedAt: null, nextAttemptAt: { lte: now } },
+          { processingStartedAt: { lt: webhookLeaseCutoff(now) } },
+        ],
+      },
+      data: {
+        attempts: { increment: 1 },
+        processingStartedAt: now,
+        claimToken: token,
+        nextAttemptAt: null,
+      },
+    });
+    if (claimed.count !== 1) return { state: 'busy' };
+    const claimedEvent = await transaction.providerWebhookEvent.findUnique({ where });
+    return { state: 'claimed', event: claimedEvent, token };
+  });
+};
+
+const releaseContractWebhookClaim = async ({ eventId, token, attempts, error, now = new Date() }) => {
+  const shouldRetry = retryableWebhookError(error) && attempts < MAX_WEBHOOK_ATTEMPTS;
+  const retryDelay = WEBHOOK_RETRY_DELAYS_MS[Math.min(attempts - 1, WEBHOOK_RETRY_DELAYS_MS.length - 1)];
+  await prisma.providerWebhookEvent.updateMany({
+    where: { ...webhookEventWhere(eventId), claimToken: token, processedAt: null },
+    data: {
+      processingStartedAt: null,
+      claimToken: null,
+      nextAttemptAt: shouldRetry ? new Date(now.getTime() + retryDelay) : null,
+      lastError: error?.status ? `HTTP_${error.status}` : 'RECONCILIATION_ERROR',
+    },
+  });
+  return shouldRetry;
+};
+
+const markContractWebhookProcessed = async ({ eventId, token }) => {
+  const updated = await prisma.providerWebhookEvent.updateMany({
+    where: { ...webhookEventWhere(eventId), claimToken: token, processedAt: null },
+    data: {
+      processedAt: new Date(),
+      processingStartedAt: null,
+      claimToken: null,
+      nextAttemptAt: null,
+      lastError: null,
+    },
+  });
+  if (updated.count !== 1) throw new ContractPaymentError('Webhook recovery claim expired; retry reconciliation', 503);
+};
+
+const processContractWebhookEvent = async (eventId, now = new Date()) => {
+  const claim = await claimContractWebhookEvent(eventId, now);
+  if (claim.state === 'processed') return { duplicate: true };
+  if (claim.state === 'busy') return { duplicate: true, processing: true };
+  if (claim.state === 'not-due') throw new ContractPaymentError('Webhook reconciliation is scheduled for retry', 503);
+  if (claim.state === 'exhausted' || claim.state === 'unrecoverable' || claim.state === 'rejected') {
+    throw new ContractPaymentError('Webhook reconciliation requires manual review', 409);
   }
+
   try {
-    const result = await verifyContractPayment({ providerReference, transactionId, contractId: payload?.data?.meta?.contractId });
-    if (result.pending) {
-      await prisma.providerWebhookEvent.delete({
-        where: { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) } },
-      });
-      return { duplicate: false, result };
-    }
-    await prisma.providerWebhookEvent.update({ where: { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) } }, data: { processedAt: new Date() } });
+    const result = await verifyContractPayment({
+      contractId: claim.event.contractId ?? undefined,
+      providerReference: claim.event.paymentReference,
+      transactionId: claim.event.transactionId,
+      webhookClaim: { id: claim.event.id, token: claim.token },
+    });
+    if (result.pending) throw new ContractPaymentError('Flutterwave payment reconciliation is still pending', 503);
+    await markContractWebhookProcessed({ eventId, token: claim.token });
     return { duplicate: false, result };
   } catch (error) {
-    if (error.status && error.status < 500) {
-      await prisma.providerWebhookEvent.update({ where: { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) } }, data: { processedAt: new Date() } });
-    } else {
-      await prisma.providerWebhookEvent.delete({ where: { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) } } }).catch(() => undefined);
+    if (error.reconciliationComplete) {
+      await markContractWebhookProcessed({ eventId, token: claim.token });
+      throw error;
+    }
+    const retryScheduled = await releaseContractWebhookClaim({
+      eventId,
+      token: claim.token,
+      attempts: claim.event.attempts,
+      error,
+      now,
+    });
+    if (retryScheduled) {
+      const retryError = new ContractPaymentError('Flutterwave payment reconciliation is incomplete; retry scheduled', 503);
+      throw retryError;
     }
     throw error;
   }
+};
+
+export const handleFlutterwaveWebhook = async ({ payload }) => {
+  const eventId = payload?.id ?? payload?.data?.id;
+  const paymentReference = payload?.data?.tx_ref || payload?.data?.reference;
+  const transactionId = payload?.data?.id ?? payload?.data?.transaction_id;
+  const contractId = payload?.data?.meta?.contractId;
+  if (!eventId || !paymentReference || !transactionId || !/^\d+$/.test(String(transactionId))) {
+    throw new ContractPaymentError('Incomplete Flutterwave webhook payload', 400);
+  }
+  const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const eventWhere = webhookEventWhere(eventId);
+  try {
+    await prisma.providerWebhookEvent.create({
+      data: {
+        provider: 'FLUTTERWAVE',
+        providerEventId: String(eventId),
+        eventType: payload.event || null,
+        payloadHash,
+        contractId: contractId ? String(contractId) : null,
+        paymentReference: String(paymentReference),
+        transactionId: String(transactionId),
+        attempts: 0,
+        nextAttemptAt: new Date(),
+      },
+    });
+  } catch (error) {
+    if (error?.code !== 'P2002') throw error;
+    const existingEvent = await prisma.providerWebhookEvent.findUnique({ where: eventWhere });
+    if (!existingEvent) throw error;
+    if (existingEvent.payloadHash !== payloadHash) {
+      throw new ContractPaymentError('Flutterwave reused a webhook event identifier with different content', 409);
+    }
+    if (existingEvent.processedAt) return { duplicate: true };
+    if (existingEvent.paymentReference && existingEvent.paymentReference !== String(paymentReference)) {
+      throw new ContractPaymentError('Flutterwave event payment reference does not match its stored event', 409);
+    }
+    if (existingEvent.transactionId && existingEvent.transactionId !== String(transactionId)) {
+      throw new ContractPaymentError('Flutterwave event transaction ID does not match its stored event', 409);
+    }
+    if (existingEvent.contractId && contractId && existingEvent.contractId !== String(contractId)) {
+      throw new ContractPaymentError('Flutterwave event contract does not match its stored event', 409);
+    }
+    if (!existingEvent.paymentReference || !existingEvent.transactionId || (!existingEvent.contractId && contractId)) {
+      await prisma.providerWebhookEvent.update({
+        where: eventWhere,
+        data: {
+          ...(contractId ? { contractId: String(contractId) } : {}),
+          paymentReference: String(paymentReference),
+          transactionId: String(transactionId),
+          nextAttemptAt: new Date(),
+        },
+      });
+    }
+  }
+  return processContractWebhookEvent(eventId);
+};
+
+export const processPendingContractWebhookEvents = async ({ batchSize = 25, now = new Date() } = {}) => {
+  const leaseCutoff = webhookLeaseCutoff(now);
+  const events = await prisma.providerWebhookEvent.findMany({
+    where: {
+      provider: 'FLUTTERWAVE',
+      processedAt: null,
+      paymentReference: { not: null },
+      transactionId: { not: null },
+      attempts: { lt: MAX_WEBHOOK_ATTEMPTS },
+      OR: [
+        { nextAttemptAt: { lte: now }, processingStartedAt: null },
+        { processingStartedAt: { lt: leaseCutoff } },
+      ],
+    },
+    select: { providerEventId: true },
+    orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
+    take: batchSize,
+  });
+  let processed = 0;
+  let deferred = 0;
+  for (const event of events) {
+    try {
+      const result = await processContractWebhookEvent(event.providerEventId, now);
+      if (!result.processing) processed += 1;
+      else deferred += 1;
+    } catch {
+      deferred += 1;
+    }
+  }
+  return { examined: events.length, processed, deferred };
 };

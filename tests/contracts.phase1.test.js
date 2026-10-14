@@ -111,6 +111,10 @@ const mockPrisma = {
   contract: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   escrow: { create: jest.fn() },
+  payment: { findFirst: jest.fn(), findMany: jest.fn() },
+  financialLedgerEntry: { findFirst: jest.fn() },
+  financialAuditLog: { findFirst: jest.fn() },
+  dispute: { findFirst: jest.fn() },
   platformFeeConfiguration: { findUnique: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
@@ -126,6 +130,11 @@ beforeEach(() => {
   mockPrisma.application.findFirst.mockResolvedValue(null);
   mockPrisma.application.update.mockResolvedValue(applicationDetail());
   mockPrisma.contract.findMany.mockResolvedValue([]);
+  mockPrisma.payment.findMany.mockResolvedValue([]);
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
+  mockPrisma.financialAuditLog.findFirst.mockResolvedValue(null);
+  mockPrisma.dispute.findFirst.mockResolvedValue(null);
   mockPrisma.contract.create.mockResolvedValue({ id: contractId });
   mockPrisma.platformFeeConfiguration.findUnique.mockResolvedValue({ percentage: new Prisma.Decimal('5.00'), isActive: true });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
@@ -282,6 +291,225 @@ describe('Phase 1 freelance contract acceptance', () => {
     expect(mockPrisma.contract.create).not.toHaveBeenCalled();
     expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
   });
+
+  test('an uncancelled no-escrow freelance contract blocks replacement selection', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      status: 'PENDING',
+      cancelledAt: null,
+      application: { status: 'ACCEPTED' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: { workStatus: 'PENDING', escrow: null },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_UNFUNDED_CONTRACT');
+    expect(response.body.error.message).toMatch(/Cancel the existing unfunded contract/);
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('a cancelled no-escrow contract permits replacement after all history checks pass', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      jobId,
+      employerId,
+      seekerId,
+      applicationId,
+      type: 'FREELANCE_PROJECT',
+      status: 'CANCELLED',
+      cancelledAt: timestamps.updatedAt,
+      application: { id: applicationId, jobId, seekerId, status: 'REJECTED' },
+      job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: { contractId, workStatus: 'CANCELLED', escrow: null },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        OR: [
+          { metadata: { path: ['contractId'], equals: contractId } },
+          { providerReference: { startsWith: `leamjobs_${contractId}_` } },
+        ],
+      },
+    }));
+    expect(mockPrisma.contract.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.escrow.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('a recorded attempt on a cancelled no-escrow contract still blocks replacement', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      jobId,
+      employerId,
+      seekerId,
+      applicationId,
+      type: 'FREELANCE_PROJECT',
+      status: 'CANCELLED',
+      cancelledAt: timestamps.updatedAt,
+      application: { id: applicationId, jobId, seekerId, status: 'REJECTED' },
+      job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: { contractId, workStatus: 'CANCELLED', escrow: null },
+    }]);
+    mockPrisma.payment.findMany.mockResolvedValueOnce([{ id: 'payment-1', status: 'PENDING' }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_PAYMENT_PENDING');
+    expect(response.body.error.message).toMatch(/payment pending or under verification/);
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('a no-escrow cancellation with inconsistent application history does not release the selection slot', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      jobId,
+      employerId,
+      seekerId,
+      applicationId,
+      type: 'FREELANCE_PROJECT',
+      status: 'CANCELLED',
+      cancelledAt: timestamps.updatedAt,
+      application: { id: applicationId, jobId, seekerId, status: 'ACCEPTED' },
+      job: { id: jobId, employerId },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: { contractId, workStatus: 'CANCELLED', escrow: null },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED'       });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_UNFUNDED_CONTRACT');
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('an unfunded escrow with a cancellation timestamp blocks replacement selection', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      jobId,
+      employerId,
+      seekerId,
+      applicationId,
+      type: 'FREELANCE_PROJECT',
+      status: 'CANCELLED',
+      cancelledAt: timestamps.updatedAt,
+      application: { id: applicationId, jobId, seekerId, status: 'REJECTED' },
+      job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: {
+        contractId,
+        workStatus: 'CANCELLED',
+        escrow: {
+          id: escrowId,
+          freelanceContractId: contractId,
+          status: 'UNFUNDED',
+          cancelledAt: timestamps.updatedAt,
+          fundedAmount: new Prisma.Decimal('0.00'),
+          releasedAmount: new Prisma.Decimal('0.00'),
+          refundedAmount: new Prisma.Decimal('0.00'),
+          fundedAt: null,
+          releasedAt: null,
+          refunds: [],
+          disputes: [],
+          ledgerEntries: [],
+          payments: [],
+        },
+      },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_UNFUNDED_CONTRACT');
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
+
+  test('a cancelled contract with mismatched application linkage blocks replacement selection', async () => {
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce({ id: applicationId, contract: null })
+      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce(null);
+    mockPrisma.contract.findMany.mockResolvedValueOnce([{
+      id: contractId,
+      jobId,
+      employerId,
+      seekerId,
+      applicationId,
+      type: 'FREELANCE_PROJECT',
+      status: 'CANCELLED',
+      cancelledAt: timestamps.updatedAt,
+      application: {
+        id: applicationId,
+        jobId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
+        seekerId,
+        status: 'REJECTED',
+      },
+      job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+      disputes: [],
+      ledgerEntries: [],
+      freelanceDetails: { contractId, workStatus: 'CANCELLED', escrow: null },
+    }]);
+
+    const response = await request(app)
+      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
+      .send({ status: 'ACCEPTED' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('FREELANCE_SELECTION_UNFUNDED_CONTRACT');
+    expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+    expect(mockPrisma.escrow.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('Phase 1 contract confirmation', () => {
@@ -397,7 +625,7 @@ describe('Phase 1 financial safety', () => {
 
     expect(mockPrisma.escrow.create).toHaveBeenCalledTimes(1);
     expect(mockPrisma).not.toHaveProperty('wallet');
-    expect(mockPrisma).not.toHaveProperty('payment');
+    expect(mockPrisma.payment.findMany).not.toHaveBeenCalled();
     expect(mockPrisma).not.toHaveProperty('withdrawal');
   });
 });

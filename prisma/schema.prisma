@@ -1163,16 +1163,25 @@ model FinancialAuditLog {
 }
 
 model ProviderWebhookEvent {
-  id              String          @id @default(uuid())
-  provider        PaymentProvider
-  providerEventId String
-  eventType       String?
-  payloadHash     String?
-  processedAt     DateTime?
-  createdAt       DateTime        @default(now())
+  id                  String          @id @default(uuid())
+  provider            PaymentProvider
+  providerEventId     String
+  eventType           String?
+  payloadHash         String?
+  contractId          String?
+  paymentReference    String?
+  transactionId       String?
+  attempts            Int             @default(0)
+  nextAttemptAt       DateTime?
+  processingStartedAt DateTime?
+  claimToken          String?
+  lastError           String?
+  processedAt         DateTime?
+  createdAt           DateTime        @default(now())
 
   @@unique([provider, providerEventId])
   @@index([provider, createdAt])
+  @@index([provider, processedAt, nextAttemptAt, attempts])
 }
 
 enum NotificationType {
