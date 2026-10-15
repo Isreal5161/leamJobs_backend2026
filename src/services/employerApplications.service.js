@@ -81,6 +81,7 @@ const applicantSelect = {
       languages: true,
       projects: true,
       linkedinUrl: true,
+      website: true,
       resumeObjectKey: true,
       cvTemplate: true,
     },
@@ -210,6 +211,7 @@ const mapApplicant = (seeker, jobSkills, subscription = {}) => {
     languages: profile?.languages ?? null,
     projects: profile?.projects ?? null,
     linkedinUrl: profile?.linkedinUrl ?? null,
+    website: profile?.website ?? null,
     cvTemplate: profile?.cvTemplate ?? null,
   };
 };

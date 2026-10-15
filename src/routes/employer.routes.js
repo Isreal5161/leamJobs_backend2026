@@ -18,7 +18,8 @@ import {
 } from '../controllers/employerApplications.controller.js';
 import { deleteLogo, getLogo, getProfile, updateProfile, uploadLogo } from '../controllers/employerProfile.controller.js';
 import { closeJob, createJob, getJob, listJobs, updateJob } from '../controllers/employerJobs.controller.js';
-import { getCandidateProfilePicture, listCandidates } from '../controllers/employerCandidates.controller.js';
+import { getCandidateDetails, getCandidateProfilePicture, listCandidates } from '../controllers/employerCandidates.controller.js';
+import { validateEmployerCandidateId } from '../validators/employerCandidate.validation.js';
 import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
@@ -94,7 +95,8 @@ employerRouter.get('/interviews/:interviewId', authenticate, requireRole('EMPLOY
 employerRouter.patch('/interviews/:interviewId', authenticate, requireRole('EMPLOYER'), validateUpdateInterview, updateEmployerInterview);
 employerRouter.post('/interviews/:interviewId/cancel', authenticate, requireRole('EMPLOYER'), validateCancelInterview, cancelEmployerInterview);
 employerRouter.get('/candidates', authenticate, requireRole('EMPLOYER'), validateEmployerCandidatesQuery, listCandidates);
-employerRouter.get('/candidates/:candidateId/profile-picture', authenticate, requireRole('EMPLOYER'), getCandidateProfilePicture);
+employerRouter.get('/candidates/:candidateId/profile-picture', authenticate, requireRole('EMPLOYER'), validateEmployerCandidateId, getCandidateProfilePicture);
+employerRouter.get('/candidates/:candidateId', authenticate, requireRole('EMPLOYER'), validateEmployerCandidateId, getCandidateDetails);
 employerRouter.post('/invitations', authenticate, requireRole('EMPLOYER'), validateCreateJobInvitation, createInvitation);
 employerRouter.get('/jobs', authenticate, requireRole('EMPLOYER'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listJobs);
 employerRouter.post('/jobs', authenticate, requireRole('EMPLOYER'), validateCreateEmployerJob, createJob);

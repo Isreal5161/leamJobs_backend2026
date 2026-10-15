@@ -283,6 +283,41 @@ describe('Employer Applications authorization and privacy', () => {
     expect(response.body.data.application.applicant.profilePictureUrl).toBe('/api/seeker/profile/picture');
   });
 
+  test('application detail preserves the CV snapshot captured when the candidate applied', async () => {
+    const capturedSnapshot = {
+      personalInfo: { fullName: 'Ada Lovelace', title: 'Original role', email: 'ada@example.com' },
+      summary: 'Profile at the time of application.',
+      experience: [],
+      education: [],
+      skills: ['Original skill'],
+      certifications: [],
+    };
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      cvSnapshot: {
+        id: 'cv-snapshot-1',
+        source: 'LEAMJOBS_TEMPLATE',
+        templateId: 'professional',
+        templateName: 'Professional',
+        templateVersion: '1',
+        snapshotCapturedAt: new Date('2026-09-10T10:00:00.000Z'),
+        snapshot: capturedSnapshot,
+      },
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, bio: 'A newer profile summary.', skills: ['New skill'] },
+      },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.cvSnapshot.snapshot).toEqual(capturedSnapshot);
+    expect(response.body.data.application.cvSnapshot.snapshot.summary).toBe('Profile at the time of application.');
+    expect(response.body.data.application.applicant.bio).toBe('A newer profile summary.');
+  });
+
   test('application applicant receives the current server-derived subscription presentation', async () => {
     mockPrisma.application.findMany.mockResolvedValue([detailApplication()]);
     mockPrisma.application.count.mockResolvedValue(1);

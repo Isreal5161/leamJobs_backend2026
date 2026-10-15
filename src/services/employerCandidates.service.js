@@ -144,6 +144,92 @@ export const getEmployerCandidateProfilePicture = async (candidateId) => {
   return { buffer: await readObject(objectKey), objectKey };
 };
 
+export const getEmployerCandidateDetails = async (employerId, candidateId) => {
+  const candidate = await prisma.user.findFirst({
+    where: {
+      id: candidateId,
+      role: 'SEEKER',
+      isActive: true,
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      seekerProfile: {
+        select: {
+          professionalTitle: true,
+          bio: true,
+          location: true,
+          country: true,
+          state: true,
+          city: true,
+          skills: true,
+          education: true,
+          experience: true,
+          certifications: true,
+          languages: true,
+          projects: true,
+          linkedinUrl: true,
+          website: true,
+          profilePictureUrl: true,
+          availability: true,
+          cvTemplate: true,
+        },
+      },
+      applications: {
+        where: { job: { employerId } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          createdAt: true,
+          job: { select: { title: true } },
+        },
+      },
+    },
+  });
+
+  if (!candidate?.seekerProfile) {
+    const error = new Error('Candidate not found');
+    error.status = 404;
+    throw error;
+  }
+
+  const profile = candidate.seekerProfile;
+  return {
+    id: candidate.id,
+    firstName: candidate.firstName,
+    lastName: candidate.lastName,
+    profile: {
+      professionalTitle: profile.professionalTitle,
+      bio: profile.bio,
+      location: profile.location,
+      country: profile.country,
+      state: profile.state,
+      city: profile.city,
+      skills: profile.skills ?? [],
+      education: profile.education ?? [],
+      experience: profile.experience ?? [],
+      certifications: profile.certifications ?? [],
+      languages: profile.languages ?? [],
+      projects: profile.projects ?? [],
+      linkedinUrl: profile.linkedinUrl,
+      website: profile.website,
+      profilePictureUrl: profile.profilePictureUrl,
+      availability: profile.availability ?? 'NOT_AVAILABLE',
+      cvTemplate: profile.cvTemplate,
+    },
+    applications: candidate.applications.map((application) => ({
+      id: application.id,
+      jobId: application.jobId,
+      jobTitle: application.job.title,
+      status: application.status,
+      createdAt: application.createdAt,
+    })),
+  };
+};
+
 export const listEmployerCandidates = async ({ limit, cursor, search, location, skill }) => {
   const decodedCursor = decodeCursor(cursor);
   const cursorWhere = decodedCursor ? Prisma.sql`

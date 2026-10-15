@@ -7,7 +7,10 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-const mockPrisma = { $queryRaw: jest.fn() };
+const mockPrisma = {
+  $queryRaw: jest.fn(),
+  user: { findFirst: jest.fn() },
+};
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 
 const { default: app } = await import('../src/app.js');
@@ -41,12 +44,122 @@ const sqlText = () => mockPrisma.$queryRaw.mock.calls[0][0].strings.join(' ');
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.$queryRaw.mockResolvedValue([]);
+  mockPrisma.user.findFirst.mockResolvedValue(null);
 });
 
 describe('Employer candidate discovery', () => {
   test('requires employer authentication', async () => {
     const response = await request(app).get('/api/employer/candidates');
     expect(response.status).toBe(401);
+  });
+
+  test('candidate details require employer authentication and validate candidate IDs', async () => {
+    const unauthenticated = await request(app).get('/api/employer/candidates/33333333-3333-4333-8333-333333333333');
+    expect(unauthenticated.status).toBe(401);
+
+    const invalidId = await request(app)
+      .get('/api/employer/candidates/not-a-uuid')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+    expect(invalidId.status).toBe(400);
+    expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('employer can view complete candidate details and only applications belonging to their jobs', async () => {
+    mockPrisma.user.findFirst.mockResolvedValue({
+      id: '33333333-3333-4333-8333-333333333333',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      seekerProfile: {
+        professionalTitle: 'Software Engineer',
+        bio: 'Builds reliable systems.',
+        location: 'Lagos',
+        country: 'Nigeria',
+        state: 'Lagos',
+        city: 'Lagos',
+        skills: ['JavaScript'],
+        education: [{ degree: 'BSc', school: 'University', year: '2024' }],
+        experience: [{ jobTitle: 'Engineer', company: 'Acme', startDate: '2022', endDate: '', description: 'Built systems.' }],
+        certifications: [{ name: 'Cloud certification', issuer: 'Provider' }],
+        languages: [{ name: 'English', proficiency: 'Fluent' }],
+        projects: [{ name: 'Portfolio', description: 'Projects', projectUrl: 'https://example.com' }],
+        linkedinUrl: 'https://linkedin.com/in/ada',
+        website: 'https://ada.example',
+        profilePictureUrl: '/api/seeker/profile/picture',
+        availability: 'AVAILABLE_NOW',
+        cvTemplate: 'professional',
+      },
+      applications: [{
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        jobId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        status: 'APPLIED',
+        createdAt: new Date('2026-10-01T00:00:00.000Z'),
+        job: { title: 'Software Engineer' },
+      }],
+    });
+
+    const response = await request(app)
+      .get('/api/employer/candidates/33333333-3333-4333-8333-333333333333')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.candidate).toMatchObject({
+      firstName: 'Ada',
+      profile: {
+        professionalTitle: 'Software Engineer',
+        bio: 'Builds reliable systems.',
+        education: [{ degree: 'BSc' }],
+        experience: [{ jobTitle: 'Engineer', company: 'Acme' }],
+        certifications: [{ name: 'Cloud certification' }],
+        languages: [{ name: 'English' }],
+        projects: [{ name: 'Portfolio' }],
+        website: 'https://ada.example',
+      },
+      applications: [{ jobTitle: 'Software Engineer', status: 'APPLIED' }],
+    });
+    expect(mockPrisma.user.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: '33333333-3333-4333-8333-333333333333', role: 'SEEKER', isActive: true },
+      select: expect.objectContaining({
+        applications: expect.objectContaining({
+          where: { job: { employerId: 'employer-1' } },
+        }),
+      }),
+    }));
+    expect(response.body.data.candidate.profile).not.toHaveProperty('resumeObjectKey');
+  });
+
+  test('candidate detail returns empty collections for missing optional profile sections', async () => {
+    mockPrisma.user.findFirst.mockResolvedValue({
+      id: '33333333-3333-4333-8333-333333333333',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      seekerProfile: { skills: null, education: null, experience: null, certifications: null, languages: null, projects: null },
+      applications: [],
+    });
+
+    const response = await request(app)
+      .get('/api/employer/candidates/33333333-3333-4333-8333-333333333333')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.candidate.profile).toMatchObject({
+      skills: [],
+      education: [],
+      experience: [],
+      certifications: [],
+      languages: [],
+      projects: [],
+    });
+    expect(response.body.data.candidate.applications).toEqual([]);
+  });
+
+  test('inactive, missing, or profile-less guessed candidate IDs return not found', async () => {
+    mockPrisma.user.findFirst.mockResolvedValue(null);
+
+    const response = await request(app)
+      .get('/api/employer/candidates/33333333-3333-4333-8333-333333333333')
+      .set('Authorization', `Bearer ${token('EMPLOYER', 'employer-1')}`);
+
+    expect(response.status).toBe(404);
   });
 
   test.each(['SEEKER', 'ADMIN'])('%s cannot access candidates', async (role) => {

@@ -1,4 +1,4 @@
-import { getEmployerCandidateProfilePicture, listEmployerCandidates } from '../services/employerCandidates.service.js';
+import { getEmployerCandidateDetails, getEmployerCandidateProfilePicture, listEmployerCandidates } from '../services/employerCandidates.service.js';
 
 export const listCandidates = async (req, res, next) => {
   try {
@@ -17,6 +17,15 @@ export const getCandidateProfilePicture = async (req, res, next) => {
     const contentTypes = { jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
     res.type(contentTypes[extension] ?? 'application/octet-stream');
     return res.send(result.buffer);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const getCandidateDetails = async (req, res, next) => {
+  try {
+    const candidate = await getEmployerCandidateDetails(req.user.sub, req.params.candidateId);
+    return res.status(200).json({ success: true, data: { candidate } });
   } catch (error) {
     return next(error);
   }
