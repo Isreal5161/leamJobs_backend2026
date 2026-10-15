@@ -22,8 +22,9 @@ import { getCompanyLogo, getLeamJobsEmployer, listCompanies } from '../controlle
 import { validateAdminCompaniesQuery } from '../validators/adminCompanies.validation.js';
 import { listSeekers } from '../controllers/adminSeekers.controller.js';
 import { validateAdminSeekersQuery } from '../validators/adminSeekers.validation.js';
-import { writeSiteContent } from '../controllers/siteContent.controller.js';
+import { uploadAboutTeamImageController, writeSiteContent } from '../controllers/siteContent.controller.js';
 import { validateSiteContentUpdate } from '../validators/siteContent.validation.js';
+import { singleUpload } from '../middleware/upload.middleware.js';
 import { analytics } from '../controllers/adminAnalytics.controller.js';
 import { validateAdminAnalyticsQuery } from '../validators/adminAnalytics.validation.js';
 import {
@@ -90,6 +91,7 @@ adminRouter.get('/subscriptions/summary', authenticate, requireRole('ADMIN'), su
 adminRouter.get('/subscriptions', authenticate, requireRole('ADMIN'), validateAdminSubscriptionsQuery, subscriptions);
 adminRouter.get('/subscriptions/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, subscription);
 adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
+adminRouter.post('/content/about/team-images', authenticate, requireRole('ADMIN'), singleUpload('image'), uploadAboutTeamImageController);
 adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
 adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listJobs);
 adminRouter.get('/jobs/:jobId', authenticate, requireRole('ADMIN'), getJob);

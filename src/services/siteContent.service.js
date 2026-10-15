@@ -47,10 +47,12 @@ export const defaultSiteContent = {
     teamButton: 'Join our team',
     teamMoreLabel: '+12',
     team: ['SA', 'JM', 'NK', 'AL', 'RP'],
+    teamImages: [],
     partnerTitle: 'Stronger together',
     partnerText:
       'We partner with amazing companies and communities to create more opportunities and drive meaningful careers forward.',
     partnerButton: 'Partner with us',
+    partnerUrl: '/companies',
   },
   features: {
     heroTitle: 'Features that make job search smarter',

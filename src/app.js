@@ -12,7 +12,7 @@ import publicRouter from './routes/public.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
 import { flutterwaveWebhook } from './controllers/contract.controller.js';
 import { paystackWithdrawalWebhook } from './controllers/withdrawal.controller.js';
-import { readSiteContent } from './controllers/siteContent.controller.js';
+import { readAboutTeamImageController, readSiteContent } from './controllers/siteContent.controller.js';
 
 const app = express();
 
@@ -75,6 +75,7 @@ app.get('/api/health/db', async (req, res) => {
 
 app.use('/api/admin', adminRouter);
 app.get('/api/content', readSiteContent);
+app.get('/api/content/about/team-images/:imageId', readAboutTeamImageController);
 app.use('/api/auth', authRouter);
 app.use('/api/employer', employerRouter);
 app.use('/api/jobs', publicJobsRouter);
