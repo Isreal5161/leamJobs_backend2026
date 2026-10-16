@@ -1,4 +1,16 @@
 import { findApprovedJob, listApprovedJobs } from '../services/seekerJobs.service.js';
+import { getPublicJobSitemapXml } from '../services/publicJobSitemap.service.js';
+
+export const getPublicJobSitemap = async (req, res, next) => {
+  try {
+    const xml = await getPublicJobSitemapXml();
+    res.setHeader('Cache-Control', 'public, max-age=1800, stale-while-revalidate=3600');
+    res.type('application/xml');
+    return res.status(200).send(xml);
+  } catch (error) {
+    return next(error);
+  }
+};
 
 export const listJobs = async (req, res, next) => {
   try {
