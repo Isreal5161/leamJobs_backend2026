@@ -25,7 +25,7 @@ export const getPublicJobSitemapXml = async () => {
   });
 
   const urls = jobs.map(({ id }) => (
-    `  <url><loc>${escapeXml(`${CANONICAL_ORIGIN}/jobs/${encodeURIComponent(id)}`)}</loc></url>`
+    `  <url><loc>${escapeXml(`${CANONICAL_ORIGIN}/jobs/${encodeURIComponent(id)}/`)}</loc></url>`
   ));
 
   return [

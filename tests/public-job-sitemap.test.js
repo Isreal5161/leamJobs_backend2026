@@ -33,8 +33,8 @@ describe('Public job sitemap', () => {
     expect(response.headers['cache-control']).toContain('public');
     expect(response.text).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(response.text).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-    expect(response.text).toContain('https://leamjobs.com/jobs/11111111-1111-4111-8111-111111111111');
-    expect(response.text).toContain('https://leamjobs.com/jobs/22222222-2222-4222-8222-222222222222');
+    expect(response.text).toContain('https://leamjobs.com/jobs/11111111-1111-4111-8111-111111111111/');
+    expect(response.text).toContain('https://leamjobs.com/jobs/22222222-2222-4222-8222-222222222222/');
     expect(response.text).not.toContain('<html');
     const [query] = mockPrisma.job.findMany.mock.calls[0];
     expect(query).toMatchObject({
