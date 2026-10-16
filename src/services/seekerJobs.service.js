@@ -141,6 +141,12 @@ export const mapSeekerJob = (job) => ({
 
 const buildJobWhere = ({ search, location, jobType, workArrangement, salaryMin, salaryMax, skills }) => ({
   status: 'APPROVED',
+  AND: [{
+    OR: [
+      { applicationDeadline: null },
+      { applicationDeadline: { gt: new Date() } },
+    ],
+  }],
   ...(search ? {
     OR: [
       { title: { contains: search, mode: 'insensitive' } },

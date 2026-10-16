@@ -10,8 +10,15 @@ const escapeXml = (value) => String(value)
   .replaceAll("'", '&apos;');
 
 export const getPublicJobSitemapXml = async () => {
+  const now = new Date();
   const jobs = await prisma.job.findMany({
-    where: { status: 'APPROVED' },
+    where: {
+      status: 'APPROVED',
+      OR: [
+        { applicationDeadline: null },
+        { applicationDeadline: { gt: now } },
+      ],
+    },
     orderBy: { id: 'asc' },
     select: { id: true },
     take: 50000,

@@ -64,11 +64,21 @@ describe('GET /api/seeker/jobs', () => {
     expect(response.body.data.nextCursor).toBeNull();
     expect(JSON.stringify(response.body)).not.toContain('passwordHash');
     expect(JSON.stringify(response.body)).not.toContain('rejectionReason');
-    expect(mockPrisma.job.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: 'APPROVED' },
+    const [query] = mockPrisma.job.findMany.mock.calls[0];
+    expect(query).toMatchObject({
+      where: {
+        status: 'APPROVED',
+        AND: [{
+          OR: [
+            { applicationDeadline: null },
+            { applicationDeadline: { gt: expect.any(Date) } },
+          ],
+        }],
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 26,
-    }));
+    });
+    expect(query.where.AND[0].OR[1].applicationDeadline.gt.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   test('supports SQL-side search, location, job type, and skills filters', async () => {
@@ -89,6 +99,12 @@ describe('GET /api/seeker/jobs', () => {
     expect(mockPrisma.job.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         status: 'APPROVED',
+        AND: [{
+          OR: [
+            { applicationDeadline: null },
+            { applicationDeadline: { gt: expect.any(Date) } },
+          ],
+        }],
         OR: [
           { title: { contains: 'react', mode: 'insensitive' } },
           { description: { contains: 'react', mode: 'insensitive' } },
