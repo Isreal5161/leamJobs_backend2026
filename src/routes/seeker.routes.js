@@ -17,7 +17,7 @@ import { authenticate } from '../middleware/auth.middleware.js';
 import { requireRole } from '../middleware/authorization.middleware.js';
 import { validateCreateApplication } from '../validators/seekerApplications.validation.js';
 import { validateSeekerProfileUpdate, validateSeekerCVUpdate } from '../validators/seekerProfile.validation.js';
-import { singleUpload } from '../middleware/upload.middleware.js';
+import { multipleUpload, singleUpload } from '../middleware/upload.middleware.js';
 import {
 	createConversationFromApplication,
 	getConversation,
@@ -44,7 +44,18 @@ import { validateSeekerJobsQuery } from '../validators/seekerJobs.validation.js'
 import { listSeekerRecommendations } from '../controllers/seekerRecommendations.controller.js';
 import { validateSeekerRecommendationsQuery } from '../validators/seekerRecommendations.validation.js';
 import { confirmSeekerContract, getSeekerContract, submitCompletion } from '../controllers/contract.controller.js';
-import { validateCompletionSubmission } from '../validators/contract.validation.js';
+import {
+  createSeekerContractSubmission,
+  downloadSeekerContractWorkAttachment,
+  listSeekerContractActivities,
+  updateSeekerContractProgress,
+} from '../controllers/contractWork.controller.js';
+import {
+  validateContractActivityId,
+  validateContractProgress,
+  validateContractSubmission,
+} from '../validators/contractWork.validation.js';
+import { validateCompletionSubmission, validateContractId } from '../validators/contract.validation.js';
 import { submitDispute } from '../controllers/contractDispute.controller.js';
 import { validateDisputeSubmission } from '../validators/contractDispute.validation.js';
 import { cancelSubscriptionPayment, checkoutSubscription, listSeekerPlanOptionsController, listSubscriptions, startTrial, trialOffer, verifySubscriptionPayment } from '../controllers/seekerSubscriptions.controller.js';
@@ -157,6 +168,10 @@ seekerRouter.get('/payout-accounts/capabilities', authenticate, requireRole('SEE
 seekerRouter.get('/payout-accounts/banks', authenticate, requireRole('SEEKER'), listSeekerPayoutBanks);
 seekerRouter.post('/payout-accounts', authenticate, requireRole('SEEKER'), validateCreatePayoutAccount, createPayoutAccount);
 seekerRouter.patch('/payout-accounts/:id', authenticate, requireRole('SEEKER'), validateUpdatePayoutAccount, updatePayoutAccount);
+seekerRouter.get('/contracts/:contractId/activities', authenticate, requireRole('SEEKER'), validateContractId, listSeekerContractActivities);
+seekerRouter.post('/contracts/:contractId/progress', authenticate, requireRole('SEEKER'), validateContractId, validateContractProgress, updateSeekerContractProgress);
+seekerRouter.post('/contracts/:contractId/submissions', authenticate, requireRole('SEEKER'), validateContractId, multipleUpload('files', 5), validateContractSubmission, createSeekerContractSubmission);
+seekerRouter.get('/contracts/:contractId/activities/:activityId/attachments/:attachmentId', authenticate, requireRole('SEEKER'), validateContractId, validateContractActivityId, downloadSeekerContractWorkAttachment);
 seekerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('SEEKER'), confirmSeekerContract);
 seekerRouter.post('/contracts/:contractId/disputes', authenticate, requireRole('SEEKER'), validateDisputeSubmission, submitDispute);
 seekerRouter.get('/contracts/:contractId', authenticate, requireRole('SEEKER'), getSeekerContract);

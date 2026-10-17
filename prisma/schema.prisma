@@ -40,6 +40,7 @@ model User {
   seekerInterviews     Interview[]        @relation("SeekerInterviews")
   interviewHistory     InterviewHistory[] @relation("InterviewHistoryActors")
   sentMessages         Message[]          @relation("MessageSenders")
+  contractActivities   ContractActivity[]  @relation("ContractActivityActors")
   subscriptions         Subscription[]
   payments              Payment[]
   subscriptionTrials    UserSubscriptionTrial[]
@@ -809,6 +810,7 @@ model Contract {
   seeker      User        @relation("SeekerContracts", fields: [seekerId], references: [id], onDelete: Restrict)
 
   freelanceDetails FreelanceContract?
+  activities       ContractActivity[]
   disputes         Dispute[]
   ledgerEntries    FinancialLedgerEntry[]
 
@@ -842,6 +844,60 @@ model FreelanceContract {
   escrow   Escrow?
 
   @@index([workStatus, expectedCompletionDate])
+}
+
+enum ContractActivityType {
+  PROGRESS_UPDATE
+  SUBMISSION
+  REVISION_REQUEST
+  FEEDBACK
+  APPROVAL
+}
+
+enum ContractProgressStatus {
+  IN_PROGRESS
+  BLOCKED
+  WAITING
+  SUBMITTED_FOR_REVIEW
+  REVISION_IN_PROGRESS
+}
+
+model ContractActivity {
+  id                 String                 @id @default(uuid())
+  contractId         String
+  actorId            String?
+  actorName          String
+  type               ContractActivityType
+  progressStatus     ContractProgressStatus?
+  description        String                 @db.Text
+  links              Json?                  @db.JsonB
+  submissionVersion  Int?
+  parentActivityId   String?
+  createdAt          DateTime               @default(now())
+
+  contract       Contract             @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  actor          User?                @relation("ContractActivityActors", fields: [actorId], references: [id], onDelete: SetNull)
+  parentActivity ContractActivity?    @relation("ContractActivityThread", fields: [parentActivityId], references: [id], onDelete: SetNull)
+  replies        ContractActivity[]   @relation("ContractActivityThread")
+  attachments    ContractWorkAttachment[]
+
+  @@index([contractId, createdAt, id])
+  @@index([parentActivityId, type])
+  @@unique([contractId, submissionVersion])
+}
+
+model ContractWorkAttachment {
+  id          String          @id @default(uuid())
+  activityId  String
+  objectKey   String          @unique
+  fileName    String          @db.VarChar(255)
+  contentType String          @db.VarChar(100)
+  fileSize    Int
+  createdAt   DateTime        @default(now())
+
+  activity ContractActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@index([activityId])
 }
 
 model PlatformFeeConfiguration {

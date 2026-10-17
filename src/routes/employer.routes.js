@@ -37,6 +37,15 @@ import {
 	verifyEmployerContractPayment,
 } from '../controllers/contract.controller.js';
 import { validateContractId, validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
+import {
+  downloadEmployerContractWorkAttachment,
+  listEmployerContractActivities,
+  reviewEmployerContractSubmission,
+} from '../controllers/contractWork.controller.js';
+import {
+  validateContractActivityId,
+  validateContractSubmissionReview,
+} from '../validators/contractWork.validation.js';
 import { submitDispute } from '../controllers/contractDispute.controller.js';
 import { validateDisputeSubmission } from '../validators/contractDispute.validation.js';
 import { validateEmployerCandidatesQuery } from '../validators/employerCandidates.validation.js';
@@ -82,6 +91,9 @@ employerRouter.post('/profile/logo', authenticate, requireRole('EMPLOYER'), sing
 employerRouter.delete('/profile/logo', authenticate, requireRole('EMPLOYER'), deleteLogo);
 employerRouter.get('/profile/logo', authenticate, requireRole('EMPLOYER'), getLogo);
 employerRouter.get('/contracts', authenticate, requireRole('EMPLOYER'), validateEmployerContractsQuery, getEmployerContracts);
+employerRouter.get('/contracts/:contractId/activities', authenticate, requireRole('EMPLOYER'), validateContractId, listEmployerContractActivities);
+employerRouter.post('/contracts/:contractId/submissions/:activityId/review', authenticate, requireRole('EMPLOYER'), validateContractId, validateContractActivityId, validateContractSubmissionReview, reviewEmployerContractSubmission);
+employerRouter.get('/contracts/:contractId/activities/:activityId/attachments/:attachmentId', authenticate, requireRole('EMPLOYER'), validateContractId, validateContractActivityId, downloadEmployerContractWorkAttachment);
 employerRouter.post('/contracts/:contractId/disputes', authenticate, requireRole('EMPLOYER'), validateDisputeSubmission, submitDispute);
 employerRouter.post('/contracts/:contractId/cancel', authenticate, requireRole('EMPLOYER'), validateContractId, cancelEmployerContract);
 employerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('EMPLOYER'), confirmEmployerContract);
