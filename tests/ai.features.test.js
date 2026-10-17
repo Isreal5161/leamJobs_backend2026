@@ -10,6 +10,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
 const jobId = '22222222-2222-4222-8222-222222222222';
+let aiUsageAmount = 0;
 const mockPrisma = {
   subscription: { findFirst: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
@@ -32,6 +33,17 @@ const { validateProfileAssistant } = await import('../src/validators/ai.validati
 
 const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const activePlan = (key) => ({ status: 'ACTIVE', startDate: new Date(Date.now() - 60_000), endDate: new Date(Date.now() + 60_000), plan: { entitlements: [{ entitlement: { key } }] } });
+const activeSubscription = (planKey, entitlementKeys = [], aiAllowance) => ({
+  status: 'ACTIVE',
+  startDate: new Date(Date.now() - 60_000),
+  endDate: new Date(Date.now() + 60_000),
+  plan: {
+    key: planKey,
+    aiAllowance,
+    aiUnlimited: false,
+    entitlements: entitlementKeys.map((key) => ({ entitlement: { key } })),
+  },
+});
 const validInterviewQuestions = [
   { id: 'q1', type: 'technical', question: 'How would you apply the primary skill in this role?', answerType: 'multiple_choice', options: ['Plan the work first', 'Start without context'] },
   { id: 'q2', type: 'behavioral', question: 'Tell us about a time you resolved a disagreement at work.', answerType: 'text', options: [] },
@@ -63,8 +75,13 @@ beforeEach(() => {
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.job.findFirst.mockResolvedValue({ id: jobId, title: 'Engineer', description: 'Build things', skills: ['JS'], requirements: [], responsibilities: [], benefits: [] });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ professionalTitle: 'Engineer', bio: 'Builds products', skills: ['JS'], experience: [], education: [] });
+  aiUsageAmount = 0;
+  mockPrisma.aiUsageRecord.aggregate.mockImplementation(async () => ({ _sum: { amount: aiUsageAmount } }));
   mockPrisma.aiUsageRecord.findMany.mockResolvedValue([]);
-  mockPrisma.aiUsageRecord.create.mockImplementation(async ({ data }) => ({ id: `usage-${mockPrisma.aiUsageRecord.create.mock.calls.length}`, ...data }));
+  mockPrisma.aiUsageRecord.create.mockImplementation(async ({ data }) => {
+    aiUsageAmount += Number(data.amount);
+    return { id: `usage-${mockPrisma.aiUsageRecord.create.mock.calls.length}`, ...data };
+  });
   mockPrisma.aiUsageRecord.deleteMany.mockResolvedValue({ count: 1 });
   mockPrisma.aiUsageRecord.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.$queryRaw.mockResolvedValue([{ id: seekerId }]);
@@ -545,6 +562,78 @@ test('generateCoverLetter reads company name from employerProfile', async () => 
         }),
       }),
     }),
+  }));
+});
+
+test('Basic subscribers can generate an entitled cover letter and consume one of five AI uses', async () => {
+  const basicSeekerId = randomUUID();
+  mockPrisma.subscription.findFirst.mockResolvedValue(activeSubscription('BASIC', [], 5));
+  mockCompletion.mockResolvedValue({ coverLetter: 'A truthful job-specific draft.' });
+
+  const response = await request(app)
+    .post('/api/seeker/applications/cover-letter/generate')
+    .set('Authorization', `Bearer ${token('SEEKER', basicSeekerId)}`)
+    .send({ jobId, request: 'Draft a cover letter.' });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toMatchObject({
+    coverLetter: 'A truthful job-specific draft.',
+    planKey: 'BASIC',
+    remaining: 4,
+  });
+  expect(mockPrisma.aiUsageRecord.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ featureKey: 'AI_COVER_LETTER', planKey: 'BASIC', amount: 1 }),
+  }));
+  expect(aiUsageAmount).toBe(1);
+});
+
+test('Basic subscribers at the five-use limit cannot generate another cover letter', async () => {
+  const basicSeekerId = randomUUID();
+  mockPrisma.subscription.findFirst.mockResolvedValue(activeSubscription('BASIC', [], 5));
+  aiUsageAmount = 5;
+
+  const response = await request(app)
+    .post('/api/seeker/applications/cover-letter/generate')
+    .set('Authorization', `Bearer ${token('SEEKER', basicSeekerId)}`)
+    .send({ jobId, request: 'Draft a cover letter.' });
+
+  expect(response.status).toBe(403);
+  expect(mockPrisma.aiUsageRecord.create).not.toHaveBeenCalled();
+  expect(mockCompletion).not.toHaveBeenCalled();
+});
+
+test('a Basic subscriber is still denied an AI feature not enabled for Basic', async () => {
+  const basicSeekerId = randomUUID();
+  mockPrisma.subscription.findFirst.mockResolvedValue(activeSubscription('BASIC', [], 5));
+
+  const response = await request(app)
+    .post('/api/seeker/ai/career-assistant')
+    .set('Authorization', `Bearer ${token('SEEKER', basicSeekerId)}`)
+    .send({ question: 'How can I improve my career?' });
+
+  expect(response.status).toBe(403);
+  expect(response.body.entitlement).toBe('AI_CAREER_ASSISTANT');
+  expect(mockPrisma.aiUsageRecord.create).not.toHaveBeenCalled();
+  expect(mockCompletion).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['PROFESSIONAL', 20],
+  ['PREMIUM', 50],
+])('%s subscribers retain cover-letter access and their existing AI allowance', async (planKey, aiAllowance) => {
+  const subscriberId = randomUUID();
+  mockPrisma.subscription.findFirst.mockResolvedValue(activeSubscription(planKey, ['AI_COVER_LETTER'], aiAllowance));
+  mockCompletion.mockResolvedValue({ coverLetter: `${planKey} cover letter.` });
+
+  const response = await request(app)
+    .post('/api/seeker/applications/cover-letter/generate')
+    .set('Authorization', `Bearer ${token('SEEKER', subscriberId)}`)
+    .send({ jobId, request: 'Draft a cover letter.' });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toMatchObject({ planKey, remaining: aiAllowance - 1 });
+  expect(mockPrisma.aiUsageRecord.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ featureKey: 'AI_COVER_LETTER', planKey, amount: 1 }),
   }));
 });
 

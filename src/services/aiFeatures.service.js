@@ -225,7 +225,7 @@ export const generateCoverLetter = async (userId, { applicationId, jobId, reques
   const providerStartMs = Date.now();
   console.error(`AI COVER LETTER REAL DIAGNOSTIC: request_started, ${diagnostic}`);
 
-  const reservation = await reserveAiUsage(userId, 'AI_COVER_LETTER', { applicationId: application?.id ?? null, jobId: application?.jobId ?? jobId }, { allowBasic: false });
+  const reservation = await reserveAiUsage(userId, 'AI_COVER_LETTER', { applicationId: application?.id ?? null, jobId: application?.jobId ?? jobId });
   let result;
   try {
     result = await requestStructuredCompletion({
