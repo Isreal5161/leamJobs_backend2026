@@ -100,6 +100,7 @@ jest.unstable_mockModule('../src/services/notification.service.js', () => ({
 }));
 
 const { cancelEmployerFreelanceContract, getContractForParty } = await import('../src/services/contract.service.js');
+const { createNotification } = await import('../src/services/notification.service.js');
 
 const prepareCancellation = (escrow = escrowRecord(), type = 'FREELANCE_PROJECT') => {
   const contract = contractRecord(escrow);
@@ -164,6 +165,13 @@ test('cancels an owned, unfunded freelance contract and preserves its records', 
     where: { id: contract.applicationId },
     data: { status: 'REJECTED' },
   });
+  expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+    recipientUserId: contract.seekerId,
+    actorUserId: employerId,
+    category: 'CONTRACT',
+    eventKey: `contract:cancelled:${contractId}`,
+    title: 'Contract cancelled before funding',
+  }), mockPrisma);
   expect(mockPrisma.job.update).not.toHaveBeenCalled();
 });
 
