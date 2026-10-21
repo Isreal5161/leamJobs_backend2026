@@ -114,7 +114,7 @@ export const anonymizeAdminManagedAccount = async (userId, adminId) => prisma.$t
 
   await Promise.all([
     transaction.emailVerificationCode.deleteMany({ where: { userId: user.id } }),
-    transaction.oauthAccount.deleteMany({ where: { userId: user.id } }),
+    transaction.oAuthAccount.deleteMany({ where: { userId: user.id } }),
     transaction.passwordResetToken.deleteMany({ where: { userId: user.id } }),
     transaction.pendingOAuthRegistration.deleteMany({
       where: { OR: [{ userId: user.id }, { email: user.email }] },

@@ -20,7 +20,7 @@ const tx = {
   jobAlert: { updateMany: jest.fn() },
   job: { updateMany: jest.fn() },
   emailVerificationCode: { deleteMany: jest.fn() },
-  oauthAccount: { deleteMany: jest.fn() },
+  oAuthAccount: { deleteMany: jest.fn() },
   passwordResetToken: { deleteMany: jest.fn() },
   pendingOAuthRegistration: { deleteMany: jest.fn() },
 };
@@ -71,7 +71,7 @@ const resetState = () => {
   tx.employerProfile.updateMany.mockResolvedValue({ count: 1 });
   tx.jobAlert.updateMany.mockResolvedValue({ count: 0 });
   tx.job.updateMany.mockResolvedValue({ count: 0 });
-  for (const model of [tx.emailVerificationCode, tx.oauthAccount, tx.passwordResetToken, tx.pendingOAuthRegistration]) {
+  for (const model of [tx.emailVerificationCode, tx.oAuthAccount, tx.passwordResetToken, tx.pendingOAuthRegistration]) {
     model.deleteMany.mockResolvedValue({ count: 1 });
   }
 
@@ -127,7 +127,7 @@ test.each([
     });
   }
   expect(tx.emailVerificationCode.deleteMany).toHaveBeenCalledWith({ where: { userId } });
-  expect(tx.oauthAccount.deleteMany).toHaveBeenCalledWith({ where: { userId } });
+  expect(tx.oAuthAccount.deleteMany).toHaveBeenCalledWith({ where: { userId } });
   expect(tx.passwordResetToken.deleteMany).toHaveBeenCalledWith({ where: { userId } });
   expect(response.body.data).not.toHaveProperty('email');
 });
