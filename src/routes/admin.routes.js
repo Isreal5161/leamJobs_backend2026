@@ -18,6 +18,8 @@ import { getAdminDispute, listAdminDisputes, resolveDispute } from '../controlle
 import { validateAdminDisputeId, validateDisputeResolution } from '../validators/contractDispute.validation.js';
 import { listUsers } from '../controllers/adminUsers.controller.js';
 import { validateAdminUsersQuery } from '../validators/adminUsers.validation.js';
+import { anonymizeAdminAccount } from '../controllers/adminAccount.controller.js';
+import { validateAdminAccountId } from '../validators/adminAccount.validation.js';
 import { getCompanyLogo, getLeamJobsEmployer, listCompanies } from '../controllers/adminCompanies.controller.js';
 import { validateAdminCompaniesQuery } from '../validators/adminCompanies.validation.js';
 import { listSeekers } from '../controllers/adminSeekers.controller.js';
@@ -75,6 +77,7 @@ adminRouter.get('/verification-documents/:documentId', authenticate, requireRole
 adminRouter.patch('/verification-submissions/:verificationId/approve', authenticate, requireRole('ADMIN'), approveEmployerVerification);
 adminRouter.patch('/verification-submissions/:verificationId/reject', authenticate, requireRole('ADMIN'), rejectEmployerVerification);
 adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
+adminRouter.delete('/users/:userId', authenticate, requireRole('ADMIN'), validateAdminAccountId, anonymizeAdminAccount);
 adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
 adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
 adminRouter.get('/platform-fee', authenticate, requireRole('ADMIN'), getAdminPlatformFee);

@@ -97,7 +97,13 @@ const technicalErrorPattern = /(prisma|sql|database|stack|internal server|econn|
 
 const safeErrorMessage = (error, status) => {
   if (status === 401) return 'Your session has expired. Please sign in again.';
-  if (status === 403 && ['ROLE_MISMATCH', 'EMPLOYER_NOT_VERIFIED'].includes(error?.publicCode)) {
+  if (status === 403 && [
+    'ROLE_MISMATCH',
+    'EMPLOYER_NOT_VERIFIED',
+    'SELF_ANONYMIZATION_FORBIDDEN',
+    'ADMIN_ACCOUNT_PROTECTED',
+    'ACCOUNT_ROLE_NOT_ALLOWED',
+  ].includes(error?.publicCode)) {
     const message = String(error?.publicMessage ?? error?.message ?? '').trim();
     if (message && !technicalErrorPattern.test(message)) return message;
   }

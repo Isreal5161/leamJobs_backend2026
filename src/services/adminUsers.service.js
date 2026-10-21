@@ -9,6 +9,7 @@ const adminUserSelect = {
   role: true,
   isActive: true,
   isVerified: true,
+  anonymizedAt: true,
   lastLogin: true,
   createdAt: true,
   seekerProfile: {
@@ -43,16 +44,19 @@ const buildOrderBy = (sortBy, sortOrder) => {
 
 const mapAdminUser = (user) => ({
   id: user.id,
-  firstName: user.firstName,
-  lastName: user.lastName,
-  email: user.email,
-  phone: user.phone,
+  firstName: user.anonymizedAt ? 'Deleted' : user.firstName,
+  lastName: user.anonymizedAt ? 'Account' : user.lastName,
+  email: user.anonymizedAt ? 'Anonymized' : user.email,
+  phone: user.anonymizedAt ? null : user.phone,
   role: user.role,
   isActive: user.isActive,
   isVerified: user.isVerified,
+  isAnonymized: Boolean(user.anonymizedAt),
   lastLogin: user.lastLogin,
   createdAt: user.createdAt,
-  profile: user.role === 'SEEKER'
+  profile: user.anonymizedAt
+    ? null
+    : user.role === 'SEEKER'
     ? {
       location: user.seekerProfile?.location ?? null,
       professionalTitle: user.seekerProfile?.professionalTitle ?? null,

@@ -17,6 +17,7 @@ model User {
   role         Role      @default(SEEKER)
   isActive     Boolean   @default(true)
   isVerified   Boolean   @default(false)
+  anonymizedAt DateTime?
   lastLogin    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

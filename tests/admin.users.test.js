@@ -8,7 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
-  user: { findMany: jest.fn(), count: jest.fn() },
+  user: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn() },
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -46,6 +46,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.user.findMany.mockResolvedValue([]);
   mockPrisma.user.count.mockResolvedValue(0);
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
 });
 
 test('unauthenticated requests are rejected', async () => {
