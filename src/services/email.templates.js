@@ -26,7 +26,7 @@ const layout = ({ heading, body, ctaLabel, ctaUrl, unsubscribeUrl, isMarketing, 
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)}</title></head>
 <body style="margin:0;background:${isInterview ? '#f5f4fb' : '#f4f7f5'};color:#1d2924;font-family:Arial,sans-serif;line-height:1.6">
   <div style="max-width:620px;width:100%;margin:0 auto;background:transparent">
-    <div style="background:${isInterview ? '#322F6A' : '#0B1F3A'};color:#fff;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
+    <div style="background:#fff;color:#1d2924;padding:18px 24px;border-radius:10px 10px 0 0;box-sizing:border-box;width:100%;margin:0">
       <img src="${escapeHtml(logoUrl())}" alt="LeamJobs" style="display:block;width:auto;height:28px;border:0;max-width:160px;" />
     </div>
     <main style="background:#fff;padding:0;border:1px solid #dce7e1;border-top:0;border-radius:0 0 10px 10px;box-sizing:border-box;width:100%">
