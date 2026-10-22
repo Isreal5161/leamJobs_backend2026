@@ -107,6 +107,7 @@ const escrowRecord = {
 };
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   application: { findFirst: jest.fn(), update: jest.fn() },
   contract: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
@@ -127,6 +128,16 @@ const { mapContract } = await import('../src/services/contract.service.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    const roleById = {
+      [employerId]: 'EMPLOYER',
+      [otherEmployerId]: 'EMPLOYER',
+      [seekerId]: 'SEEKER',
+      [otherSeekerId]: 'SEEKER',
+    };
+    const role = roleById[where.id];
+    return role ? { isActive: true, role } : null;
+  });
   mockPrisma.application.findFirst.mockResolvedValue(null);
   mockPrisma.application.update.mockResolvedValue(applicationDetail());
   mockPrisma.contract.findMany.mockResolvedValue([]);

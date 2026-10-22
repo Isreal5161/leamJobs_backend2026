@@ -72,6 +72,8 @@ export const env = {
   // Legacy Paystack transfer support for withdrawals created before the Flutterwave switch.
   PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY || '',
   PAYSTACK_BASE_URL: process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co',
+  PAYSTACK_COLLECTION_ENABLED: process.env.PAYSTACK_COLLECTION_ENABLED === 'true',
+  PAYSTACK_CONTRACT_CALLBACK_URL: process.env.PAYSTACK_CONTRACT_CALLBACK_URL || '',
 };
 
 // Validate environment

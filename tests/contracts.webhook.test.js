@@ -1,5 +1,7 @@
+import crypto from 'node:crypto';
 import { jest } from '@jest/globals';
 import { Prisma } from '@prisma/client';
+import request from 'supertest';
 
 process.env.NODE_ENV = 'test';
 process.env.FLW_SECRET_KEY = 'test-secret';
@@ -7,6 +9,7 @@ process.env.FLW_SECRET_HASH = 'webhook-secret';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.PAYSTACK_SECRET_KEY = 'paystack-test-secret';
 
 const contractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const employerId = '11111111-1111-4111-8111-111111111111';
@@ -92,8 +95,9 @@ const mockPrisma = {
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
-const { handleFlutterwaveWebhook, processPendingContractWebhookEvents } = await import('../src/services/contractPayment.service.js');
+const { handleFlutterwaveWebhook, handlePaystackContractWebhook, processPendingContractWebhookEvents } = await import('../src/services/contractPayment.service.js');
 const { assertFlutterwaveWebhookSignature } = await import('../src/services/flutterwave.service.js');
+const { default: app } = await import('../src/app.js');
 
 const webhookPayload = (overrides = {}) => ({
   id: 'webhook-event-1',
@@ -150,7 +154,7 @@ beforeEach(() => {
         && event.attempts < 6
         && ((event.nextAttemptAt && event.nextAttemptAt <= new Date() && !event.processingStartedAt)
           || (event.processingStartedAt && event.processingStartedAt < new Date(Date.now() - 15 * 60 * 1000))))
-      .map(({ providerEventId }) => ({ providerEventId }))
+      .map(({ provider, providerEventId }) => ({ provider, providerEventId }))
   ));
   mockPrisma.providerWebhookEvent.delete.mockResolvedValue({});
   mockPrisma.payment.findUnique.mockResolvedValue(payment());
@@ -168,6 +172,31 @@ beforeEach(() => {
     json: async () => ({ status: 'success', data: { id: 987654, tx_ref: providerReference, amount: 100000, currency: 'NGN', status: 'successful' } }),
   });
 });
+
+const paystackWebhookPayload = (transactionId = 987654) => ({
+  event: 'charge.success',
+  data: { id: transactionId, reference: providerReference },
+});
+
+const configurePaystackPayment = ({
+  localPayment = payment({ provider: 'PAYSTACK' }),
+  providerPayment = { id: 987654, reference: providerReference, amount: 10000000, currency: 'NGN', status: 'success' },
+} = {}) => {
+  mockPrisma.payment.findUnique.mockResolvedValue({
+    ...localPayment,
+    escrow: {
+      id: escrowId,
+      currency: 'NGN',
+      freelanceContract: { contract: { id: contractId, employerId, freelanceDetails: { currency: 'NGN' } } },
+    },
+  });
+  mockPrisma.payment.update.mockImplementation(async ({ data }) => ({ ...localPayment, ...data }));
+  mockPrisma.contract.findUnique.mockResolvedValue(fullContract());
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ status: true, data: providerPayment }),
+  });
+};
 
 test('invalid webhook signature is rejected by the real signature verifier', () => {
   expect(() => assertFlutterwaveWebhookSignature('wrong-secret')).toThrow('Invalid Flutterwave webhook signature');
@@ -189,6 +218,152 @@ test('duplicate ProviderWebhookEvent is ignored without a second funding transit
   expect(result).toEqual({ duplicate: true });
   expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
   expect(mockPrisma.financialLedgerEntry.createMany).toHaveBeenCalledTimes(1);
+});
+
+test('Paystack charge.success webhook is verified and duplicate delivery funds escrow only once', async () => {
+  configurePaystackPayment();
+  const payload = paystackWebhookPayload();
+
+  const firstResult = await handlePaystackContractWebhook({ payload });
+  const duplicateResult = await handlePaystackContractWebhook({ payload });
+
+  expect(firstResult.duplicate).toBe(false);
+  expect(duplicateResult).toEqual({ duplicate: true });
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(global.fetch.mock.calls[0][0]).toContain(`/transaction/verify/${providerReference}`);
+  expect(mockPrisma.payment.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.financialLedgerEntry.createMany).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ['kobo amount', { id: 987654, reference: providerReference, amount: 10000001, currency: 'NGN', status: 'success' }],
+  ['currency', { id: 987654, reference: providerReference, amount: 10000000, currency: 'USD', status: 'success' }],
+])('Paystack charge.success with mismatched %s cannot fund escrow or write ledger entries', async (_field, providerPayment) => {
+  configurePaystackPayment({ providerPayment });
+
+  await expect(handlePaystackContractWebhook({ payload: paystackWebhookPayload() }))
+    .rejects.toMatchObject({ status: 422 });
+
+  expect(mockPrisma.payment.update.mock.calls.some(([args]) => args.data.status === 'SUCCESSFUL')).toBe(false);
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+  expect(webhookEvents.get('charge.success:987654').processedAt).toBeNull();
+});
+
+test('concurrent duplicate Paystack deliveries claim and fund the event once', async () => {
+  configurePaystackPayment();
+  let resolveProviderRequest;
+  let notifyProviderRequestStarted;
+  const providerRequestStarted = new Promise((resolve) => { notifyProviderRequestStarted = resolve; });
+  global.fetch = jest.fn(() => {
+    notifyProviderRequestStarted();
+    return new Promise((resolve) => { resolveProviderRequest = resolve; });
+  });
+  const payload = paystackWebhookPayload();
+  const firstDelivery = handlePaystackContractWebhook({ payload });
+
+  await providerRequestStarted;
+  const overlappingDelivery = await handlePaystackContractWebhook({ payload });
+  expect(overlappingDelivery).toEqual({ duplicate: true, processing: true });
+
+  resolveProviderRequest({
+    ok: true,
+    json: async () => ({
+      status: true,
+      data: { id: 987654, reference: providerReference, amount: 10000000, currency: 'NGN', status: 'success' },
+    }),
+  });
+  const firstResult = await firstDelivery;
+
+  expect(firstResult.duplicate).toBe(false);
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.payment.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.financialLedgerEntry.createMany).toHaveBeenCalledTimes(1);
+});
+
+test('Paystack recovery processes a due event once and ignores it after completion', async () => {
+  mockPrisma.payment.findUnique.mockResolvedValue(null);
+  const payload = paystackWebhookPayload();
+
+  await expect(handlePaystackContractWebhook({ payload })).rejects.toMatchObject({ status: 503 });
+  const event = webhookEvents.get('charge.success:987654');
+  expect(event.processedAt).toBeNull();
+  event.nextAttemptAt = new Date(0);
+  configurePaystackPayment();
+
+  const recovery = await processPendingContractWebhookEvents();
+  const afterCompletion = await processPendingContractWebhookEvents();
+
+  expect(recovery).toEqual({ examined: 1, processed: 1, deferred: 0 });
+  expect(afterCompletion).toEqual({ examined: 0, processed: 0, deferred: 0 });
+  expect(event.processedAt).toBeInstanceOf(Date);
+  expect(mockPrisma.payment.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.financialLedgerEntry.createMany).toHaveBeenCalledTimes(1);
+});
+
+test('delayed Paystack event with another transaction ID cannot alter terminal payment', async () => {
+  const alreadySettledPayment = {
+    ...payment({ provider: 'PAYSTACK', status: 'SUCCESSFUL' }),
+    transactionId: '987654',
+  };
+  mockPrisma.payment.findUnique.mockResolvedValue({
+    ...alreadySettledPayment,
+    escrow: {
+      id: escrowId,
+      currency: 'NGN',
+      freelanceContract: { contract: { id: contractId, employerId, freelanceDetails: { currency: 'NGN' } } },
+    },
+  });
+
+  await expect(handlePaystackContractWebhook({ payload: paystackWebhookPayload(987653) }))
+    .rejects.toMatchObject({ status: 409 });
+
+  expect(webhookEvents.get('charge.success:987653').processedAt).toBeNull();
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+});
+
+test('Paystack endpoint verifies the exact raw body before dispatching the charge event', async () => {
+  configurePaystackPayment();
+  const rawBody = JSON.stringify(paystackWebhookPayload());
+  const signature = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(Buffer.from(rawBody)).digest('hex');
+
+  const response = await request(app)
+    .post('/api/payments/paystack/withdrawal-webhook')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', signature)
+    .send(rawBody);
+
+  expect(response.status).toBe(200);
+  expect(mockPrisma.providerWebhookEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'PAYSTACK', providerEventId: 'charge.success:987654' }),
+  }));
+  expect(global.fetch).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+});
+
+test('Paystack endpoint rejects a tampered raw body without dispatching settlement', async () => {
+  const signedBody = JSON.stringify(paystackWebhookPayload());
+  const tamperedBody = signedBody.replace(providerReference, 'altered-payment-reference');
+  const signature = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(Buffer.from(signedBody)).digest('hex');
+
+  const response = await request(app)
+    .post('/api/payments/paystack/withdrawal-webhook')
+    .set('Content-Type', 'application/json')
+    .set('x-paystack-signature', signature)
+    .send(tamperedBody);
+
+  expect(response.status).toBe(401);
+  expect(mockPrisma.providerWebhookEvent.create).not.toHaveBeenCalled();
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
 });
 
 test('does not process a webhook whose transaction ID differs from the successful local payment', async () => {

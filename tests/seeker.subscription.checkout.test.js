@@ -97,7 +97,14 @@ beforeEach(() => {
   mockPrisma.subscriptionPlan.findMany.mockResolvedValue([subscriptionPlan]);
   mockPrisma.subscriptionPlan.findFirst.mockResolvedValue(subscriptionPlan);
   mockPrisma.subscriptionPlan.findUnique.mockResolvedValue(subscriptionPlan);
-  mockPrisma.user.findUnique.mockResolvedValue({ id: seekerId, email: 'seeker@example.com', firstName: 'Seeker', lastName: 'User' });
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    id: where.id,
+    isActive: true,
+    role: 'SEEKER',
+    email: 'seeker@example.com',
+    firstName: 'Seeker',
+    lastName: 'User',
+  }));
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.subscription.findUnique.mockResolvedValue({
     id: 'sub-1',
@@ -137,6 +144,7 @@ test('unauthenticated user cannot start a subscription purchase', async () => {
 });
 
 test('non-seeker cannot start a subscription purchase', async () => {
+  mockPrisma.user.findUnique.mockResolvedValue({ id: adminId, isActive: true, role: 'EMPLOYER' });
   const response = await request(app)
     .post('/api/seeker/subscriptions/checkout')
     .set('Authorization', `Bearer ${token('EMPLOYER', adminId)}`)

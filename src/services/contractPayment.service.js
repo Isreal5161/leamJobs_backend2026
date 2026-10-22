@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './flutterwave.service.js';
+import { initializePaystackPayment, isPaystackConfigured, verifyPaystackTransaction } from './paystack.service.js';
 import { contractSelect, ContractNotFoundError, mapContract } from './contract.service.js';
 import { createNotification } from './notification.service.js';
 
@@ -163,6 +164,15 @@ const findExistingAttempt = (payments, idempotencyKey) => payments.find((payment
   || ['PENDING', 'PROCESSING', 'SUCCESSFUL'].includes(payment.status)
 ));
 
+const assertPaystackCollectionAvailable = (currency) => {
+  if (!env.PAYSTACK_COLLECTION_ENABLED || !isPaystackConfigured() || !env.PAYSTACK_CONTRACT_CALLBACK_URL) {
+    throw new ContractPaymentError('Paystack contract funding is not enabled or fully configured', 503);
+  }
+  if (currency !== 'NGN') {
+    throw new ContractPaymentError('Paystack contract funding currently supports NGN only', 422);
+  }
+};
+
 export const initializeContractPayment = async ({ contractId, employerId, idempotencyKey, redirectPath }) => {
   const requestedKey = idempotencyKey?.trim();
   if (requestedKey && requestedKey.length > 100) throw new ContractPaymentError('Idempotency key is too long', 400);
@@ -172,6 +182,7 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
     const contract = await lockPaymentContract(transaction, contractId);
     assertPaymentContract(contract, employerId);
     const existing = findExistingAttempt(contract.freelanceDetails.escrow.payments, requestedKey);
+    const provider = existing?.provider ?? (env.PAYSTACK_COLLECTION_ENABLED ? 'PAYSTACK' : 'FLUTTERWAVE');
     if (existing?.status === 'SUCCESSFUL') {
       return {
         alreadyFunded: true,
@@ -198,6 +209,9 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
           fundingBreakdown: fundingBreakdown(contract.freelanceDetails, lockedPayment.amount),
         };
       }
+      if (lockedPayment?.provider === 'PAYSTACK') {
+        assertPaystackCollectionAvailable(contract.freelanceDetails.currency);
+      }
       const metadata = { ...(lockedPayment?.metadata ?? {}) };
       if (lockedPayment?.status === 'FAILED') delete metadata.checkoutUrl;
       const payment = await transaction.payment.update({
@@ -216,6 +230,7 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
       });
       return {
         alreadyFunded: false,
+        provider: lockedPayment.provider,
         payment,
         initializationToken,
         email: contract.employer.email,
@@ -225,6 +240,9 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
       };
     }
 
+    if (provider === 'PAYSTACK') {
+      assertPaystackCollectionAvailable(contract.freelanceDetails.currency);
+    }
     const providerReference = `leamjobs_${contractId}_${crypto.randomUUID()}`;
     const payment = await transaction.payment.create({
       data: {
@@ -236,9 +254,10 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
         currency: contract.freelanceDetails.currency,
         status: 'PENDING',
         paymentType: 'CONTRACT_FUNDING',
-        provider: 'FLUTTERWAVE',
+        provider,
         metadata: {
           contractId,
+          returnPath: redirectPath || `/employer/contracts/${encodeURIComponent(contractId)}`,
           projectAmount: new Prisma.Decimal(contract.freelanceDetails.agreedAmount).toFixed(2),
           platformFeeAmount: new Prisma.Decimal(contract.freelanceDetails.platformFeeAmount).toFixed(2),
           fundingModel: isAdditiveFundingSnapshot(contract.freelanceDetails) ? 'ADDITIVE' : 'LEGACY_DEDUCTED',
@@ -249,6 +268,7 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
     });
     return {
       alreadyFunded: false,
+      provider,
       payment,
       initializationToken,
       email: contract.employer.email,
@@ -279,18 +299,37 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
 
   let checkoutCreated = false;
   try {
-    const checkout = await initializeFlutterwavePayment({
-      amount: new Prisma.Decimal(attempt.amount).toFixed(2),
-      currency: attempt.currency,
-      email: attempt.email,
-      txRef: attempt.payment.providerReference,
-      meta: {
-        contractId,
-        projectAmount: attempt.payment.metadata?.projectAmount ?? new Prisma.Decimal(attempt.amount).toFixed(2),
-        platformFeeAmount: attempt.payment.metadata?.platformFeeAmount ?? '0.00',
-      },
-      redirectUrl: `${env.FRONTEND_URL}${redirectPath || `/employer/contracts/${encodeURIComponent(contractId)}`}`,
-    });
+    const amount = new Prisma.Decimal(attempt.amount).toFixed(2);
+    const checkout = attempt.provider === 'PAYSTACK'
+      ? await initializePaystackPayment({
+        amount,
+        currency: attempt.currency,
+        email: attempt.email,
+        reference: attempt.payment.providerReference,
+        callbackUrl: env.PAYSTACK_CONTRACT_CALLBACK_URL,
+        metadata: {
+          contractId,
+          paymentId: attempt.payment.id,
+          returnPath: redirectPath || `/employer/contracts/${encodeURIComponent(contractId)}`,
+        },
+      })
+      : await initializeFlutterwavePayment({
+        amount,
+        currency: attempt.currency,
+        email: attempt.email,
+        txRef: attempt.payment.providerReference,
+        meta: {
+          contractId,
+          projectAmount: attempt.payment.metadata?.projectAmount ?? amount,
+          platformFeeAmount: attempt.payment.metadata?.platformFeeAmount ?? '0.00',
+        },
+        redirectUrl: `${env.FRONTEND_URL}${redirectPath || `/employer/contracts/${encodeURIComponent(contractId)}`}`,
+      });
+    if (checkout.providerReference !== attempt.payment.providerReference) {
+      const referenceError = new ContractPaymentError('Payment provider returned an unexpected reference', 502);
+      referenceError.outcomeUnknown = true;
+      throw referenceError;
+    }
     checkoutCreated = true;
     const updated = await prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`
@@ -341,28 +380,39 @@ const releaseInitializationClaim = async (paymentId, token) => prisma.$transacti
 });
 
 const validateProviderPayment = (providerPayment, payment, transactionId) => {
-  const providerReference = providerPayment.tx_ref || providerPayment.reference;
+  const isPaystack = payment.provider === 'PAYSTACK';
+  const providerReference = isPaystack ? providerPayment.reference : (providerPayment.tx_ref || providerPayment.reference);
+  const providerTransactionId = String(providerPayment.id ?? '');
   const referenceMatches = providerReference === payment.providerReference;
-  const transactionMatches = String(providerPayment.id ?? '') === String(transactionId);
-  const status = String(providerPayment.status ?? '').toLowerCase();
-  if (!referenceMatches || !transactionMatches) {
-    throw new ContractPaymentError('Flutterwave payment verification failed', 422);
-  }
-  const amountMatches = new Prisma.Decimal(providerPayment.amount ?? 0).eq(payment.amount);
+  const transactionMatches = isPaystack
+    ? /^\d+$/.test(providerTransactionId) && (!/^\d+$/.test(String(transactionId ?? '')) || providerTransactionId === String(transactionId))
+    : providerTransactionId === String(transactionId);
+  const amountMatches = isPaystack
+    ? Number.isInteger(Number(providerPayment.amount))
+      && new Prisma.Decimal(providerPayment.amount ?? 0).eq(new Prisma.Decimal(payment.amount).mul(100))
+    : new Prisma.Decimal(providerPayment.amount ?? 0).eq(payment.amount);
   const currencyMatches = String(providerPayment.currency || '').toUpperCase() === String(payment.currency || '').toUpperCase();
-  if (!amountMatches || !currencyMatches) {
-    throw new ContractPaymentError('Flutterwave payment verification failed', 422);
+  if (!referenceMatches || !transactionMatches || !amountMatches || !currencyMatches) {
+    throw new ContractPaymentError(`${payment.provider} payment verification failed`, 422);
   }
-  if (status === 'successful') {
-    return 'SUCCESSFUL';
-  }
-  if (['failed', 'cancelled', 'canceled'].includes(status)) return 'FAILED';
-  return 'PROCESSING';
+  const status = String(providerPayment.status ?? '').toLowerCase();
+  const paymentStatus = isPaystack
+    ? status === 'success'
+      ? 'SUCCESSFUL'
+      : ['failed', 'abandoned'].includes(status)
+        ? 'FAILED'
+        : 'PROCESSING'
+    : status === 'successful'
+      ? 'SUCCESSFUL'
+      : ['failed', 'cancelled', 'canceled'].includes(status)
+        ? 'FAILED'
+        : 'PROCESSING';
+  return { status: paymentStatus, transactionId: providerTransactionId };
 };
 
 const assertContractFundingPayment = (payment, contract, escrow) => {
   if (
-    payment.provider !== 'FLUTTERWAVE'
+    !['FLUTTERWAVE', 'PAYSTACK'].includes(payment.provider)
     || payment.paymentType !== 'CONTRACT_FUNDING'
     || payment.userId !== contract.employerId
     || payment.escrowId !== escrow.id
@@ -473,26 +523,36 @@ const findPaymentForVerification = async ({ contractId, employerId, providerRefe
   return { contract, payment };
 };
 
-export const verifyContractPayment = async ({ contractId, employerId, providerReference, transactionId, webhookClaim = null }) => {
+export const verifyContractPayment = async ({ contractId, employerId, providerReference, transactionId, webhookClaim = null, expectedProvider }) => {
   const { contract, payment } = await findPaymentForVerification({ contractId, employerId, providerReference });
+  if (expectedProvider && payment.provider !== expectedProvider) {
+    throw new ContractPaymentError('Webhook provider does not match the stored payment provider', 409);
+  }
   const resolvedContractId = contractId || contract.id;
   if (payment.status === 'SUCCESSFUL') {
-    if (payment.transactionId !== String(transactionId)) {
-      throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+    const suppliedTransactionId = String(transactionId ?? '');
+    const transactionMatches = payment.provider === 'PAYSTACK'
+      ? (!/^\d+$/.test(suppliedTransactionId) || payment.transactionId === suppliedTransactionId)
+        && (!suppliedTransactionId || suppliedTransactionId === payment.providerReference || /^\d+$/.test(suppliedTransactionId))
+      : payment.transactionId === suppliedTransactionId;
+    if (!transactionMatches) {
+      throw new ContractPaymentError(`${payment.provider} transaction does not match the reconciled payment`, 409);
     }
     return { payment: paymentResponse(payment), contract: await getContractForPayment(resolvedContractId, employerId) };
   }
-  const providerPayment = await verifyFlutterwaveTransaction(transactionId);
-  let providerStatus;
+  const providerPayment = payment.provider === 'PAYSTACK'
+    ? await verifyPaystackTransaction(payment.providerReference)
+    : await verifyFlutterwaveTransaction(transactionId);
+  let verification;
   try {
-    providerStatus = validateProviderPayment(providerPayment, payment, transactionId);
+    verification = validateProviderPayment(providerPayment, payment, transactionId);
   } catch (error) {
     if (!webhookClaim) {
       await transitionPaymentStatus(payment, 'PROCESSING', {
         ...(payment.metadata ?? {}),
         contractId: resolvedContractId,
         verificationFailure: error.message,
-        providerTransactionId: String(transactionId),
+        providerTransactionId: String(providerPayment?.id ?? transactionId ?? ''),
       });
     }
     await createNotification({
@@ -507,16 +567,16 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
     throw error;
   }
 
-  if (providerStatus === 'FAILED') {
-    const updatedPayment = await transitionPaymentStatus(payment, providerStatus, {
+  if (verification.status === 'FAILED') {
+    const updatedPayment = await transitionPaymentStatus(payment, 'FAILED', {
       ...(payment.metadata ?? {}),
       contractId: resolvedContractId,
       providerStatus: String(providerPayment.status ?? ''),
-      providerTransactionId: String(providerPayment.id),
+      providerTransactionId: verification.transactionId,
     }, webhookClaim);
     if (updatedPayment.status === 'SUCCESSFUL') {
-      if (updatedPayment.transactionId !== String(transactionId)) {
-        throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+      if (updatedPayment.transactionId !== verification.transactionId) {
+        throw new ContractPaymentError(`${payment.provider} transaction does not match the reconciled payment`, 409);
       }
       return { payment: paymentResponse(updatedPayment), contract: await getContractForPayment(resolvedContractId, employerId) };
     }
@@ -526,23 +586,23 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
       category: 'PAYMENT',
       eventKey: `contract:payment-failed:${payment.id}`,
       title: 'Contract payment failed',
-      message: 'Flutterwave confirmed that the funding payment failed. You can start a new payment attempt.',
+      message: `${payment.provider} confirmed that the funding payment failed. You can start a new payment attempt.`,
       link: `/employer/contracts/${resolvedContractId}`,
     }).catch(() => undefined);
-    const error = new ContractPaymentError('Flutterwave payment verification failed', 422);
+    const error = new ContractPaymentError(`${payment.provider} payment verification failed`, 422);
     error.reconciliationComplete = true;
     throw error;
   }
 
-  if (providerStatus === 'PROCESSING') {
-    const updatedPayment = await transitionPaymentStatus(payment, providerStatus, {
+  if (verification.status === 'PROCESSING') {
+    const updatedPayment = await transitionPaymentStatus(payment, 'PROCESSING', {
       ...(payment.metadata ?? {}),
       contractId: resolvedContractId,
       providerStatus: String(providerPayment.status ?? ''),
-      providerTransactionId: String(providerPayment.id),
+      providerTransactionId: verification.transactionId,
     }, webhookClaim);
-    if (updatedPayment.status === 'SUCCESSFUL' && updatedPayment.transactionId !== String(transactionId)) {
-      throw new ContractPaymentError('Flutterwave transaction does not match the reconciled payment', 409);
+    if (updatedPayment.status === 'SUCCESSFUL' && updatedPayment.transactionId !== verification.transactionId) {
+      throw new ContractPaymentError(`${payment.provider} transaction does not match the reconciled payment`, 409);
     }
     return {
       payment: paymentResponse(updatedPayment),
@@ -593,7 +653,7 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
     if (!locked || !escrow) throw new ContractPaymentError('Payment escrow is unavailable', 422);
     assertContractFundingPayment(locked, lockedContract, escrow);
     if (locked.status === 'SUCCESSFUL') {
-      if (locked.transactionId !== String(transactionId) || escrow.status !== 'FUNDED') {
+      if (locked.transactionId !== verification.transactionId || escrow.status !== 'FUNDED') {
         throw new ContractPaymentError('The reconciled payment and escrow state do not match', 409);
       }
       return { payment: paymentResponse(locked), contract: await getContractForPayment(resolvedContractId, employerId, transaction) };
@@ -611,7 +671,7 @@ export const verifyContractPayment = async ({ contractId, employerId, providerRe
     }
     const updatedPayment = await transaction.payment.update({
       where: { id: payment.id },
-      data: { status: 'SUCCESSFUL', transactionId: String(providerPayment.id), verifiedAt: new Date(), metadata: { ...(locked.metadata ?? {}), providerStatus: providerPayment.status } },
+      data: { status: 'SUCCESSFUL', transactionId: verification.transactionId, verifiedAt: new Date(), metadata: { ...(locked.metadata ?? {}), providerStatus: providerPayment.status } },
       select: paymentSelect,
     });
     await transaction.escrow.update({
@@ -691,8 +751,8 @@ const getContractForPayment = async (contractId, employerId, transaction = prism
   return mapContract(contract);
 };
 
-const webhookEventWhere = (eventId) => ({
-  provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId: String(eventId) },
+const webhookEventWhere = (eventId, provider = 'FLUTTERWAVE') => ({
+  provider_providerEventId: { provider, providerEventId: String(eventId) },
 });
 
 const webhookLeaseCutoff = (now) => new Date(now.getTime() - WEBHOOK_LEASE_MS);
@@ -705,10 +765,10 @@ const retryableWebhookError = (error) => (
   || error.status === 404
 );
 
-const claimContractWebhookEvent = async (eventId, now = new Date()) => {
+const claimContractWebhookEvent = async (eventId, provider = 'FLUTTERWAVE', now = new Date()) => {
   const token = crypto.randomUUID();
   return prisma.$transaction(async (transaction) => {
-    const where = webhookEventWhere(eventId);
+    const where = webhookEventWhere(eventId, provider);
     const event = await transaction.providerWebhookEvent.findUnique({ where });
     if (!event || event.processedAt) return { state: 'processed' };
     if (!event.paymentReference || !event.transactionId) return { state: 'unrecoverable' };
@@ -741,11 +801,11 @@ const claimContractWebhookEvent = async (eventId, now = new Date()) => {
   });
 };
 
-const releaseContractWebhookClaim = async ({ eventId, token, attempts, error, now = new Date() }) => {
+const releaseContractWebhookClaim = async ({ eventId, provider = 'FLUTTERWAVE', token, attempts, error, now = new Date() }) => {
   const shouldRetry = retryableWebhookError(error) && attempts < MAX_WEBHOOK_ATTEMPTS;
   const retryDelay = WEBHOOK_RETRY_DELAYS_MS[Math.min(attempts - 1, WEBHOOK_RETRY_DELAYS_MS.length - 1)];
   await prisma.providerWebhookEvent.updateMany({
-    where: { ...webhookEventWhere(eventId), claimToken: token, processedAt: null },
+    where: { ...webhookEventWhere(eventId, provider), claimToken: token, processedAt: null },
     data: {
       processingStartedAt: null,
       claimToken: null,
@@ -756,9 +816,9 @@ const releaseContractWebhookClaim = async ({ eventId, token, attempts, error, no
   return shouldRetry;
 };
 
-const markContractWebhookProcessed = async ({ eventId, token }) => {
+const markContractWebhookProcessed = async ({ eventId, provider = 'FLUTTERWAVE', token }) => {
   const updated = await prisma.providerWebhookEvent.updateMany({
-    where: { ...webhookEventWhere(eventId), claimToken: token, processedAt: null },
+    where: { ...webhookEventWhere(eventId, provider), claimToken: token, processedAt: null },
     data: {
       processedAt: new Date(),
       processingStartedAt: null,
@@ -770,8 +830,8 @@ const markContractWebhookProcessed = async ({ eventId, token }) => {
   if (updated.count !== 1) throw new ContractPaymentError('Webhook recovery claim expired; retry reconciliation', 503);
 };
 
-const processContractWebhookEvent = async (eventId, now = new Date()) => {
-  const claim = await claimContractWebhookEvent(eventId, now);
+const processContractWebhookEvent = async (eventId, provider = 'FLUTTERWAVE', now = new Date()) => {
+  const claim = await claimContractWebhookEvent(eventId, provider, now);
   if (claim.state === 'processed') return { duplicate: true };
   if (claim.state === 'busy') return { duplicate: true, processing: true };
   if (claim.state === 'not-due') throw new ContractPaymentError('Webhook reconciliation is scheduled for retry', 503);
@@ -785,24 +845,26 @@ const processContractWebhookEvent = async (eventId, now = new Date()) => {
       providerReference: claim.event.paymentReference,
       transactionId: claim.event.transactionId,
       webhookClaim: { id: claim.event.id, token: claim.token },
+      expectedProvider: provider,
     });
-    if (result.pending) throw new ContractPaymentError('Flutterwave payment reconciliation is still pending', 503);
-    await markContractWebhookProcessed({ eventId, token: claim.token });
+    if (result.pending) throw new ContractPaymentError(`${provider} payment reconciliation is still pending`, 503);
+    await markContractWebhookProcessed({ eventId, provider, token: claim.token });
     return { duplicate: false, result };
   } catch (error) {
     if (error.reconciliationComplete) {
-      await markContractWebhookProcessed({ eventId, token: claim.token });
+      await markContractWebhookProcessed({ eventId, provider, token: claim.token });
       throw error;
     }
     const retryScheduled = await releaseContractWebhookClaim({
       eventId,
+      provider,
       token: claim.token,
       attempts: claim.event.attempts,
       error,
       now,
     });
     if (retryScheduled) {
-      const retryError = new ContractPaymentError('Flutterwave payment reconciliation is incomplete; retry scheduled', 503);
+      const retryError = new ContractPaymentError(`${provider} payment reconciliation is incomplete; retry scheduled`, 503);
       throw retryError;
     }
     throw error;
@@ -862,14 +924,90 @@ export const handleFlutterwaveWebhook = async ({ payload }) => {
       });
     }
   }
-  return processContractWebhookEvent(eventId);
+  return processContractWebhookEvent(eventId, 'FLUTTERWAVE');
+};
+
+export const handlePaystackContractWebhook = async ({ payload }) => {
+  if (payload?.event !== 'charge.success') return { ignored: true };
+  const paymentReference = payload?.data?.reference;
+  const transactionId = payload?.data?.id;
+  if (!paymentReference || transactionId === undefined || !/^\d+$/.test(String(transactionId))) {
+    throw new ContractPaymentError('Incomplete Paystack contract-funding webhook payload', 400);
+  }
+  const eventId = `charge.success:${String(transactionId)}`;
+  const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const eventWhere = webhookEventWhere(eventId, 'PAYSTACK');
+  try {
+    await prisma.providerWebhookEvent.create({
+      data: {
+        provider: 'PAYSTACK',
+        providerEventId: eventId,
+        eventType: payload.event,
+        payloadHash,
+        paymentReference: String(paymentReference),
+        transactionId: String(transactionId),
+        attempts: 0,
+        nextAttemptAt: new Date(),
+      },
+    });
+  } catch (error) {
+    if (error?.code !== 'P2002') throw error;
+    const existingEvent = await prisma.providerWebhookEvent.findUnique({ where: eventWhere });
+    if (!existingEvent) throw error;
+    if (existingEvent.payloadHash !== payloadHash) {
+      throw new ContractPaymentError('Paystack reused a webhook event identifier with different content', 409);
+    }
+    if (existingEvent.processedAt) return { duplicate: true };
+    if (existingEvent.paymentReference && existingEvent.paymentReference !== String(paymentReference)) {
+      throw new ContractPaymentError('Paystack event payment reference does not match its stored event', 409);
+    }
+    if (existingEvent.transactionId && existingEvent.transactionId !== String(transactionId)) {
+      throw new ContractPaymentError('Paystack event transaction ID does not match its stored event', 409);
+    }
+  }
+  return processContractWebhookEvent(eventId, 'PAYSTACK');
+};
+
+export const getPaystackContractReturnUrl = async (reference) => {
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new ContractPaymentError('Paystack payment reference is required', 400);
+  }
+  const payment = await prisma.payment.findUnique({
+    where: { providerReference: reference },
+    select: {
+      provider: true,
+      paymentType: true,
+      metadata: true,
+      escrow: {
+        select: {
+          freelanceContract: { select: { contract: { select: { id: true } } } },
+        },
+      },
+    },
+  });
+  const contract = payment?.escrow?.freelanceContract?.contract;
+  if (!payment || payment.provider !== 'PAYSTACK' || payment.paymentType !== 'CONTRACT_FUNDING' || !contract) {
+    throw new ContractNotFoundError();
+  }
+  const contractId = contract.id;
+  const configuredPath = payment.metadata?.returnPath;
+  const employerPath = `/employer/contracts/${encodeURIComponent(contractId)}`;
+  const adminPath = `/admin/contracts/${encodeURIComponent(contractId)}`;
+  const returnPath = typeof configuredPath === 'string' && [employerPath, adminPath].includes(configuredPath)
+    ? configuredPath
+    : employerPath;
+  const frontendBaseUrl = env.FRONTEND_URL || env.FRONTEND_URL_PROD;
+  if (!frontendBaseUrl) throw new ContractPaymentError('Frontend return URL is not configured', 503);
+  const frontendUrl = frontendBaseUrl.replace(/\/$/, '');
+  const query = new URLSearchParams({ transaction_id: reference, tx_ref: reference });
+  return `${frontendUrl}${returnPath}?${query.toString()}`;
 };
 
 export const processPendingContractWebhookEvents = async ({ batchSize = 25, now = new Date() } = {}) => {
   const leaseCutoff = webhookLeaseCutoff(now);
   const events = await prisma.providerWebhookEvent.findMany({
     where: {
-      provider: 'FLUTTERWAVE',
+      provider: { in: ['FLUTTERWAVE', 'PAYSTACK'] },
       processedAt: null,
       paymentReference: { not: null },
       transactionId: { not: null },
@@ -879,7 +1017,7 @@ export const processPendingContractWebhookEvents = async ({ batchSize = 25, now 
         { processingStartedAt: { lt: leaseCutoff } },
       ],
     },
-    select: { providerEventId: true },
+    select: { provider: true, providerEventId: true },
     orderBy: [{ nextAttemptAt: 'asc' }, { createdAt: 'asc' }],
     take: batchSize,
   });
@@ -887,7 +1025,7 @@ export const processPendingContractWebhookEvents = async ({ batchSize = 25, now 
   let deferred = 0;
   for (const event of events) {
     try {
-      const result = await processContractWebhookEvent(event.providerEventId, now);
+      const result = await processContractWebhookEvent(event.providerEventId, event.provider, now);
       if (!result.processing) processed += 1;
       else deferred += 1;
     } catch {

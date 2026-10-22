@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { env } from '../config/env.js';
 
 export class PaystackConfigurationError extends Error {
-  constructor(message = 'Paystack payout configuration is unavailable') {
+  constructor(message = 'Paystack configuration is unavailable') {
     super(message);
     this.name = 'PaystackConfigurationError';
     this.status = 503;
@@ -11,11 +11,12 @@ export class PaystackConfigurationError extends Error {
 }
 
 export class PaystackRequestError extends Error {
-  constructor(message, { status = 502, retryable = true } = {}) {
+  constructor(message, { status = 502, retryable = true, outcomeUnknown = false } = {}) {
     super(message);
     this.name = 'PaystackRequestError';
     this.status = status;
     this.retryable = retryable;
+    this.outcomeUnknown = outcomeUnknown;
   }
 }
 
@@ -25,7 +26,52 @@ const requireSecretKey = () => {
 
 export const isPaystackConfigured = () => Boolean(env.PAYSTACK_SECRET_KEY);
 
-const requestPaystack = async (path, options = {}) => {
+const toKobo = (amount) => {
+  const value = String(amount);
+  if (!/^\d+(?:\.\d{1,2})?$/.test(value)) {
+    throw new PaystackRequestError('Paystack collection amount is invalid', { status: 422, retryable: false });
+  }
+  const [whole, fraction = ''] = value.split('.');
+  const kobo = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  if (kobo <= 0n || kobo > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new PaystackRequestError('Paystack collection amount is outside the supported range', { status: 422, retryable: false });
+  }
+  return Number(kobo);
+};
+
+export const initializePaystackPayment = async ({ amount, currency, email, reference, callbackUrl, metadata }) => {
+  if (currency !== 'NGN') {
+    throw new PaystackRequestError('Paystack contract funding currently supports NGN only', { status: 422, retryable: false });
+  }
+  const data = await requestPaystack('/transaction/initialize', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: toKobo(amount),
+      currency,
+      email,
+      reference,
+      callback_url: callbackUrl,
+      metadata,
+    }),
+  }, { ambiguousSuccessfulResponse: true });
+  if (typeof data?.authorization_url !== 'string' || !data.authorization_url || data.reference !== reference) {
+    throw new PaystackRequestError('Paystack did not return the expected checkout details', {
+      status: 502,
+      retryable: false,
+      outcomeUnknown: true,
+    });
+  }
+  return { checkoutUrl: data.authorization_url, providerReference: data.reference };
+};
+
+export const verifyPaystackTransaction = async (reference) => {
+  if (typeof reference !== 'string' || !reference.trim()) {
+    throw new PaystackRequestError('A valid Paystack transaction reference is required', { status: 422, retryable: false });
+  }
+  return requestPaystack(`/transaction/verify/${encodeURIComponent(reference)}`, { method: 'GET' });
+};
+
+const requestPaystack = async (path, options = {}, { ambiguousSuccessfulResponse = false } = {}) => {
   requireSecretKey();
   let response;
   try {
@@ -38,13 +84,19 @@ const requestPaystack = async (path, options = {}) => {
       },
     });
   } catch {
-    throw new PaystackRequestError('Paystack payout request could not be completed', { retryable: true });
+    throw new PaystackRequestError('Paystack request could not be completed', { retryable: true, outcomeUnknown: true });
   }
 
   const payload = await response.json().catch(() => null);
   if (!response.ok || payload?.status !== true) {
     const retryable = response.status >= 500 || response.status === 429;
-    throw new PaystackRequestError('Paystack payout request was rejected', { status: retryable ? 502 : 422, retryable });
+    const outcomeUnknown = retryable
+      || (response.ok && ambiguousSuccessfulResponse && payload?.status !== false);
+    throw new PaystackRequestError('Paystack request was rejected', {
+      status: retryable || outcomeUnknown ? 502 : 422,
+      retryable,
+      outcomeUnknown,
+    });
   }
   return payload.data;
 };

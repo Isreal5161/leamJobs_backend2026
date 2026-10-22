@@ -2,6 +2,12 @@ import { jest } from '@jest/globals';
 import { Prisma } from '@prisma/client';
 import { validateContractPayment } from '../src/validators/contract.validation.js';
 
+process.env.NODE_ENV = 'test';
+process.env.PAYSTACK_SECRET_KEY = 'paystack-test-secret';
+process.env.PAYSTACK_CONTRACT_CALLBACK_URL = 'https://api.test/api/payments/paystack/contract-return';
+process.env.PAYSTACK_COLLECTION_ENABLED = 'false';
+process.env.FRONTEND_URL = 'https://leamjobs.test';
+
 const employerId = '11111111-1111-4111-8111-111111111111';
 const seekerId = '33333333-3333-4333-8333-333333333333';
 const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -86,7 +92,7 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED', amountV
   });
 };
 
-const payment = ({ status = 'PENDING' } = {}) => ({
+const payment = ({ status = 'PENDING', provider = 'FLUTTERWAVE' } = {}) => ({
   id: paymentId,
   userId: employerId,
   escrowId,
@@ -97,18 +103,18 @@ const payment = ({ status = 'PENDING' } = {}) => ({
   currency: 'NGN',
   status,
   paymentType: 'CONTRACT_FUNDING',
-  provider: 'FLUTTERWAVE',
+  provider,
   metadata: { contractId },
   verifiedAt: null,
   createdAt: new Date(),
 });
 
-const paymentContractLookup = () => ({
+const paymentContractLookup = ({ provider = 'FLUTTERWAVE' } = {}) => ({
   id: contractId,
   employerId,
   freelanceDetails: {
     currency: 'NGN',
-    escrow: { id: escrowId, currency: 'NGN', payments: [payment()] },
+    escrow: { id: escrowId, currency: 'NGN', payments: [payment({ provider })] },
   },
 });
 
@@ -131,13 +137,23 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   initializeFlutterwavePayment: jest.fn(),
   verifyFlutterwaveTransaction: jest.fn(),
 }));
+jest.unstable_mockModule('../src/services/paystack.service.js', () => ({
+  initializePaystackPayment: jest.fn(),
+  isPaystackConfigured: jest.fn(() => true),
+  verifyPaystackTransaction: jest.fn(),
+}));
 
 const { selectContractJobApplication, updateEmployerApplicationStatus } = await import('../src/services/employerApplications.service.js');
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
-const { initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
+const { initializePaystackPayment, isPaystackConfigured, verifyPaystackTransaction } = await import('../src/services/paystack.service.js');
+const { env } = await import('../src/config/env.js');
+const { getPaystackContractReturnUrl, initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
 
 beforeEach(() => {
   jest.resetAllMocks();
+  env.PAYSTACK_COLLECTION_ENABLED = false;
+  env.PAYSTACK_CONTRACT_CALLBACK_URL = process.env.PAYSTACK_CONTRACT_CALLBACK_URL;
+  isPaystackConfigured.mockReturnValue(true);
   storedPayment = null;
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: applicationId }]);
@@ -161,8 +177,10 @@ beforeEach(() => {
   mockPrisma.escrow.update.mockResolvedValue({});
   mockPrisma.contract.update.mockResolvedValue({});
   mockPrisma.application.updateMany.mockResolvedValue({ count: 1 });
-  initializeFlutterwavePayment.mockResolvedValue({ checkoutUrl: 'https://checkout.test', providerReference });
+  initializeFlutterwavePayment.mockImplementation(async ({ txRef }) => ({ checkoutUrl: 'https://checkout.test', providerReference: txRef }));
   verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'successful' });
+  initializePaystackPayment.mockImplementation(async ({ reference }) => ({ checkoutUrl: 'https://checkout.paystack.test', providerReference: reference }));
+  verifyPaystackTransaction.mockResolvedValue({ id: 456789, reference: providerReference, amount: 52500000, currency: 'NGN', status: 'success' });
 });
 
 test('contract selection creates protected engagement and leaves application payment pending', async () => {
@@ -484,7 +502,7 @@ test('payment request validation rejects client-supplied amount and fee fields',
 });
 
 test('concurrent initialization calls share one provider checkout claim', async () => {
-  let resolveProvider;
+  let completeProviderCheckout;
   let transactionTail = Promise.resolve();
   mockPrisma.$transaction.mockImplementation((callback) => {
     const transaction = transactionTail.then(() => callback(mockPrisma));
@@ -496,7 +514,9 @@ test('concurrent initialization calls share one provider checkout claim', async 
     if (storedPayment) record.freelanceDetails.escrow.payments = [storedPayment];
     return record;
   });
-  initializeFlutterwavePayment.mockImplementationOnce(() => new Promise((resolve) => { resolveProvider = resolve; }));
+  initializeFlutterwavePayment.mockImplementationOnce(({ txRef }) => new Promise((resolve) => {
+    completeProviderCheckout = () => resolve({ checkoutUrl: 'https://checkout.test', providerReference: txRef });
+  }));
 
   const first = initializeContractPayment({ contractId, employerId, idempotencyKey: 'shared-init-key' });
   await new Promise((resolve) => setImmediate(resolve));
@@ -505,7 +525,7 @@ test('concurrent initialization calls share one provider checkout claim', async 
   expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
   expect(initializeFlutterwavePayment).toHaveBeenCalledTimes(1);
   expect(second.payment.checkoutUrl).toBeNull();
-  resolveProvider({ checkoutUrl: 'https://checkout.test', providerReference });
+  completeProviderCheckout();
   const firstResult = await first;
   expect(firstResult.payment.checkoutUrl).toBe('https://checkout.test');
 });
@@ -583,6 +603,206 @@ test('a zero-percent snapshot charges only the project amount', async () => {
     data: expect.objectContaining({ amount: new Prisma.Decimal('500000.00') }),
   }));
   expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '500000.00' }));
+});
+
+test('Paystack collection initializes with the trusted NGN amount and configured callback', async () => {
+  env.PAYSTACK_COLLECTION_ENABLED = true;
+
+  const result = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'paystack-collection-key' });
+
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'PAYSTACK', amount: new Prisma.Decimal('525000.00'), currency: 'NGN' }),
+  }));
+  expect(initializePaystackPayment).toHaveBeenCalledWith(expect.objectContaining({
+    amount: '525000.00',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: expect.any(String),
+    callbackUrl: process.env.PAYSTACK_CONTRACT_CALLBACK_URL,
+  }));
+  expect(result.payment.provider).toBe('PAYSTACK');
+  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
+});
+
+test('Paystack verification validates the provider reference and kobo amount before funding', async () => {
+  mockPrisma.contract.findFirst
+    .mockResolvedValueOnce(paymentContractLookup({ provider: 'PAYSTACK' }))
+    .mockResolvedValueOnce({ id: contractId, type: 'CONTRACT_PROJECT', applicationId, status: 'PENDING', employerId, freelanceDetails: { currency: 'NGN' } })
+    .mockResolvedValueOnce(contractRecord());
+  mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
+
+  await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
+
+  expect(verifyPaystackTransaction).toHaveBeenCalledWith(providerReference);
+  expect(mockPrisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'SUCCESSFUL', transactionId: '456789' }),
+  }));
+  expect(mockPrisma.escrow.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'FUNDED' }),
+  }));
+  expect(verifyFlutterwaveTransaction).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['amount in kobo', { id: 456789, reference: providerReference, amount: 52500001, currency: 'NGN', status: 'success' }],
+  ['currency', { id: 456789, reference: providerReference, amount: 52500000, currency: 'USD', status: 'success' }],
+])('Paystack verification rejects a mismatched %s without funding escrow', async (_field, providerPayment) => {
+  mockPrisma.contract.findFirst.mockResolvedValue(paymentContractLookup({ provider: 'PAYSTACK' }));
+  verifyPaystackTransaction.mockResolvedValue(providerPayment);
+
+  await expect(verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' }))
+    .rejects.toMatchObject({ status: 422 });
+
+  expect(mockPrisma.payment.update.mock.calls.some(([args]) => args.data.status === 'SUCCESSFUL')).toBe(false);
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+});
+
+test('Paystack collection rejects non-NGN contracts before creating a payment', async () => {
+  env.PAYSTACK_COLLECTION_ENABLED = true;
+  const usdContract = contractRecord();
+  usdContract.freelanceDetails.currency = 'USD';
+  usdContract.freelanceDetails.escrow.currency = 'USD';
+  mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
+
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'paystack-usd-key' }))
+    .rejects.toMatchObject({ status: 422 });
+  expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
+});
+
+test('Paystack verification rejects mismatched provider references without funding escrow', async () => {
+  mockPrisma.contract.findFirst.mockResolvedValue(paymentContractLookup({ provider: 'PAYSTACK' }));
+  verifyPaystackTransaction.mockResolvedValue({
+    id: 456789,
+    reference: 'different-payment-reference',
+    amount: 52500000,
+    currency: 'NGN',
+    status: 'success',
+  });
+
+  await expect(verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' }))
+    .rejects.toMatchObject({ status: 422 });
+
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+});
+
+test('Paystack verification provider failure leaves payment unsettled and escrow unfunded', async () => {
+  mockPrisma.contract.findFirst.mockResolvedValue(paymentContractLookup({ provider: 'PAYSTACK' }));
+  verifyPaystackTransaction.mockRejectedValue(new Error('provider network failure'));
+
+  await expect(verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' }))
+    .rejects.toThrow('provider network failure');
+
+  expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+});
+
+test('Paystack ambiguous initialization is not retried into a second checkout', async () => {
+  env.PAYSTACK_COLLECTION_ENABLED = true;
+  mockPrisma.contract.findUnique.mockImplementation(async () => {
+    const record = contractRecord();
+    if (storedPayment) record.freelanceDetails.escrow.payments = [storedPayment];
+    return record;
+  });
+  initializePaystackPayment.mockRejectedValueOnce(Object.assign(
+    new Error('provider request outcome is unknown'),
+    { outcomeUnknown: true },
+  ));
+
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'ambiguous-paystack-key' }))
+    .rejects.toThrow('provider request outcome is unknown');
+  expect(storedPayment.provider).toBe('PAYSTACK');
+  expect(storedPayment.status).toBe('PENDING');
+  expect(storedPayment.metadata.checkoutInitialization).toBeTruthy();
+
+  const retry = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'ambiguous-paystack-key' });
+
+  expect(initializePaystackPayment).toHaveBeenCalledTimes(1);
+  expect(retry.payment.checkoutUrl).toBeNull();
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+  expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
+});
+
+test('definite Paystack initialization rejection releases the claim for a later attempt', async () => {
+  env.PAYSTACK_COLLECTION_ENABLED = true;
+  mockPrisma.contract.findUnique.mockImplementation(async () => {
+    const record = contractRecord();
+    if (storedPayment) record.freelanceDetails.escrow.payments = [storedPayment];
+    return record;
+  });
+  initializePaystackPayment.mockRejectedValueOnce(Object.assign(
+    new Error('provider rejected initialization'),
+    { outcomeUnknown: false },
+  ));
+
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'definite-paystack-rejection-key' }))
+    .rejects.toThrow('provider rejected initialization');
+  expect(storedPayment.metadata.checkoutInitialization).toBeUndefined();
+
+  const retry = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'definite-paystack-rejection-key' });
+
+  expect(initializePaystackPayment).toHaveBeenCalledTimes(2);
+  expect(retry.payment.checkoutUrl).toBe('https://checkout.paystack.test');
+  expect(storedPayment.metadata.checkoutInitialization).toBeNull();
+});
+
+test('existing Flutterwave attempt stays on Flutterwave while Paystack is enabled', async () => {
+  env.PAYSTACK_COLLECTION_ENABLED = true;
+  const existingPayment = payment({ provider: 'FLUTTERWAVE' });
+  const record = contractRecord();
+  record.freelanceDetails.escrow.payments = [existingPayment];
+  mockPrisma.contract.findUnique.mockResolvedValue(record);
+  mockPrisma.payment.findUnique.mockResolvedValue(existingPayment);
+
+  const initialized = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'existing-flutterwave-key' });
+
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({
+    txRef: providerReference,
+  }));
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
+  expect(initialized.payment.provider).toBe('FLUTTERWAVE');
+
+  mockPrisma.contract.findFirst
+    .mockResolvedValueOnce(paymentContractLookup({ provider: 'FLUTTERWAVE' }))
+    .mockResolvedValueOnce({
+      id: contractId,
+      type: 'CONTRACT_PROJECT',
+      applicationId,
+      status: 'PENDING',
+      employerId,
+      freelanceDetails: { currency: 'NGN' },
+    })
+    .mockResolvedValueOnce(contractRecord());
+
+  await verifyContractPayment({ contractId, employerId, providerReference, transactionId: '456789' });
+
+  expect(verifyFlutterwaveTransaction).toHaveBeenCalledWith('456789');
+  expect(verifyPaystackTransaction).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'SUCCESSFUL', transactionId: '456789' }),
+  }));
+});
+
+test('Paystack callback bridge returns only to the payment contract page', async () => {
+  mockPrisma.payment.findUnique.mockResolvedValue({
+    provider: 'PAYSTACK',
+    paymentType: 'CONTRACT_FUNDING',
+    metadata: { returnPath: `/admin/contracts/${contractId}` },
+    escrow: { freelanceContract: { contract: { id: contractId } } },
+  });
+
+  await expect(getPaystackContractReturnUrl(providerReference))
+    .resolves.toBe(`https://leamjobs.test/admin/contracts/${contractId}?transaction_id=${providerReference}&tx_ref=${providerReference}`);
+
+  mockPrisma.payment.findUnique.mockResolvedValueOnce({
+    provider: 'FLUTTERWAVE',
+    paymentType: 'CONTRACT_FUNDING',
+    escrow: { freelanceContract: { contract: { id: contractId } } },
+  });
+  await expect(getPaystackContractReturnUrl(providerReference)).rejects.toMatchObject({ status: 404 });
 });
 
 test('pending provider status remains recoverable instead of becoming failed', async () => {

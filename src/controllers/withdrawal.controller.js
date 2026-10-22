@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { assertPaystackWebhookSignature } from '../services/paystack.service.js';
+import { handlePaystackContractWebhook } from '../services/contractPayment.service.js';
 import { executePendingWithdrawals, executeWithdrawal, reconcilePendingWithdrawals, reconcileWithdrawal } from '../services/withdrawalExecution.service.js';
 
 export const paystackWithdrawalWebhook = async (req, res, next) => {
@@ -8,6 +9,10 @@ export const paystackWithdrawalWebhook = async (req, res, next) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body ?? {}));
     assertPaystackWebhookSignature(req.get('x-paystack-signature'), rawBody);
     const payload = JSON.parse(rawBody.toString('utf8'));
+    if (payload?.event === 'charge.success') {
+      const result = await handlePaystackContractWebhook({ payload });
+      return res.status(200).json({ success: true, data: result });
+    }
     const eventId = payload?.id ?? payload?.data?.id ?? payload?.data?.transfer_code ?? payload?.data?.reference;
     const providerReference = payload?.data?.reference;
     if (!eventId || !providerReference) return res.status(400).json({ message: 'Incomplete Paystack webhook payload' });

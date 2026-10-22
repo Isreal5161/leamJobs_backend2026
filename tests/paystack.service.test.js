@@ -9,7 +9,15 @@ process.env.PAYSTACK_SECRET_KEY = 'sk_test_provider_secret';
 
 const fetchMock = jest.fn();
 global.fetch = fetchMock;
-const { createPaystackTransferRecipient, createPaystackTransfer, getPaystackTransferByReference, getPaystackTransferByCode, assertPaystackWebhookSignature } = await import('../src/services/paystack.service.js');
+const {
+  createPaystackTransferRecipient,
+  createPaystackTransfer,
+  getPaystackTransferByReference,
+  getPaystackTransferByCode,
+  initializePaystackPayment,
+  verifyPaystackTransaction,
+  assertPaystackWebhookSignature,
+} = await import('../src/services/paystack.service.js');
 
 afterEach(() => jest.clearAllMocks());
 
@@ -40,6 +48,164 @@ test('looks up transfer status by the Paystack transfer code', async () => {
   fetchMock.mockResolvedValue(response({ transfer_code: 'TRF_test', status: 'success' }));
   await expect(getPaystackTransferByCode('TRF_test')).resolves.toMatchObject({ status: 'success' });
   expect(fetchMock.mock.calls[0][0]).toBe('https://api.paystack.co/transfer/TRF_test');
+});
+
+test('initializes a collection checkout in kobo with the supplied trusted reference', async () => {
+  fetchMock.mockResolvedValue(response({
+    authorization_url: 'https://checkout.paystack.com/example',
+    reference: 'contract-payment-1',
+  }));
+
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+    metadata: { contractId: 'contract-1' },
+  })).resolves.toEqual({
+    checkoutUrl: 'https://checkout.paystack.com/example',
+    providerReference: 'contract-payment-1',
+  });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({
+    amount: 125050,
+    currency: 'NGN',
+    reference: 'contract-payment-1',
+  });
+});
+
+test('initialization network failure is reported as an unknown retryable outcome', async () => {
+  fetchMock.mockRejectedValue(new Error('socket timeout'));
+
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    retryable: true,
+    outcomeUnknown: true,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test('initialization HTTP failure does not return checkout details', async () => {
+  fetchMock.mockResolvedValue(response({ message: 'temporarily unavailable' }, false, 503));
+
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    status: 502,
+    retryable: true,
+    outcomeUnknown: true,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test('explicit provider rejection during initialization remains a definite failure', async () => {
+  fetchMock.mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: jest.fn().mockResolvedValue({ status: false, message: 'invalid request' }),
+  });
+
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    status: 422,
+    retryable: false,
+    outcomeUnknown: false,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test.each([
+  ['malformed JSON', { json: jest.fn().mockRejectedValue(new SyntaxError('invalid JSON')), ok: true, status: 200 }],
+  ['missing checkout URL', response({ reference: 'contract-payment-1' })],
+  ['unexpected reference', response({ authorization_url: 'https://checkout.paystack.com/example', reference: 'other-reference' })],
+])('incomplete initialization response (%s) is treated as an unknown outcome', async (_label, providerResponse) => {
+  fetchMock.mockResolvedValue(providerResponse);
+
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    status: 502,
+    retryable: false,
+    outcomeUnknown: true,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+test('rejects invalid or unsupported collection amounts before making a request', async () => {
+  await expect(initializePaystackPayment({
+    amount: '1250.501',
+    currency: 'NGN',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toThrow('Paystack collection amount is invalid');
+  await expect(initializePaystackPayment({
+    amount: '1250.50',
+    currency: 'USD',
+    email: 'employer@example.com',
+    reference: 'contract-payment-1',
+    callbackUrl: 'https://api.example.com/api/payments/paystack/contract-return',
+  })).rejects.toThrow('Paystack contract funding currently supports NGN only');
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test('verifies a collection transaction server-side using its URL-encoded reference', async () => {
+  fetchMock.mockResolvedValue(response({ id: 123, reference: 'reference/with space', status: 'success' }));
+  await expect(verifyPaystackTransaction('reference/with space')).resolves.toMatchObject({ id: 123 });
+  expect(fetchMock.mock.calls[0][0]).toBe('https://api.paystack.co/transaction/verify/reference%2Fwith%20space');
+});
+
+test('verification network and unsuccessful HTTP responses fail closed', async () => {
+  fetchMock.mockRejectedValueOnce(new Error('connection reset'));
+  await expect(verifyPaystackTransaction('contract-payment-1')).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    retryable: true,
+    outcomeUnknown: true,
+  });
+
+  fetchMock.mockResolvedValueOnce(response({ message: 'not found' }, false, 404));
+  await expect(verifyPaystackTransaction('contract-payment-1')).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    status: 422,
+    retryable: false,
+    outcomeUnknown: false,
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+test('malformed or incomplete verification responses are not treated as confirmed transactions', async () => {
+  fetchMock.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: jest.fn().mockRejectedValue(new SyntaxError('invalid JSON')),
+  });
+  await expect(verifyPaystackTransaction('contract-payment-1')).rejects.toMatchObject({
+    name: 'PaystackRequestError',
+    retryable: false,
+    outcomeUnknown: false,
+  });
 });
 
 test('verifies Paystack webhook signatures with the server-side secret', () => {

@@ -107,7 +107,10 @@ beforeEach(() => {
   mockPrisma.escrow.findUnique.mockResolvedValue({ id: escrowId, status: 'UNFUNDED', currency: 'NGN', grossAmount: new Prisma.Decimal('100000.00'), platformFeeAmount: new Prisma.Decimal('5000.00'), seekerNetAmount: new Prisma.Decimal('95000.00') });
   mockPrisma.escrow.update.mockResolvedValue(undefined);
   mockPrisma.freelanceContract.update.mockResolvedValue(undefined);
-  initializeFlutterwavePayment.mockResolvedValue({ checkoutUrl: 'https://checkout.test', providerReference });
+  initializeFlutterwavePayment.mockImplementation(async ({ txRef }) => ({
+    checkoutUrl: 'https://checkout.test',
+    providerReference: txRef,
+  }));
   verifyFlutterwaveTransaction.mockResolvedValue({ id: 987654, tx_ref: providerReference, amount: 100000, currency: 'NGN', status: 'successful' });
 });
 

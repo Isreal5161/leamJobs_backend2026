@@ -7,6 +7,7 @@ import {
 } from '../services/contract.service.js';
 import {
   initializeContractPayment,
+  getPaystackContractReturnUrl,
   verifyContractPayment,
 } from '../services/contractPayment.service.js';
 import { assertFlutterwaveWebhookSignature } from '../services/flutterwave.service.js';
@@ -115,6 +116,14 @@ export const flutterwaveWebhook = async (req, res, next) => {
     assertFlutterwaveWebhookSignature(req.get('verif-hash') || req.get('verif_hash'));
     const result = await handleFlutterwaveWebhook({ payload: req.body });
     return res.status(200).json({ success: true, data: result });
+  } catch (error) { return next(error); }
+};
+
+export const paystackContractReturn = async (req, res, next) => {
+  try {
+    const reference = req.query.reference || req.query.trxref;
+    const redirectUrl = await getPaystackContractReturnUrl(reference);
+    return res.redirect(303, redirectUrl);
   } catch (error) { return next(error); }
 };
 

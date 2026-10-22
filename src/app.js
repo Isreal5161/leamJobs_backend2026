@@ -10,7 +10,7 @@ import employerRouter from './routes/employer.routes.js';
 import publicJobsRouter from './routes/publicJobs.routes.js';
 import publicRouter from './routes/public.routes.js';
 import seekerRouter from './routes/seeker.routes.js';
-import { flutterwaveWebhook } from './controllers/contract.controller.js';
+import { flutterwaveWebhook, paystackContractReturn } from './controllers/contract.controller.js';
 import { paystackWithdrawalWebhook } from './controllers/withdrawal.controller.js';
 import { readAboutTeamImageController, readSiteContent } from './controllers/siteContent.controller.js';
 
@@ -47,6 +47,7 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
+app.get('/api/payments/paystack/contract-return', paystackContractReturn);
 
 // Health check route - basic application health
 app.get('/health', (req, res) => {

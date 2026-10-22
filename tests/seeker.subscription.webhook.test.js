@@ -105,6 +105,7 @@ const mockAssertFlutterwaveWebhookSignature = jest.fn();
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 jest.unstable_mockModule('../src/services/contractPayment.service.js', () => ({
   handleFlutterwaveWebhook: mockContractWebhook,
+  getPaystackContractReturnUrl: jest.fn(),
   initializeContractPayment: jest.fn(),
   verifyContractPayment: jest.fn(),
 }));
