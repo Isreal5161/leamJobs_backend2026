@@ -92,8 +92,8 @@ test('registration creates a pending unverified user and queues an email verific
   expect(created.isVerified).toBe(false);
   expect(mockPrisma.user.create).toHaveBeenCalledTimes(1);
   expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
-    where: { userId: 'user-1' },
-    create: { userId: 'user-1' },
+    where: { userId_currency: { userId: 'user-1', currency: 'NGN' } },
+    create: { userId: 'user-1', currency: 'NGN' },
     update: {},
   });
   expect(mockQueueEmail).toHaveBeenCalledWith(expect.objectContaining({

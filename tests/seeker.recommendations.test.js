@@ -9,6 +9,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   job: { findMany: jest.fn() },
   subscription: { findFirst: jest.fn() },
@@ -27,6 +28,7 @@ const manyJobs = () => Array.from({ length: 13 }, (_, index) => job(`job-${Strin
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ skills: ['React', ' react ', 'Node.js'] });
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.job.findMany.mockResolvedValue([
@@ -204,6 +206,7 @@ describe('GET /api/seeker/recommendations', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('rejects %s role', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app).get('/api/seeker/recommendations').set('Authorization', `Bearer ${token(role)}`);
     expect(response.status).toBe(403);
     expect(mockPrisma.job.findMany).not.toHaveBeenCalled();

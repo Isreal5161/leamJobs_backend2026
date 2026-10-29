@@ -40,19 +40,19 @@ walletDatabaseDescribe('seeker wallet initialization PostgreSQL integration', ()
 
       expect(new Set(wallets.map((wallet) => wallet.id)).size).toBe(1);
       expect(await database.wallet.count({ where: { userId } })).toBe(1);
-      const createdWallet = await database.wallet.findUnique({ where: { userId } });
+      const createdWallet = await database.wallet.findUnique({ where: { userId_currency: { userId, currency: 'NGN' } } });
       expect(createdWallet.currency).toBe('NGN');
       expect(createdWallet.availableBalance.toFixed(2)).toBe('0.00');
       expect(createdWallet.pendingWithdrawalBalance.toFixed(2)).toBe('0.00');
       expect(createdWallet.version).toBe(0);
 
       await database.wallet.update({
-        where: { userId },
+        where: { userId_currency: { userId, currency: 'NGN' } },
         data: { availableBalance: '125.00', pendingWithdrawalBalance: '25.00', version: 3 },
       });
       await initializeSeekerWallet(database, userId);
 
-      const retriedWallet = await database.wallet.findUnique({ where: { userId } });
+      const retriedWallet = await database.wallet.findUnique({ where: { userId_currency: { userId, currency: 'NGN' } } });
       expect(retriedWallet.currency).toBe('NGN');
       expect(retriedWallet.availableBalance.toFixed(2)).toBe('125.00');
       expect(retriedWallet.pendingWithdrawalBalance.toFixed(2)).toBe('25.00');
@@ -82,6 +82,6 @@ walletDatabaseDescribe('seeker wallet initialization PostgreSQL integration', ()
     })).rejects.toThrow('force registration transaction rollback');
 
     expect(await database.user.findUnique({ where: { id: userId } })).toBeNull();
-    expect(await database.wallet.findUnique({ where: { userId } })).toBeNull();
+    expect(await database.wallet.findUnique({ where: { userId_currency: { userId, currency: 'NGN' } } })).toBeNull();
   });
 });

@@ -44,7 +44,7 @@ const subscription = (status = 'PENDING') => ({
   payments: [],
 });
 
-const payment = (status = 'PENDING') => ({
+const payment = (status = 'PENDING', provider = currentPaymentProvider) => ({
   id: 'payment-1',
   userId,
   subscriptionId: 'sub-1',
@@ -55,13 +55,14 @@ const payment = (status = 'PENDING') => ({
   currency: 'NGN',
   status,
   paymentType: 'SUBSCRIPTION',
-  provider: 'FLUTTERWAVE',
+  provider,
   metadata: {
     userId,
     planId,
     planKey: plan.key,
     subscriptionId: 'sub-1',
     customerEmail: 'seeker@example.com',
+    ...(currentPaymentMetadata ?? {}),
   },
   verifiedAt: null,
   createdAt: new Date(),
@@ -70,6 +71,8 @@ const payment = (status = 'PENDING') => ({
 
 let currentPaymentStatus = 'PENDING';
 let currentSubscriptionStatus = 'PENDING';
+let currentPaymentProvider = 'FLUTTERWAVE';
+let currentPaymentMetadata = null;
 let webhookEvents;
 
 const mockPrisma = {
@@ -101,10 +104,13 @@ const mockContractWebhook = jest.fn();
 const mockVerifyFlutterwaveTransaction = jest.fn();
 const mockInitializeFlutterwavePayment = jest.fn();
 const mockAssertFlutterwaveWebhookSignature = jest.fn();
+const mockVerifyPaystackTransaction = jest.fn();
+const mockAssertPaystackWebhookSignature = jest.fn();
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 jest.unstable_mockModule('../src/services/contractPayment.service.js', () => ({
   handleFlutterwaveWebhook: mockContractWebhook,
+  handlePaystackContractWebhook: mockContractWebhook,
   getPaystackContractReturnUrl: jest.fn(),
   initializeContractPayment: jest.fn(),
   verifyContractPayment: jest.fn(),
@@ -118,9 +124,22 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   isFlutterwaveConfigured: jest.fn(),
   normalizeFlutterwaveTransferStatus: jest.fn(),
 }));
+jest.unstable_mockModule('../src/services/paystack.service.js', () => ({
+  assertPaystackWebhookSignature: mockAssertPaystackWebhookSignature,
+  verifyPaystackTransaction: mockVerifyPaystackTransaction,
+  initializePaystackPayment: jest.fn(),
+  isPaystackConfigured: jest.fn(() => true),
+  createPaystackTransferRecipient: jest.fn(),
+  createPaystackTransfer: jest.fn(),
+  getPaystackTransferByReference: jest.fn(),
+  getPaystackTransferByCode: jest.fn(),
+  normalizePaystackTransferStatus: jest.fn(),
+}));
 
 const { handleFlutterwaveWebhook } = await import('../src/services/flutterwaveWebhook.service.js');
+const { handlePaystackSubscriptionWebhook } = await import('../src/services/paystackWebhook.service.js');
 const { flutterwaveWebhook } = await import('../src/controllers/contract.controller.js');
+const { paystackWithdrawalWebhook } = await import('../src/controllers/withdrawal.controller.js');
 
 const payload = (overrides = {}) => ({
   id: 'event-1',
@@ -137,15 +156,33 @@ const payload = (overrides = {}) => ({
   },
 });
 
+const paystackPayload = () => ({
+  id: 'paystack-event-1',
+  event: 'charge.success',
+  data: {
+    id: 123,
+    reference,
+    status: 'success',
+    amount: 4900,
+    currency: 'NGN',
+  },
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   currentPaymentStatus = 'PENDING';
   currentSubscriptionStatus = 'PENDING';
+  currentPaymentProvider = 'FLUTTERWAVE';
+  currentPaymentMetadata = null;
   webhookEvents = new Map();
 
   mockPrisma.payment.findUnique.mockImplementation(async ({ where }) => {
     if (where.providerReference === reference || where.transactionId === '123') {
-      return { ...payment(currentPaymentStatus), transactionId: currentPaymentStatus === 'SUCCESSFUL' ? '123' : null };
+      return {
+        ...payment(currentPaymentStatus),
+        transactionId: currentPaymentStatus === 'SUCCESSFUL' ? '123' : null,
+        subscription: subscription(currentSubscriptionStatus),
+      };
     }
     if (where.id === 'payment-1') {
       return {
@@ -163,11 +200,13 @@ beforeEach(() => {
   }));
   mockPrisma.payment.update.mockImplementation(async ({ data }) => {
     currentPaymentStatus = data.status;
+    currentPaymentMetadata = data.metadata ?? currentPaymentMetadata;
     return { ...payment(currentPaymentStatus), ...data, transactionId: data.transactionId ?? null };
   });
   mockPrisma.payment.updateMany.mockImplementation(async ({ where, data }) => {
     if (currentPaymentStatus !== where.status) return { count: 0 };
     currentPaymentStatus = data.status;
+    currentPaymentMetadata = data.metadata ?? currentPaymentMetadata;
     return { count: 1 };
   });
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
@@ -201,8 +240,18 @@ beforeEach(() => {
     customer: { email: 'seeker@example.com' },
     meta: { userId, planId, subscriptionId: 'sub-1', planKey: 'PROFESSIONAL' },
   });
+  mockVerifyPaystackTransaction.mockResolvedValue({
+    id: 123,
+    reference,
+    status: 'success',
+    amount: 4900,
+    currency: 'NGN',
+    customer: { email: 'seeker@example.com' },
+    metadata: { userId, planId, subscriptionId: 'sub-1', planKey: 'PROFESSIONAL' },
+  });
   mockContractWebhook.mockResolvedValue({ contractProcessed: true });
   mockAssertFlutterwaveWebhookSignature.mockImplementation(() => undefined);
+  mockAssertPaystackWebhookSignature.mockImplementation(() => undefined);
 });
 
 const makeWebhookResponse = () => {
@@ -271,6 +320,54 @@ test('subscription payments route from stored payment identifiers and activate o
   expect(webhookEvents.get(eventKey).processedAt).toBeInstanceOf(Date);
 });
 
+test('Paystack subscription webhook verifies stored payment and activates exactly once', async () => {
+  currentPaymentProvider = 'PAYSTACK';
+  const result = await handlePaystackSubscriptionWebhook({ payload: paystackPayload() });
+
+  expect(result.duplicate).toBe(false);
+  expect(result.status).toBe('SUCCESSFUL');
+  expect(mockVerifyPaystackTransaction).toHaveBeenCalledWith(reference);
+  expect(mockVerifyFlutterwaveTransaction).not.toHaveBeenCalled();
+  expect(currentPaymentStatus).toBe('SUCCESSFUL');
+  expect(currentSubscriptionStatus).toBe('ACTIVE');
+  expect(webhookEvents.get('paystack-event-1:charge.success:success').provider).toBe('PAYSTACK');
+  expect(webhookEvents.get('paystack-event-1:charge.success:success').processedAt).toBeInstanceOf(Date);
+});
+
+test('verified Paystack payment received after checkout cancellation stays inactive and is flagged for manual review', async () => {
+  currentPaymentProvider = 'PAYSTACK';
+  currentPaymentStatus = 'CANCELLED';
+  currentSubscriptionStatus = 'CANCELLED';
+
+  const result = await handlePaystackSubscriptionWebhook({ payload: paystackPayload() });
+
+  expect(result.status).toBe('SUCCESSFUL');
+  expect(result.manualReviewRequired).toBe(true);
+  expect(mockVerifyPaystackTransaction).toHaveBeenCalledWith(reference);
+  expect(currentPaymentStatus).toBe('SUCCESSFUL');
+  expect(currentSubscriptionStatus).toBe('CANCELLED');
+  expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalled();
+});
+
+test('Paystack subscription webhook endpoint validates signature and routes by stored payment', async () => {
+  currentPaymentProvider = 'PAYSTACK';
+  const eventPayload = paystackPayload();
+  const rawBody = Buffer.from(JSON.stringify(eventPayload));
+  const response = makeWebhookResponse();
+  const next = jest.fn();
+
+  await paystackWithdrawalWebhook({
+    body: rawBody,
+    get: (header) => header === 'x-paystack-signature' ? 'valid-signature' : undefined,
+  }, response, next);
+
+  expect(mockAssertPaystackWebhookSignature).toHaveBeenCalledWith('valid-signature', rawBody);
+  expect(response.statusCode).toBe(200);
+  expect(response.body.data.status).toBe('SUCCESSFUL');
+  expect(currentSubscriptionStatus).toBe('ACTIVE');
+  expect(next).not.toHaveBeenCalled();
+});
+
 test('already-processed subscription webhook is acknowledged without a second activation', async () => {
   await handleFlutterwaveWebhook({ payload: payload() });
   const duplicate = await handleFlutterwaveWebhook({ payload: payload() });
@@ -330,11 +427,22 @@ test('stale successful webhook cannot reactivate a cancelled subscription paymen
     subscription: subscription('CANCELLED'),
   });
 
-  await expect(handleFlutterwaveWebhook({ payload: payload() })).rejects.toMatchObject({ status: 409 });
+  const result = await handleFlutterwaveWebhook({ payload: payload() });
 
-  expect(currentPaymentStatus).toBe('CANCELLED');
+  expect(result).toMatchObject({
+    status: 'SUCCESSFUL',
+    manualReviewRequired: true,
+  });
+  expect(currentPaymentStatus).toBe('SUCCESSFUL');
   expect(currentSubscriptionStatus).toBe('CANCELLED');
-  expect(mockPrisma.payment.update).not.toHaveBeenCalled();
+  expect(currentPaymentMetadata).toMatchObject({
+    manualReviewRequired: true,
+    manualReviewReason: 'PAYMENT_CONFIRMED_AFTER_SUBSCRIPTION_CANCELLATION',
+  });
+  expect(mockPrisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: 'payment-1', status: 'CANCELLED' },
+    data: expect.objectContaining({ status: 'SUCCESSFUL', transactionId: '123' }),
+  }));
   expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalled();
 });
 

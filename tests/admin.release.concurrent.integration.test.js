@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client';
 
 const testDatabaseUrl = process.env.PHASE4_TEST_DATABASE_URL;
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 
 if (!testDatabaseUrl) {
   test.skip('Set PHASE4_TEST_DATABASE_URL to run the PostgreSQL concurrency integration test', () => {});
@@ -20,9 +22,13 @@ if (!testDatabaseUrl) {
     freelance: 'e1000000-0000-4000-8000-000000000006',
     escrow: 'e1000000-0000-4000-8000-000000000007',
     wallet: 'e1000000-0000-4000-8000-000000000008',
+    admin: 'e1000000-0000-4000-8000-000000000009',
+    payment: 'e1000000-0000-4000-8000-000000000010',
   };
 
   beforeAll(async () => {
+    await database.payment.deleteMany({ where: { id: ids.payment } });
+    await database.financialAuditLog.deleteMany({ where: { entityId: ids.escrow } });
     await database.financialLedgerEntry.deleteMany({ where: { escrowId: ids.escrow } });
     await database.escrow.deleteMany({ where: { id: ids.escrow } });
     await database.freelanceContract.deleteMany({ where: { id: ids.freelance } });
@@ -30,12 +36,13 @@ if (!testDatabaseUrl) {
     await database.application.deleteMany({ where: { id: ids.application } });
     await database.wallet.deleteMany({ where: { id: ids.wallet } });
     await database.job.deleteMany({ where: { id: ids.job } });
-    await database.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker] } } });
+    await database.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker, ids.admin] } } });
 
     await database.user.createMany({
       data: [
         { id: ids.employer, email: 'phase4-integration-employer@example.test', passwordHash: 'not-used', firstName: 'Phase4', lastName: 'Employer', role: 'EMPLOYER' },
         { id: ids.seeker, email: 'phase4-integration-seeker@example.test', passwordHash: 'not-used', firstName: 'Phase4', lastName: 'Seeker', role: 'SEEKER' },
+        { id: ids.admin, email: 'phase4-integration-admin@example.test', passwordHash: 'not-used', firstName: 'Phase4', lastName: 'Admin', role: 'ADMIN' },
       ],
     });
     await database.job.create({
@@ -67,25 +74,43 @@ if (!testDatabaseUrl) {
         releaseEligibleAt: new Date(),
       },
     });
+    await database.payment.create({
+      data: {
+        id: ids.payment,
+        userId: ids.employer,
+        escrowId: ids.escrow,
+        providerReference: `phase4_release_${ids.payment}`,
+        transactionId: '987654321',
+        idempotencyKey: `phase4_release_${ids.payment}`,
+        amount: '100000.00',
+        currency: 'NGN',
+        status: 'SUCCESSFUL',
+        paymentType: 'CONTRACT_FUNDING',
+        provider: 'FLUTTERWAVE',
+        verifiedAt: new Date(),
+      },
+    });
     await database.wallet.create({ data: { id: ids.wallet, userId: ids.seeker, currency: 'NGN', availableBalance: '1000.00' } });
   });
 
   afterAll(async () => {
+    await database.financialAuditLog.deleteMany({ where: { entityId: ids.escrow } });
     await database.financialLedgerEntry.deleteMany({ where: { escrowId: ids.escrow } });
+    await database.payment.deleteMany({ where: { id: ids.payment } });
     await database.escrow.deleteMany({ where: { id: ids.escrow } });
     await database.freelanceContract.deleteMany({ where: { id: ids.freelance } });
     await database.contract.deleteMany({ where: { id: ids.contract } });
     await database.application.deleteMany({ where: { id: ids.application } });
     await database.wallet.deleteMany({ where: { id: ids.wallet } });
     await database.job.deleteMany({ where: { id: ids.job } });
-    await database.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker] } } });
+    await database.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker, ids.admin] } } });
     await database.$disconnect();
   });
 
   test('two simultaneous admin releases produce one wallet credit and one release', async () => {
     const results = await Promise.all([
-      releaseContractFunds(ids.contract),
-      releaseContractFunds(ids.contract),
+      releaseContractFunds(ids.contract, ids.admin),
+      releaseContractFunds(ids.contract, ids.admin),
     ]);
 
     expect(results.filter((result) => !result.alreadyReleased)).toHaveLength(1);
@@ -101,5 +126,8 @@ if (!testDatabaseUrl) {
     expect(escrow.status).toBe('RELEASED');
     expect(escrow.releasedAmount.toFixed(2)).toBe('95000.00');
     expect(ledgerEntries).toHaveLength(1);
+    const auditEntries = await database.financialAuditLog.findMany({ where: { entityId: ids.escrow } });
+    expect(auditEntries).toHaveLength(1);
+    expect(auditEntries[0]).toMatchObject({ actorUserId: ids.admin, action: 'RELEASED', toStatus: 'RELEASED' });
   });
 }

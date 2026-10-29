@@ -7,8 +7,13 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.PAYOUT_ENCRYPTION_KEY = 'test-withdrawal-snapshot-key';
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = 'false';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   $transaction: jest.fn(),
   withdrawal: { findUnique: jest.fn() },
   platformFeeConfiguration: { findUnique: jest.fn() },
@@ -18,9 +23,13 @@ const mockPrisma = {
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 
 const { default: app } = await import('../src/app.js');
+const { env } = await import('../src/config/env.js');
+const { decryptPayoutIdentifier, encryptPayoutIdentifier } = await import('../src/utils/payoutEncryption.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
 const otherSeekerId = '22222222-2222-4222-8222-222222222222';
+const employerId = '77777777-7777-4777-8777-777777777777';
+const adminId = '88888888-8888-4888-8888-888888888888';
 const walletId = '33333333-3333-4333-8333-333333333333';
 const payoutAccountId = '44444444-4444-4444-8444-444444444444';
 const otherPayoutAccountId = '55555555-5555-4555-8555-555555555555';
@@ -33,6 +42,13 @@ const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role }, proce
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 
+beforeEach(() => {
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === seekerId || where.id === otherSeekerId ? 'SEEKER' : where.id === adminId ? 'ADMIN' : 'EMPLOYER',
+  }));
+});
+
 const payoutAccount = {
   id: payoutAccountId,
   provider: 'FLUTTERWAVE',
@@ -40,7 +56,9 @@ const payoutAccount = {
   country: 'Nigeria',
   currency: 'NGN',
   bankCode: '044',
+  bankName: 'Bank One',
   accountName: 'Jane Doe',
+  encryptedAccountNumber: 'encrypted-payout-account',
   accountNumberLast4: '4280',
   verifiedAt: createdAt,
   updatedAt: createdAt,
@@ -103,6 +121,9 @@ const createTransaction = ({ wallet = {}, payoutAccount: transactionPayoutAccoun
 
 beforeEach(() => {
   jest.clearAllMocks();
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = false;
   configuredWithdrawalPercentage = '0.00';
   configurationUpdatedAt = new Date('2026-10-01T00:00:00.000Z');
   mockPrisma.withdrawal.findUnique.mockResolvedValue(null);
@@ -233,10 +254,8 @@ test('rejects a stored US/USD account when requesting a new withdrawal quote', a
     .get(`/api/seeker/payments/withdrawal-quote?${new URLSearchParams({ amount: '100.00', currency: 'USD', payoutAccountId })}`)
     .set('Authorization', `Bearer ${token()}`);
 
-  expect(response.status).toBe(404);
-  expect(mockPrisma.payoutAccount.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-    where: expect.objectContaining({ country: 'Nigeria', currency: 'NGN' }),
-  }));
+  expect(response.status).toBe(422);
+  expect(mockPrisma.payoutAccount.findFirst).not.toHaveBeenCalled();
 });
 
 test('rejects a client-supplied USD quote request for a Nigerian NGN account', async () => {
@@ -246,6 +265,34 @@ test('rejects a client-supplied USD quote request for a Nigerian NGN account', a
 
   expect(response.status).toBe(422);
 });
+
+test('read-only capability endpoint reports effective features after master-switch enforcement', async () => {
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+
+  const response = await request(app).get('/api/public/capabilities/freelance-payments');
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual({
+    enabled: false,
+    contractFundingEnabled: false,
+    escrowReleaseEnabled: false,
+    withdrawalsEnabled: false,
+    usdWithdrawalsEnabled: false,
+  });
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+});
+
+test('disabled withdrawal feature blocks new quotes before payout-account lookup', async () => {
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+
+  const response = await request(app)
+    .get(`/api/seeker/payments/withdrawal-quote?${new URLSearchParams({ amount: '100.00', currency: 'NGN', payoutAccountId })}`)
+    .set('Authorization', `Bearer ${token()}`);
+
+  expect(response.status).toBe(503);
+  expect(mockPrisma.payoutAccount.findFirst).not.toHaveBeenCalled();
+});
+
 describe('POST /api/seeker/payments/withdrawals', () => {
   test('reserves wallet funds, creates pending withdrawal, and writes reservation ledger', async () => {
     const { tx, rawQuery } = createTransaction();
@@ -273,9 +320,117 @@ describe('POST /api/seeker/payments/withdrawals', () => {
     expect(tx.withdrawal.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ walletId, seekerId, payoutAccountId, amount: new Prisma.Decimal('30000.00'), status: 'PENDING', idempotencyKey: 'withdrawal-1' }),
     }));
+    expect(tx.withdrawal.create.mock.calls[0][0].data).toMatchObject({
+      provider: 'FLUTTERWAVE',
+      payoutMethodSnapshot: 'BANK_ACCOUNT',
+      payoutCountrySnapshot: 'Nigeria',
+      bankCodeSnapshot: '044',
+      bankNameSnapshot: 'Bank One',
+      accountNameSnapshot: 'Jane Doe',
+      encryptedAccountNumberSnapshot: 'encrypted-payout-account',
+      accountNumberLast4Snapshot: '4280',
+      payoutAccountVerifiedAtSnapshot: createdAt,
+    });
     expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ entryType: 'WITHDRAWAL_RESERVED', walletId, withdrawalId, amount: new Prisma.Decimal('30000.00'), currency: 'NGN', balanceAfter: new Prisma.Decimal('70000.00'), idempotencyKey: 'withdrawal-1:reservation' }),
     }));
+  });
+
+    test('reserves US USD funds with an encrypted immutable transfer-metadata snapshot', async () => {
+      env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
+      const metadata = {
+        route: 'INTERNATIONAL_USD',
+        routing_number: '101019644',
+        swift_code: 'IRVTUS3N',
+        bank_name: 'BANK OF AMERICA, N.A.',
+        account_type: 'checking',
+        beneficiary_address: '4 Newton Street, San Francisco',
+        postal_code: '94105',
+        street_number: '4',
+        street_name: 'Newton Street',
+        city: 'San Francisco',
+      };
+      const usAccount = {
+        ...payoutAccount,
+        country: 'United States',
+        currency: 'USD',
+        bankCode: null,
+        bankName: 'BANK OF AMERICA, N.A.',
+        accountName: 'Jane Doe',
+        verifiedAt: null,
+        encryptedPayoutMetadata: encryptPayoutIdentifier(JSON.stringify(metadata)),
+      };
+      const { tx } = createTransaction({
+        wallet: { currency: 'USD', availableBalance: '2000.00' },
+        payoutAccount: usAccount,
+        createWithdrawal: { ...withdrawal, currency: 'USD', amount: new Prisma.Decimal('1000.00') },
+      });
+      mockPrisma.payoutAccount.findFirst.mockResolvedValue(usAccount);
+      mockPrisma.$transaction.mockImplementation((callback) => callback(tx));
+      const quoteReference = await getQuoteReference('1000.00', { currency: 'USD' });
+
+      const response = await request(app)
+        .post('/api/seeker/payments/withdrawals')
+        .set('Authorization', ['Bearer', token('SEEKER', seekerId)].join(' '))
+        .set('Idempotency-Key', 'us-usd-reservation-snapshot')
+        .send({ quoteReference });
+
+      expect(response.status).toBe(201);
+      const saved = tx.withdrawal.create.mock.calls[0][0].data;
+      expect(saved).toMatchObject({
+        currency: 'USD',
+        payoutCountrySnapshot: 'United States',
+        bankCodeSnapshot: null,
+        bankNameSnapshot: 'BANK OF AMERICA, N.A.',
+        accountNameSnapshot: 'Jane Doe',
+      });
+      expect(saved.encryptedTransferMetadataSnapshot).not.toContain('101019644');
+      expect(JSON.parse(decryptPayoutIdentifier(saved.encryptedTransferMetadataSnapshot))).toEqual([metadata]);
+      expect(tx.wallet.update).toHaveBeenCalled();
+      expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ entryType: 'WITHDRAWAL_RESERVED', currency: 'USD' }),
+      }));
+    });
+  test('disabled withdrawal feature blocks a valid request before reserving funds', async () => {
+    const quoteReference = await getQuoteReference('30000.00');
+    env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+
+    const response = await request(app)
+      .post('/api/seeker/payments/withdrawals')
+      .set('Authorization', `Bearer ${token()}`)
+      .set('Idempotency-Key', 'feature-disabled-withdrawal')
+      .send({ quoteReference });
+
+    expect(response.status).toBe(503);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    expect(mockPrisma.withdrawal.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('direct admin transfer-execution API is blocked while withdrawal features are disabled', async () => {
+    env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+    mockPrisma.withdrawal.findUnique.mockResolvedValue({
+      id: withdrawalId,
+      status: 'PENDING',
+      payoutAccount: { provider: 'FLUTTERWAVE' },
+    });
+
+    const response = await request(app)
+      .post(`/api/admin/withdrawals/${withdrawalId}/execute`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(503);
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('ordinary seeker cannot invoke the admin Flutterwave withdrawal recovery route', async () => {
+    const response = await request(app)
+      .post(`/api/admin/withdrawals/${withdrawalId}/recover-flutterwave-transfer`)
+      .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+      .send({ transferId: '12345' });
+
+    expect(response.status).toBe(403);
+    expect(mockPrisma.withdrawal.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
   test('rejects a previously signed USD quote without reserving an NGN wallet', async () => {
@@ -351,7 +506,7 @@ describe('POST /api/seeker/payments/withdrawals', () => {
       .set('Idempotency-Key', 'old-usd-account-quote')
       .send({ quoteReference });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(422);
     expect(tx.wallet.update).not.toHaveBeenCalled();
     expect(tx.withdrawal.create).not.toHaveBeenCalled();
     expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
@@ -630,18 +785,16 @@ describe('POST /api/seeker/payments/withdrawals', () => {
   ])('rejects a %s payout account', async (_label, accountState) => {
     const quoteReference = await getQuoteReference('10.00');
     const { tx } = createTransaction();
-    tx.payoutAccount.findFirst.mockResolvedValue(null);
     tx.payoutAccount.findFirst.mockImplementation(({ where }) => {
       expect(where).toEqual(expect.objectContaining({
         userId: seekerId,
         provider: 'FLUTTERWAVE',
         payoutMethod: 'BANK_ACCOUNT',
-        country: 'Nigeria',
-        currency: 'NGN',
-        verifiedAt: { not: null },
         disabledAt: null,
       }));
-      return Promise.resolve(null);
+      return Promise.resolve(accountState.disabledAt
+        ? null
+        : { ...payoutAccount, ...accountState });
     });
     mockPrisma.$transaction.mockImplementation((callback) => callback(tx));
 
@@ -707,9 +860,10 @@ describe('POST /api/seeker/payments/withdrawals', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('rejects %s role', async (role) => {
+    const subject = role === 'ADMIN' ? adminId : employerId;
     const response = await request(app)
       .post('/api/seeker/payments/withdrawals')
-      .set('Authorization', `Bearer ${token(role)}`)
+      .set('Authorization', ['Bearer', token(role, subject)].join(' '))
       .set('Idempotency-Key', 'role-check')
       .send({ quoteReference: 'unavailable' });
 

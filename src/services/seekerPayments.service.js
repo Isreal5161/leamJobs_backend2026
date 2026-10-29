@@ -14,14 +14,14 @@ const pageResult = (items, limit, mapItem) => {
   };
 };
 
-const walletForSeeker = (seekerId) => prisma.wallet.findUnique({
-  where: { userId: seekerId },
+const walletForSeeker = (seekerId, currency = 'NGN') => prisma.wallet.findUnique({
+  where: { userId_currency: { userId: seekerId, currency } },
   select: { id: true, currency: true, availableBalance: true, pendingWithdrawalBalance: true },
 });
 
-const sumLedger = async (walletId, entryType) => {
+const sumLedger = async (walletId, currency, entryType) => {
   const result = await prisma.financialLedgerEntry.aggregate({
-    where: { walletId, entryType },
+    where: { walletId, currency, entryType },
     _sum: { amount: true },
   });
   return decimalToString(result._sum.amount);
@@ -40,31 +40,39 @@ const sumPendingEarnings = async (seekerId, currency) => {
 };
 
 export const getSeekerPaymentSummary = async (seekerId) => {
-  const wallet = await walletForSeeker(seekerId);
-  if (!wallet) {
+  const wallets = await prisma.wallet.findMany({
+    where: { userId: seekerId },
+    orderBy: { currency: 'asc' },
+    select: { id: true, currency: true, availableBalance: true, pendingWithdrawalBalance: true },
+  });
+  const walletSummaries = await Promise.all(wallets.map(async (wallet) => {
+    const [pendingEarnings, totalEarnings, totalWithdrawn] = await Promise.all([
+      sumPendingEarnings(seekerId, wallet.currency),
+      sumLedger(wallet.id, wallet.currency, EARNINGS_ENTRY_TYPE),
+      sumLedger(wallet.id, wallet.currency, WITHDRAWAL_ENTRY_TYPE),
+    ]);
     return {
-      currency: null,
-      availableBalance: '0.00',
-      pendingWithdrawalBalance: '0.00',
-      pendingEarnings: '0.00',
-      totalEarnings: '0.00',
-      totalWithdrawn: '0.00',
+      currency: wallet.currency,
+      availableBalance: decimalToString(wallet.availableBalance),
+      pendingWithdrawalBalance: decimalToString(wallet.pendingWithdrawalBalance),
+      pendingEarnings,
+      totalEarnings,
+      totalWithdrawn,
     };
-  }
-
-  const [pendingEarnings, totalEarnings, totalWithdrawn] = await Promise.all([
-    sumPendingEarnings(seekerId, wallet.currency),
-    sumLedger(wallet.id, EARNINGS_ENTRY_TYPE),
-    sumLedger(wallet.id, WITHDRAWAL_ENTRY_TYPE),
-  ]);
+  }));
+  const legacySummary = walletSummaries.find(({ currency }) => currency === 'NGN') ?? {
+    currency: null,
+    availableBalance: '0.00',
+    pendingWithdrawalBalance: '0.00',
+    pendingEarnings: '0.00',
+    totalEarnings: '0.00',
+    totalWithdrawn: '0.00',
+  };
 
   return {
-    currency: wallet.currency,
-    availableBalance: decimalToString(wallet.availableBalance),
-    pendingWithdrawalBalance: decimalToString(wallet.pendingWithdrawalBalance),
-    pendingEarnings,
-    totalEarnings,
-    totalWithdrawn,
+    ...legacySummary,
+    wallets: walletSummaries,
+    conversionEnabled: false,
   };
 };
 
@@ -103,12 +111,12 @@ const mapPaymentLedger = (entry) => ({
   date: entry.createdAt,
 });
 
-export const getSeekerPayments = async (seekerId, { limit, cursor }) => {
-  const wallet = await walletForSeeker(seekerId);
+export const getSeekerPayments = async (seekerId, { limit, cursor, currency = 'NGN' }) => {
+  const wallet = await walletForSeeker(seekerId, currency);
   if (!wallet) return { items: [], nextCursor: null };
 
   const entries = await prisma.financialLedgerEntry.findMany({
-    where: { walletId: wallet.id, entryType: EARNINGS_ENTRY_TYPE },
+    where: { walletId: wallet.id, currency: wallet.currency, entryType: EARNINGS_ENTRY_TYPE },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -138,12 +146,12 @@ const mapTransaction = (entry) => ({
   balanceAfter: entry.balanceAfter === null ? null : decimalToString(entry.balanceAfter),
 });
 
-export const getSeekerTransactions = async (seekerId, { limit, cursor }) => {
-  const wallet = await walletForSeeker(seekerId);
+export const getSeekerTransactions = async (seekerId, { limit, cursor, currency = 'NGN' }) => {
+  const wallet = await walletForSeeker(seekerId, currency);
   if (!wallet) return { items: [], nextCursor: null };
 
   const entries = await prisma.financialLedgerEntry.findMany({
-    where: { walletId: wallet.id },
+    where: { walletId: wallet.id, currency: wallet.currency },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -188,9 +196,9 @@ const mapWithdrawal = (withdrawal) => ({
   } : null,
 });
 
-export const getSeekerWithdrawals = async (seekerId, { limit, cursor }) => {
+export const getSeekerWithdrawals = async (seekerId, { limit, cursor, currency }) => {
   const withdrawals = await prisma.withdrawal.findMany({
-    where: { seekerId },
+    where: { seekerId, ...(currency ? { currency } : {}) },
     orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

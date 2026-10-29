@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { jest } from '@jest/globals';
 import { Prisma } from '@prisma/client';
+import jwt from 'jsonwebtoken';
 import request from 'supertest';
 
 process.env.NODE_ENV = 'test';
@@ -10,6 +11,8 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 process.env.PAYSTACK_SECRET_KEY = 'paystack-test-secret';
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'false';
+process.env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = 'true';
 
 const contractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const employerId = '11111111-1111-4111-8111-111111111111';
@@ -84,6 +87,7 @@ const fullContract = ({ escrowStatus = 'UNFUNDED' } = {}) => ({
 });
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   contract: { findFirst: jest.fn(), findUnique: jest.fn() },
   freelanceContract: { update: jest.fn() },
   payment: { findUnique: jest.fn(), update: jest.fn() },
@@ -98,6 +102,7 @@ jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrism
 const { handleFlutterwaveWebhook, handlePaystackContractWebhook, processPendingContractWebhookEvents } = await import('../src/services/contractPayment.service.js');
 const { assertFlutterwaveWebhookSignature } = await import('../src/services/flutterwave.service.js');
 const { default: app } = await import('../src/app.js');
+const { env } = await import('../src/config/env.js');
 
 const webhookPayload = (overrides = {}) => ({
   id: 'webhook-event-1',
@@ -112,6 +117,13 @@ const webhookPayload = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+  env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    id: where.id,
+    isActive: true,
+    role: where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
   webhookEvents.clear();
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: escrowId }]);
@@ -128,6 +140,7 @@ beforeEach(() => {
     webhookEvents.set(data.providerEventId, event);
     return event;
   });
+
   mockPrisma.providerWebhookEvent.findUnique.mockImplementation(async ({ where }) => (
     webhookEvents.get(where.provider_providerEventId.providerEventId) ?? null
   ));
@@ -173,6 +186,24 @@ beforeEach(() => {
   });
 });
 
+test('direct contract-payment API is blocked before creating a payment or calling a provider', async () => {
+  const employerToken = jwt.sign({ sub: employerId, role: 'EMPLOYER' }, process.env.JWT_SECRET, {
+    algorithm: 'HS256',
+    issuer: process.env.JWT_ISSUER,
+    audience: process.env.JWT_AUDIENCE,
+    expiresIn: '1h',
+  });
+
+  const response = await request(app)
+    .post(`/api/employer/contracts/${contractId}/payment`)
+    .set('Authorization', `Bearer ${employerToken}`)
+    .send({});
+
+  expect(response.status).toBe(503);
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  expect(global.fetch).not.toHaveBeenCalled();
+});
+
 const paystackWebhookPayload = (transactionId = 987654) => ({
   event: 'charge.success',
   data: { id: transactionId, reference: providerReference },
@@ -202,7 +233,8 @@ test('invalid webhook signature is rejected by the real signature verifier', () 
   expect(() => assertFlutterwaveWebhookSignature('wrong-secret')).toThrow('Invalid Flutterwave webhook signature');
 });
 
-test('valid webhook is accepted and funds escrow once', async () => {
+test('valid incoming webhook reconciles and funds escrow with freelance features disabled', async () => {
+  expect(env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED).toBe(false);
   assertFlutterwaveWebhookSignature('webhook-secret');
   const result = await handleFlutterwaveWebhook({ payload: webhookPayload() });
   expect(result.duplicate).toBe(false);

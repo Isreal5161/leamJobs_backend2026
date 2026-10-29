@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   job: {
     findMany: jest.fn(),
     count: jest.fn(),
@@ -91,6 +92,7 @@ const jobRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
   mockPrisma.job.findMany.mockResolvedValue([]);
   mockPrisma.job.count.mockResolvedValue(0);
   mockPrisma.job.findFirst.mockResolvedValue(null);
@@ -118,6 +120,7 @@ describe('Employer Jobs authentication and ownership', () => {
   });
 
   test.each(['SEEKER', 'ADMIN'])('%s cannot access Employer Jobs', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .get('/api/employer/jobs')
       .set('Authorization', `Bearer ${token(role, 'restricted-user')}`);

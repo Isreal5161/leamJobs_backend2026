@@ -55,8 +55,8 @@ const requestFlutterwave = async (path, options = {}) => {
         ...(options.headers ?? {}),
       },
     });
-  } catch (error) {
-    throw new FlutterwaveRequestError(error instanceof Error ? error.message : 'Flutterwave request failed', { outcomeUnknown: true });
+  } catch {
+    throw new FlutterwaveRequestError('Flutterwave request outcome is unknown and requires reconciliation', { outcomeUnknown: true });
   }
 
   let payload;
@@ -76,13 +76,18 @@ const requestFlutterwave = async (path, options = {}) => {
         : providerRejected || (response.status >= 400 && response.status < 500)
           ? 422
           : 502;
-    throw new FlutterwaveRequestError(payload?.message || 'Flutterwave request failed', {
+    throw new FlutterwaveRequestError(
+      providerRejected
+        ? 'Flutterwave declined this operation. Contact support if the issue persists.'
+        : 'Flutterwave is currently unable to process this operation.',
+      {
       outcomeUnknown: unknownOutcome,
       status,
       originalHttpStatus: response.status,
       providerStatus: safeProviderStatus(payload?.status),
       providerCode: safeProviderCode(payload?.code),
-    });
+      },
+    );
   }
   return payload;
 };
@@ -148,9 +153,20 @@ export const createFlutterwaveTransfer = async ({
   narration,
   currency = 'NGN',
   debitCurrency = currency,
+  meta,
 }) => {
-  if (currency !== 'NGN' || debitCurrency !== 'NGN') {
-    throw new FlutterwaveRequestError('Flutterwave withdrawals currently support NGN only', { status: 422 });
+  if (!['NGN', 'USD'].includes(currency) || debitCurrency !== currency) {
+    throw new FlutterwaveRequestError('Flutterwave withdrawals require a supported matching transfer and debit currency', { status: 422 });
+  }
+  if (currency === 'USD') {
+    const numericAmount = Number(amount);
+    const requiredMetadata = ['routing_number', 'swift_code', 'bank_name', 'account_type', 'beneficiary_address', 'postal_code', 'street_number', 'street_name'];
+    if (!Number.isSafeInteger(numericAmount) || numericAmount <= 0
+      || !Array.isArray(meta) || meta.length !== 1
+      || requiredMetadata.some((key) => !String(meta[0]?.[key] ?? '').trim())
+      || !['checking', 'depository'].includes(String(meta[0]?.account_type ?? '').toLowerCase())) {
+      throw new FlutterwaveRequestError('Flutterwave USD transfers require a whole-unit amount and complete beneficiary banking metadata', { status: 422 });
+    }
   }
   const payload = await requestFlutterwave('/transfers', {
     method: 'POST',
@@ -163,6 +179,7 @@ export const createFlutterwaveTransfer = async ({
       debit_currency: debitCurrency,
       reference,
       narration,
+      ...(meta ? { meta } : {}),
     }),
   });
   if (!payload?.data || payload.data.id === undefined || payload.data.id === null || !payload.data.reference) {

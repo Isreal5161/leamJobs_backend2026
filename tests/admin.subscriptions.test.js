@@ -9,6 +9,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const model = () => ({ findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn(), groupBy: jest.fn(), create: jest.fn(), update: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() });
 const mockPrisma = {
+  user: model(),
   subscriptionPlan: model(), entitlement: model(), planEntitlement: model(), subscription: model(), payment: model(),
   subscriptionEvent: model(),
   subscriptionSettings: model(),
@@ -29,6 +30,10 @@ const plan = (key = 'PROFESSIONAL') => ({ id: planId, key, displayName: key, des
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
   mockPrisma.subscriptionPlan.findMany.mockResolvedValue([plan()]);
   mockPrisma.subscriptionPlan.findUnique.mockResolvedValue(plan());
   mockPrisma.entitlement.findMany.mockResolvedValue([{ id: 'entitlement-1', key: 'PROFILE_ANALYTICS' }]);
@@ -48,6 +53,7 @@ test('protects all Admin Subscription endpoints', async () => {
   expect((await request(app).get('/api/admin/subscriptions/summary')).status).toBe(401);
   expect((await request(app).get('/api/admin/subscription-trial-settings')).status).toBe(401);
   for (const role of ['SEEKER', 'EMPLOYER']) {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     expect((await request(app).get('/api/admin/subscriptions').set('Authorization', `Bearer ${token(role, seekerId)}`)).status).toBe(403);
     expect((await request(app).patch('/api/admin/subscription-trial-settings').set('Authorization', `Bearer ${token(role, seekerId)}`).send({ trialEnabled: false, trialDurationDays: 7, trialPlanKey: 'PREMIUM' })).status).toBe(403);
   }

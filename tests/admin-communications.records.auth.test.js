@@ -7,7 +7,16 @@ process.env.JWT_SECRET = 'records-test-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: {}, checkDatabaseHealth: jest.fn() }));
+const prisma = {
+  user: {
+    findUnique: jest.fn(async ({ where }) => ({
+      isActive: true,
+      role: where.id.startsWith('seeker-') ? 'SEEKER' : 'EMPLOYER',
+    })),
+  },
+};
+
+jest.unstable_mockModule('../src/config/database.js', () => ({ prisma, checkDatabaseHealth: jest.fn() }));
 
 const { default: app } = await import('../src/app.js');
 

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 
 const testDatabaseUrl = process.env.DISPUTE_RELEASE_TEST_DATABASE_URL;
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 
 if (!testDatabaseUrl) {
   test.skip('Set DISPUTE_RELEASE_TEST_DATABASE_URL to a dedicated local, migrated PostgreSQL test database', () => {});
@@ -43,6 +45,8 @@ if (!testDatabaseUrl) {
     return {
       employer: randomUUID(),
       seeker: randomUUID(),
+      admin: randomUUID(),
+      payment: randomUUID(),
       job: randomUUID(),
       application: randomUUID(),
       contract: randomUUID(),
@@ -74,6 +78,14 @@ if (!testDatabaseUrl) {
             firstName: 'Concurrency',
             lastName: 'Seeker',
             role: 'SEEKER',
+          },
+          {
+            id: ids.admin,
+            email: `dispute-release-admin-${ids.emailSuffix}@example.test`,
+            passwordHash: 'integration-test-only',
+            firstName: 'Concurrency',
+            lastName: 'Admin',
+            role: 'ADMIN',
           },
         ],
       });
@@ -134,6 +146,22 @@ if (!testDatabaseUrl) {
           releaseEligibleAt: new Date(),
         },
       });
+      await transaction.payment.create({
+        data: {
+          id: ids.payment,
+          userId: ids.employer,
+          escrowId: ids.escrow,
+          providerReference: `dispute_release_${ids.payment}`,
+          transactionId: `flw_${ids.payment}`,
+          idempotencyKey: `dispute_release_${ids.payment}`,
+          amount: '100000.00',
+          currency: 'NGN',
+          status: 'SUCCESSFUL',
+          paymentType: 'CONTRACT_FUNDING',
+          provider: 'FLUTTERWAVE',
+          verifiedAt: new Date(),
+        },
+      });
       await transaction.wallet.create({
         data: {
           id: ids.wallet,
@@ -149,14 +177,16 @@ if (!testDatabaseUrl) {
   const cleanupFixture = async (ids) => {
     await database.$transaction(async (transaction) => {
       await transaction.dispute.deleteMany({ where: { contractId: ids.contract } });
+      await transaction.financialAuditLog.deleteMany({ where: { entityId: ids.escrow } });
       await transaction.financialLedgerEntry.deleteMany({ where: { escrowId: ids.escrow } });
+      await transaction.payment.deleteMany({ where: { id: ids.payment } });
       await transaction.escrow.deleteMany({ where: { id: ids.escrow } });
       await transaction.freelanceContract.deleteMany({ where: { id: ids.freelance } });
       await transaction.contract.deleteMany({ where: { id: ids.contract } });
       await transaction.application.deleteMany({ where: { id: ids.application } });
       await transaction.wallet.deleteMany({ where: { id: ids.wallet } });
       await transaction.job.deleteMany({ where: { id: ids.job } });
-      await transaction.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker] } } });
+      await transaction.user.deleteMany({ where: { id: { in: [ids.employer, ids.seeker, ids.admin] } } });
     });
   };
 
@@ -207,7 +237,7 @@ if (!testDatabaseUrl) {
           role: 'EMPLOYER',
           reason: 'Integration test dispute for concurrency verification.',
         }),
-        release: () => releaseContractFunds(ids.contract),
+        release: () => releaseContractFunds(ids.contract, ids.admin),
       };
       const secondOperation = firstOperation === 'dispute' ? 'release' : 'dispute';
 
@@ -337,7 +367,7 @@ if (!testDatabaseUrl) {
       },
     });
 
-    await expect(releaseContractFunds(ids.contract)).rejects.toMatchObject({ code: 'P2002' });
+    await expect(releaseContractFunds(ids.contract, ids.admin)).rejects.toMatchObject({ code: 'P2002' });
 
     const [escrow, wallet, ledger] = await Promise.all([
       database.escrow.findUnique({ where: { id: ids.escrow } }),

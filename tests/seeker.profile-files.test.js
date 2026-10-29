@@ -12,6 +12,7 @@ process.env.R2_ACCESS_KEY_ID = 'test-key-id';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   seekerProfile: {
     findUnique: jest.fn(),
     upsert: jest.fn(),
@@ -49,6 +50,7 @@ const createToken = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: sub
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockReadObject.mockResolvedValue(Buffer.from('profile-picture'));
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ profilePictureKey: null, resumeObjectKey: null });
   mockPrisma.seekerProfile.upsert.mockResolvedValue({
@@ -164,6 +166,7 @@ describe('seeker profile file endpoints', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('forbids %s from uploading a seeker file', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .post('/api/seeker/profile/resume')
       .set('Authorization', `Bearer ${createToken(role)}`)

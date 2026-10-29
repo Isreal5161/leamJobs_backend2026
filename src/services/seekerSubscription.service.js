@@ -3,9 +3,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './flutterwave.service.js';
+import { initializePaystackPayment, verifyPaystackTransaction } from './paystack.service.js';
 import { recordSubscriptionEvent } from './subscriptionFoundation.service.js';
 import { addBillingInterval, getEffectiveSubscriptionStatus, reconcileExpiredSubscriptionsForUser } from './subscriptionLifecycle.service.js';
 import { createNotification } from './notification.service.js';
+import { assertCollectionCurrencyEnabled } from '../config/walletCurrencies.js';
 import { getActiveTrialForUser, getAiUsageState, resolveEffectiveEntitlements, startFreeTrial } from './subscriptionEntitlement.service.js';
 
 export class SeekerSubscriptionError extends Error {
@@ -199,6 +201,18 @@ export const getSeekerSubscriptionState = async (userId) => {
 
 export const initializeSeekerSubscriptionCheckout = async ({ userId, planId, idempotencyKey }) => {
   const plan = await ensureSeekerPlan(planId);
+  assertCollectionCurrencyEnabled(plan.currency);
+  const frontendBaseUrl = env.FRONTEND_URL_PROD || env.FRONTEND_URL;
+  if (!frontendBaseUrl) {
+    throw new SeekerSubscriptionError('Subscription payment return URL is not configured', 503);
+  }
+  let callbackUrl;
+  try {
+    callbackUrl = new URL('/seeker/subscription/payment-result', frontendBaseUrl);
+    callbackUrl.searchParams.set('plan', plan.key);
+  } catch {
+    throw new SeekerSubscriptionError('Subscription payment return URL is invalid', 503);
+  }
   await reconcileExpiredSubscriptionsForUser(userId);
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, firstName: true, lastName: true } });
   if (!user) {
@@ -316,16 +330,28 @@ export const initializeSeekerSubscriptionCheckout = async ({ userId, planId, ide
   }
 
   try {
-    const checkout = await initializeFlutterwavePayment({
-      amount: plan.price.toFixed(2),
-      currency: plan.currency,
-      email: user.email,
-      customerName: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || undefined,
-      txRef: payment.providerReference,
-      meta: { userId, planId: plan.id, planKey: plan.key, subscriptionId: subscription.id },
-      redirectUrl: `${env.FRONTEND_URL_PROD || env.FRONTEND_URL}/seeker/subscription/payment-result?plan=${encodeURIComponent(plan.key)}`,
-      title: `LeamJobs ${plan.displayName} subscription`,
-    });
+    let checkout;
+    if (payment.provider === 'PAYSTACK') {
+      checkout = await initializePaystackPayment({
+        amount: plan.price.toFixed(2),
+        currency: plan.currency,
+        email: user.email,
+        reference: payment.providerReference,
+        callbackUrl: callbackUrl.toString(),
+        metadata: { userId, planId: plan.id, planKey: plan.key, subscriptionId: subscription.id },
+      });
+    } else {
+      checkout = await initializeFlutterwavePayment({
+        amount: plan.price.toFixed(2),
+        currency: plan.currency,
+        email: user.email,
+        customerName: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || undefined,
+        txRef: payment.providerReference,
+        meta: { userId, planId: plan.id, planKey: plan.key, subscriptionId: subscription.id },
+        redirectUrl: `${env.FRONTEND_URL_PROD || env.FRONTEND_URL}/seeker/subscription/payment-result?plan=${encodeURIComponent(plan.key)}`,
+        title: `LeamJobs ${plan.displayName} subscription`,
+      });
+    }
 
     const updatedPayment = await prisma.payment.update({
       where: { id: payment.id },
@@ -344,6 +370,9 @@ export const initializeSeekerSubscriptionCheckout = async ({ userId, planId, ide
       subscription: updatedSubscription ? serializeSubscription({ ...updatedSubscription, payments: [updatedPayment] }) : null,
     };
   } catch (error) {
+    if (error?.outcomeUnknown) {
+      return responseForExisting({ ...payment, status: 'PROCESSING' }, subscription);
+    }
     await prisma.$transaction(async (transaction) => {
       const failed = await transaction.payment.updateMany({
         where: { id: payment.id, status: 'PROCESSING' },
@@ -364,7 +393,7 @@ export const cancelSeekerSubscriptionPayment = async ({ userId, providerReferenc
       userId,
       providerReference,
       paymentType: 'SUBSCRIPTION',
-      provider: 'FLUTTERWAVE',
+      provider: { in: ['FLUTTERWAVE', 'PAYSTACK'] },
     };
     const paymentSelectForCancellation = {
       id: true,
@@ -427,7 +456,7 @@ export const cancelSeekerSubscriptionPayment = async ({ userId, providerReferenc
         subscriptionId: payment.subscriptionId,
         providerReference,
         paymentType: 'SUBSCRIPTION',
-        provider: 'FLUTTERWAVE',
+        provider: payment.provider,
         status: 'PENDING',
       },
       data: { status: 'CANCELLED' },
@@ -459,9 +488,10 @@ export const verifySeekerSubscriptionPayment = async ({
   transactionId,
   returnProviderFailure = false,
   returnFailureState = false,
+  recordCancelledPaymentForReview = false,
 }) => {
   if (!providerReference && !transactionId) {
-    throw new SeekerSubscriptionError('A Flutterwave transaction reference is required', 400);
+    throw new SeekerSubscriptionError('A payment provider reference or transaction ID is required', 400);
   }
 
   await reconcileExpiredSubscriptionsForUser(userId);
@@ -494,7 +524,7 @@ export const verifySeekerSubscriptionPayment = async ({
   if (!payment) {
     throw new SeekerSubscriptionError('Subscription payment record not found', 404);
   }
-  if (payment.provider !== 'FLUTTERWAVE') {
+  if (!['FLUTTERWAVE', 'PAYSTACK'].includes(payment.provider)) {
     throw new SeekerSubscriptionError('Unsupported subscription payment provider', 422);
   }
 
@@ -518,7 +548,12 @@ export const verifySeekerSubscriptionPayment = async ({
   }
 
   if (payment.status === 'SUCCESSFUL') {
-    return { payment: serializePayment(payment), subscription: subscription ? serializeSubscription(subscription) : null, alreadyVerified: true };
+    return {
+      payment: serializePayment(payment),
+      subscription: subscription ? serializeSubscription(subscription) : null,
+      alreadyVerified: true,
+      ...(payment.metadata?.manualReviewRequired ? { manualReviewRequired: true } : {}),
+    };
   }
   if (returnProviderFailure && payment.status === 'FAILED' && subscription.status === 'FAILED') {
     return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), failed: true };
@@ -531,24 +566,32 @@ export const verifySeekerSubscriptionPayment = async ({
       failureType: payment.metadata?.providerStatus === 'cancelled' ? 'cancelled' : 'failed',
     };
   }
-  if (payment.status === 'PROCESSING') {
+  if (payment.status === 'PROCESSING' && payment.provider !== 'PAYSTACK') {
     return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
   }
-  if (payment.status !== 'PENDING' || subscription.status !== 'PENDING') {
+  const paymentCanBeVerified = payment.status === 'PENDING'
+    || (payment.provider === 'PAYSTACK' && payment.status === 'PROCESSING');
+  const cancelledPaymentForReview = recordCancelledPaymentForReview
+    && payment.status === 'CANCELLED'
+    && subscription.status === 'CANCELLED';
+  if ((!paymentCanBeVerified && !cancelledPaymentForReview)
+    || (!cancelledPaymentForReview && subscription.status !== 'PENDING')) {
     throw new SeekerSubscriptionError('This payment is no longer awaiting verification', 409);
   }
 
   const markVerificationFailure = async ({ reason, providerStatus, resolvedTransactionId, metadata = {} }) => {
     const transitioned = await prisma.$transaction(async (transaction) => {
       const currentPayment = await transaction.payment.findUnique({ where: { id: payment.id }, select: { status: true, subscriptionId: true, metadata: true } });
-      if (!currentPayment || currentPayment.status !== 'PENDING') return false;
+      const canTransitionPayment = currentPayment?.status === 'PENDING'
+        || (payment.provider === 'PAYSTACK' && currentPayment?.status === 'PROCESSING');
+      if (!canTransitionPayment) return false;
       if (currentPayment.subscriptionId) {
         const currentSubscription = await transaction.subscription.findUnique({ where: { id: currentPayment.subscriptionId }, select: { status: true } });
         if (!currentSubscription || currentSubscription.status !== 'PENDING') return false;
       }
 
       const updatedPayment = await transaction.payment.updateMany({
-        where: { id: payment.id, status: 'PENDING' },
+        where: { id: payment.id, status: currentPayment.status },
         data: { status: 'FAILED', ...(resolvedTransactionId ? { transactionId: resolvedTransactionId } : {}), verifiedAt: new Date(), metadata: { ...(currentPayment.metadata ?? {}), ...metadata, verificationFailure: reason, ...(providerStatus ? { providerStatus } : {}) } },
       });
       if (updatedPayment.count !== 1) return false;
@@ -568,37 +611,50 @@ export const verifySeekerSubscriptionPayment = async ({
   };
 
   const resolvedTransactionId = transactionId ?? payment.transactionId;
-  if (!resolvedTransactionId) {
+  if (payment.provider === 'FLUTTERWAVE' && !resolvedTransactionId) {
     return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
   }
-  if (!/^[0-9]+$/.test(String(resolvedTransactionId))) {
-    throw new SeekerSubscriptionError('A valid Flutterwave transaction ID is required', 400);
+  if (resolvedTransactionId && !/^[0-9]+$/.test(String(resolvedTransactionId))) {
+    throw new SeekerSubscriptionError('A valid provider transaction ID is required', 400);
   }
 
   if (!providerPayment) {
     try {
-      providerPayment = await verifyFlutterwaveTransaction(String(resolvedTransactionId));
+      providerPayment = payment.provider === 'PAYSTACK'
+        ? await verifyPaystackTransaction(payment.providerReference)
+        : await verifyFlutterwaveTransaction(String(resolvedTransactionId));
     } catch {
       throw new SeekerSubscriptionError('Payment confirmation is temporarily unavailable. Please check again shortly.', 503);
     }
   }
 
-  const txRef = String(providerPayment.tx_ref || providerPayment.reference || '');
-  const returnedTransactionId = providerPayment.id ?? providerPayment.transaction_id ?? providerPayment.flw_ref;
+  const txRef = String(payment.provider === 'PAYSTACK'
+    ? providerPayment.reference ?? ''
+    : providerPayment.tx_ref || providerPayment.reference || '');
+  const returnedTransactionId = payment.provider === 'PAYSTACK'
+    ? providerPayment.id
+    : providerPayment.id ?? providerPayment.transaction_id ?? providerPayment.flw_ref;
   if (txRef !== payment.providerReference) {
     console.warn('Subscription payment verification mismatch', { paymentId: payment.id, reason: 'provider_reference_mismatch' });
-    throw new SeekerSubscriptionError('Flutterwave could not match this transaction to the payment', 422);
+    throw new SeekerSubscriptionError('The payment provider could not match this transaction to the payment', 422);
   }
-  if (returnedTransactionId !== undefined && String(returnedTransactionId) !== String(resolvedTransactionId)) {
+  if (resolvedTransactionId && returnedTransactionId !== undefined && String(returnedTransactionId) !== String(resolvedTransactionId)) {
     console.warn('Subscription payment verification mismatch', { paymentId: payment.id, reason: 'transaction_id_mismatch' });
-    throw new SeekerSubscriptionError('Flutterwave could not match this transaction to the payment', 422);
+    throw new SeekerSubscriptionError('The payment provider could not match this transaction to the payment', 422);
+  }
+  if (payment.provider === 'PAYSTACK'
+    && (returnedTransactionId === undefined || !/^\d+$/.test(String(returnedTransactionId)))) {
+    throw new SeekerSubscriptionError('Paystack returned an invalid transaction identifier', 422);
   }
 
   const providerStatus = String(providerPayment.status ?? '').toLowerCase();
-  if (['pending', 'processing', 'queued', 'incomplete'].includes(providerStatus)) {
+  const normalizedProviderStatus = payment.provider === 'PAYSTACK' && providerStatus === 'success'
+    ? 'successful'
+    : providerStatus;
+  if (['pending', 'processing', 'queued', 'incomplete'].includes(normalizedProviderStatus)) {
     return { payment: serializePayment(payment), subscription: serializeSubscription(subscription), alreadyVerified: false, pending: true };
   }
-  if (providerStatus !== 'successful') {
+  if (normalizedProviderStatus !== 'successful') {
     const transitioned = await markVerificationFailure({ reason: 'provider_payment_not_successful', providerStatus, resolvedTransactionId: String(returnedTransactionId ?? resolvedTransactionId) });
     if (returnProviderFailure || returnFailureState) {
       if (transitioned) {
@@ -631,12 +687,12 @@ export const verifySeekerSubscriptionPayment = async ({
         pending: true,
       };
     }
-    throw new SeekerSubscriptionError('Flutterwave could not confirm a successful payment', 422);
+    throw new SeekerSubscriptionError('The payment provider could not confirm a successful payment', 422);
   }
 
-  const amount = String(providerPayment.amount ?? providerPayment.amount_paid ?? '0');
+  const providerAmount = String(providerPayment.amount ?? providerPayment.amount_paid ?? '0');
   const currency = normalizeCurrency(providerPayment.currency);
-  const providerTransactionId = String(returnedTransactionId ?? transactionId);
+  const providerTransactionId = String(returnedTransactionId ?? resolvedTransactionId ?? '');
   const providerMetadata = providerPayment.meta ?? providerPayment.metadata;
   const expectedPlanKey = subscription.plan?.key;
   const providerCustomerEmail = providerPayment.customer?.email;
@@ -644,7 +700,10 @@ export const verifySeekerSubscriptionPayment = async ({
   const providerCustomerEmailNormalized = String(providerCustomerEmail ?? '').trim().toLowerCase();
   let amountMatches = false;
   try {
-    amountMatches = new Prisma.Decimal(amount).eq(new Prisma.Decimal(String(payment.amount)));
+    const amount = payment.provider === 'PAYSTACK'
+      ? /^\d+$/.test(providerAmount) ? new Prisma.Decimal(providerAmount).dividedBy(100) : new Prisma.Decimal(-1)
+      : new Prisma.Decimal(providerAmount);
+    amountMatches = amount.eq(new Prisma.Decimal(String(payment.amount)));
   } catch {
     amountMatches = false;
   }
@@ -674,7 +733,7 @@ export const verifySeekerSubscriptionPayment = async ({
         ...(providerCustomerEmailNormalized && !customerMatches ? { customerEmailMismatch: true } : {}),
       },
     });
-    throw new SeekerSubscriptionError('Flutterwave payment details did not match this subscription', 422);
+    throw new SeekerSubscriptionError('Payment details did not match this subscription', 422);
   }
 
   return prisma.$transaction(async (transaction) => {
@@ -682,9 +741,68 @@ export const verifySeekerSubscriptionPayment = async ({
     if (!currentPayment) throw new SeekerSubscriptionError('Subscription payment record not found', 404);
     if (currentPayment.status === 'SUCCESSFUL') {
       const subscription = currentPayment.subscription ?? await transaction.subscription.findUnique({ where: { id: currentPayment.subscriptionId }, select: subscriptionSelect });
-      return { payment: serializePayment(currentPayment), subscription: subscription ? serializeSubscription(subscription) : null, alreadyVerified: true };
+      return {
+        payment: serializePayment(currentPayment),
+        subscription: subscription ? serializeSubscription(subscription) : null,
+        alreadyVerified: true,
+        ...(currentPayment.metadata?.manualReviewRequired ? { manualReviewRequired: true } : {}),
+      };
     }
-    if (currentPayment.status !== 'PENDING'
+    if (recordCancelledPaymentForReview
+      && currentPayment.status === 'CANCELLED'
+      && currentPayment.subscription?.status === 'CANCELLED'
+      && currentPayment.userId === userId
+      && currentPayment.subscriptionId === subscription.id
+      && currentPayment.subscription?.userId === userId
+      && currentPayment.subscription?.planId === subscription.planId
+      && currentPayment.providerReference === payment.providerReference
+      && new Prisma.Decimal(String(currentPayment.amount)).eq(new Prisma.Decimal(String(payment.amount)))
+      && normalizeCurrency(currentPayment.currency) === normalizeCurrency(payment.currency)) {
+      const reviewedPayment = await transaction.payment.updateMany({
+        where: { id: currentPayment.id, status: 'CANCELLED' },
+        data: {
+          status: 'SUCCESSFUL',
+          transactionId: providerTransactionId,
+          verifiedAt: new Date(),
+          metadata: {
+            ...(currentPayment.metadata ?? {}),
+            providerStatus,
+            verifiedAt: new Date().toISOString(),
+            manualReviewRequired: true,
+            manualReviewReason: 'PAYMENT_CONFIRMED_AFTER_SUBSCRIPTION_CANCELLATION',
+          },
+        },
+      });
+      if (reviewedPayment.count !== 1) {
+        throw new SeekerSubscriptionError('Subscription payment state changed during reconciliation', 409);
+      }
+      const updatedPayment = await transaction.payment.findUnique({
+        where: { id: currentPayment.id },
+        select: paymentSelect,
+      });
+      await recordSubscriptionEvent({
+        subscriptionId: currentPayment.subscriptionId,
+        eventType: 'PAYMENT_SUCCESSFUL',
+        providerReference: payment.providerReference,
+        metadata: {
+          paymentId: currentPayment.id,
+          transactionId: providerTransactionId,
+          amount: currentPayment.amount.toString(),
+          currency: currentPayment.currency,
+          manualReviewRequired: true,
+          reason: 'PAYMENT_CONFIRMED_AFTER_SUBSCRIPTION_CANCELLATION',
+        },
+      }, transaction);
+      return {
+        payment: serializePayment(updatedPayment),
+        subscription: serializeSubscription(currentPayment.subscription),
+        alreadyVerified: false,
+        manualReviewRequired: true,
+      };
+    }
+    const currentPaymentCanBeVerified = currentPayment.status === 'PENDING'
+      || (payment.provider === 'PAYSTACK' && currentPayment.status === 'PROCESSING');
+    if (!currentPaymentCanBeVerified
       || currentPayment.userId !== userId
       || currentPayment.subscriptionId !== subscription.id
       || currentPayment.subscription?.userId !== userId

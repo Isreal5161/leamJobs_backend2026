@@ -20,6 +20,7 @@ const mockPrisma = {
     findUnique: jest.fn(),
     create: jest.fn(),
   },
+  $queryRaw: jest.fn(),
   employerProfile: {
     upsert: jest.fn(),
   },
@@ -166,10 +167,26 @@ const detailApplication = {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockPrisma.user.findUnique.mockResolvedValue({
-    id: leamJobsEmployerId,
-    role: 'EMPLOYER',
-    employerProfile: { id: 'leamjobs-profile', companyName: 'LeamJobs' },
+  mockPrisma.$queryRaw.mockResolvedValue([]);
+  mockPrisma.user.findUnique.mockImplementation(async ({ where, select }) => {
+    if (where.email) {
+      return {
+        id: leamJobsEmployerId,
+        role: 'EMPLOYER',
+        employerProfile: { id: 'leamjobs-profile', companyName: 'LeamJobs' },
+      };
+    }
+    if (select?.isActive && select?.role) {
+      return {
+        isActive: true,
+        role: where.id === adminId ? 'ADMIN' : 'EMPLOYER',
+      };
+    }
+    return {
+      id: where.id,
+      role: where.id === adminId ? 'ADMIN' : 'EMPLOYER',
+      employerProfile: { id: 'leamjobs-profile', companyName: 'LeamJobs' },
+    };
   });
   mockPrisma.employerProfile.upsert.mockResolvedValue({ id: 'leamjobs-profile', userId: leamJobsEmployerId, companyName: 'LeamJobs' });
   mockPrisma.job.findUnique.mockResolvedValue(null);
@@ -196,6 +213,7 @@ beforeEach(() => {
       update: jest.fn().mockResolvedValue({ id: applicationId, status: 'PAYMENT_PENDING' }),
     },
     contract: {
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'contract-123' }),
     },
@@ -309,6 +327,7 @@ describe('Admin applicant authorization', () => {
         update: jest.fn().mockResolvedValue({ id: applicationId, status: 'PAYMENT_PENDING' }),
       },
       contract: {
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'contract-123' }),
       },
@@ -348,6 +367,7 @@ describe('Admin applicant authorization', () => {
           update: jest.fn(),
         },
         contract: {
+          findMany: jest.fn().mockResolvedValue([]),
           findFirst: jest.fn().mockResolvedValue({ id: 'existing-contract' }),
           create: jest.fn(),
         },
@@ -396,6 +416,7 @@ describe('Admin applicant authorization', () => {
           update: jest.fn(),
         },
         contract: {
+          findMany: jest.fn().mockResolvedValue([]),
           findFirst: jest.fn().mockResolvedValue(null),
           create: jest.fn(),
         },
@@ -434,6 +455,7 @@ test('admin actor ID is never used as the effective employer when selecting a co
       update: jest.fn().mockResolvedValue({ id: applicationId, status: 'PAYMENT_PENDING' }),
     },
     contract: {
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'contract-123' }),
     },

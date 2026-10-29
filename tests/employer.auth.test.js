@@ -183,6 +183,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('SEEKER token is rejected from the Employer endpoint', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'seeker-123', isActive: true, role: 'SEEKER' });
     const response = await request(app)
       .get('/api/employer/me')
       .set('Authorization', `Bearer ${createToken('SEEKER', 'seeker-123')}`);
@@ -192,6 +193,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('EMPLOYER token is allowed on the Employer endpoint', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'employer-123', isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .get('/api/employer/me')
       .set('Authorization', `Bearer ${createToken('EMPLOYER', 'employer-123')}`);
@@ -207,6 +209,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('client-supplied userId cannot override the authenticated identity', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'employer-123', isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .get('/api/employer/me?userId=other-user-456')
       .set('Authorization', `Bearer ${createToken('EMPLOYER', 'employer-123')}`);
@@ -217,6 +220,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('client-supplied role cannot elevate a SEEKER to Employer access', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'seeker-123', isActive: true, role: 'SEEKER' });
     const response = await request(app)
       .get('/api/employer/me?role=EMPLOYER')
       .set('Authorization', `Bearer ${createToken('SEEKER', 'seeker-123')}`);
@@ -233,6 +237,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('ADMIN token is rejected from the Employer endpoint', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'admin-123', isActive: true, role: 'ADMIN' });
     const response = await request(app)
       .get('/api/employer/me')
       .set('Authorization', `Bearer ${createToken('ADMIN', 'admin-123')}`);
@@ -242,6 +247,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('EMPLOYER token is rejected from the Seeker endpoint', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ id: 'employer-123', isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .get('/api/seeker/profile')
       .set('Authorization', `Bearer ${createToken('EMPLOYER', 'employer-123')}`);

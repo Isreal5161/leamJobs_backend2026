@@ -5,6 +5,10 @@ import { env } from '../config/env.js';
 import { getActiveWithdrawalFeeConfiguration } from './platformFee.service.js';
 import { executeWithdrawal } from './withdrawalExecution.service.js';
 import { isSupportedPayoutAccount } from '../config/payoutCountries.js';
+import { isWithdrawalCurrencyEnabled, roundWalletAmount } from '../config/walletCurrencies.js';
+import { assertFreelancePaymentFeatureEnabled } from '../config/freelancePaymentFeatures.js';
+import { encryptPayoutIdentifier } from '../utils/payoutEncryption.js';
+import { buildWithdrawalTransferMetadata } from './withdrawalTransferMetadata.js';
 
 const WITHDRAWAL_QUOTE_TTL_SECONDS = 300;
 const WITHDRAWAL_QUOTE_AUDIENCE = 'leamjobs-withdrawal-quote';
@@ -18,6 +22,8 @@ const withdrawalSelect = {
   payoutAmount: true,
   currency: true,
   status: true,
+  provider: true,
+  failureReason: true,
   requestedAt: true,
   createdAt: true,
   payoutAccount: {
@@ -26,6 +32,7 @@ const withdrawalSelect = {
       provider: true,
       bankCode: true,
       accountName: true,
+      encryptedAccountNumber: true,
       accountNumberLast4: true,
       verifiedAt: true,
       isDefault: true,
@@ -90,9 +97,9 @@ const validateWithdrawalAmount = (amountValue) => {
   return amount;
 };
 
-const calculateWithdrawalAmounts = (amount, percentage) => {
-  const fee = amount.mul(percentage).dividedBy(100).toDecimalPlaces(2);
-  return { fee, payout: amount.minus(fee).toDecimalPlaces(2) };
+const calculateWithdrawalAmounts = (amount, percentage, currency) => {
+  const fee = roundWalletAmount(currency, amount.mul(percentage).dividedBy(100));
+  return { fee, payout: roundWalletAmount(currency, amount.minus(fee)) };
 };
 
 const assertValidQuoteClaims = (claims, seekerId) => {
@@ -132,7 +139,9 @@ const verifyWithdrawalQuote = (reference, seekerId) => {
 };
 
 export const getSeekerWithdrawalQuote = async (seekerId, { amount: amountValue, currency, payoutAccountId }) => {
+  assertFreelancePaymentFeatureEnabled('withdrawalsEnabled');
   const amount = validateWithdrawalAmount(amountValue);
+  if (!isWithdrawalCurrencyEnabled(currency)) throw new WithdrawalValidationError(`Withdrawals are not available in ${currency}`);
   const payoutAccount = await prisma.payoutAccount.findFirst({
     where: {
       id: payoutAccountId,
@@ -140,19 +149,29 @@ export const getSeekerWithdrawalQuote = async (seekerId, { amount: amountValue, 
       provider: 'FLUTTERWAVE',
       payoutMethod: 'BANK_ACCOUNT',
       disabledAt: null,
-      country: 'Nigeria',
-      currency: 'NGN',
-      verifiedAt: { not: null },
     },
-    select: { id: true, provider: true, payoutMethod: true, country: true, currency: true, verifiedAt: true, updatedAt: true },
+    select: {
+      id: true,
+      provider: true,
+      payoutMethod: true,
+      country: true,
+      currency: true,
+      verifiedAt: true,
+      updatedAt: true,
+      encryptedPayoutMetadata: true,
+    },
   });
   if (!payoutAccount) throw new WithdrawalNotFoundError();
+  if (currency === 'USD') buildWithdrawalTransferMetadata(payoutAccount);
   if (!isSupportedPayoutAccount(payoutAccount)) throw new WithdrawalNotFoundError();
   if (currency !== payoutAccount.currency) throw new WithdrawalValidationError('Withdrawal currency does not match the payout account');
 
   const { percentage: withdrawalFeePercentage, version: configurationVersion } = await getActiveWithdrawalFeeConfiguration(prisma);
-  const { fee, payout } = calculateWithdrawalAmounts(amount, withdrawalFeePercentage);
+  const { fee, payout } = calculateWithdrawalAmounts(amount, withdrawalFeePercentage, currency);
   if (payout.lte(0)) throw new WithdrawalValidationError('Withdrawal amount must exceed the withdrawal charge');
+  if (currency === 'USD' && !payout.isInteger()) {
+    throw new WithdrawalValidationError('Flutterwave USD transfers currently require a whole-unit payout amount.');
+  }
   const quoteReference = jwt.sign({
     purpose: 'seeker-withdrawal',
     sub: seekerId,
@@ -191,6 +210,8 @@ const serializeWithdrawal = (withdrawal) => ({
   payoutAmount: decimalToString(withdrawal.payoutAmount),
   currency: withdrawal.currency,
   status: withdrawal.status,
+  provider: withdrawal.provider,
+  failureReason: withdrawal.failureReason,
   requestedAt: withdrawal.requestedAt,
   createdAt: withdrawal.createdAt,
   payoutAccount: withdrawal.payoutAccount ? {
@@ -227,18 +248,21 @@ const findExistingByIdempotencyKey = async (transaction, seekerId, amount, curre
 };
 
 export const createSeekerWithdrawal = async (seekerId, payload) => {
+  assertFreelancePaymentFeatureEnabled('withdrawalsEnabled');
   const quote = verifyWithdrawalQuote(payload.quoteReference, seekerId);
   const amount = validateWithdrawalAmount(quote.amount);
   const currency = quote.currency;
+  if (!isWithdrawalCurrencyEnabled(currency)) throw new WithdrawalValidationError(`Withdrawals are not available in ${currency}`);
   const payoutAccountId = quote.payoutAccountId;
   const withdrawalFeePercentage = toDecimal(quote.withdrawalFeePercentage);
   const withdrawalFeeAmount = toDecimal(quote.withdrawalFeeAmount);
   const payoutAmount = toDecimal(quote.payoutAmount);
-  const expectedAmounts = calculateWithdrawalAmounts(amount, withdrawalFeePercentage);
+  const expectedAmounts = calculateWithdrawalAmounts(amount, withdrawalFeePercentage, currency);
   if (!/^[A-Z]{3}$/.test(currency)
     || !expectedAmounts.fee.eq(withdrawalFeeAmount)
     || !expectedAmounts.payout.eq(payoutAmount)
-    || payoutAmount.lte(0)) {
+    || payoutAmount.lte(0)
+    || (currency === 'USD' && !payoutAmount.isInteger())) {
     throw new WithdrawalQuoteError('The withdrawal quote is invalid. Request a new quote.');
   }
 
@@ -247,7 +271,7 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
       const lockedWallets = await transaction.$queryRaw`
         SELECT "id", "currency", "availableBalance", "pendingWithdrawalBalance", "version"
         FROM "Wallet"
-        WHERE "userId" = ${seekerId}
+        WHERE "userId" = ${seekerId} AND "currency" = ${currency}
         FOR UPDATE
       `;
       const wallet = lockedWallets[0];
@@ -282,9 +306,6 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
           disabledAt: null,
           provider: 'FLUTTERWAVE',
           payoutMethod: 'BANK_ACCOUNT',
-          country: 'Nigeria',
-          currency: 'NGN',
-          verifiedAt: { not: null },
         },
         select: {
           id: true,
@@ -293,15 +314,20 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
           country: true,
           currency: true,
           bankCode: true,
+          bankName: true,
           accountName: true,
           accountNumberLast4: true,
+          encryptedAccountNumber: true,
+          encryptedPayoutMetadata: true,
           verifiedAt: true,
           isDefault: true,
           updatedAt: true,
         },
       });
 
-      if (!payoutAccount || !isSupportedPayoutAccount(payoutAccount) || payoutAccount.currency !== currency) throw new WithdrawalNotFoundError();
+      if (!payoutAccount) throw new WithdrawalNotFoundError();
+      const transferMetadata = currency === 'USD' ? buildWithdrawalTransferMetadata(payoutAccount) : null;
+      if (!isSupportedPayoutAccount(payoutAccount) || payoutAccount.currency !== currency) throw new WithdrawalNotFoundError();
       if (payoutAccount.updatedAt.toISOString() !== quote.payoutAccountVersion) {
         throw new WithdrawalQuoteError('The payout account changed. Review the updated payout details before confirming.', { stale: true });
       }
@@ -329,6 +355,18 @@ export const createSeekerWithdrawal = async (seekerId, payload) => {
           payoutAmount,
           currency,
           status: 'PENDING',
+          provider: payoutAccount.provider,
+          payoutMethodSnapshot: payoutAccount.payoutMethod,
+          payoutCountrySnapshot: payoutAccount.country,
+          bankCodeSnapshot: payoutAccount.bankCode,
+          bankNameSnapshot: payoutAccount.bankName,
+          accountNameSnapshot: payoutAccount.accountName,
+          encryptedAccountNumberSnapshot: payoutAccount.encryptedAccountNumber,
+          encryptedTransferMetadataSnapshot: transferMetadata
+            ? encryptPayoutIdentifier(JSON.stringify(transferMetadata))
+            : null,
+          accountNumberLast4Snapshot: payoutAccount.accountNumberLast4,
+          payoutAccountVerifiedAtSnapshot: payoutAccount.verifiedAt,
           idempotencyKey: payload.idempotencyKey,
         },
         select: withdrawalSelect,

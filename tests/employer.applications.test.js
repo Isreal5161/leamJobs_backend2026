@@ -12,6 +12,7 @@ process.env.R2_ACCESS_KEY_ID = 'test-key-id';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   $queryRaw: jest.fn(),
   application: {
     findMany: jest.fn(),
@@ -121,6 +122,7 @@ const conversation = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
   mockPrisma.$queryRaw.mockResolvedValue([]);
   mockPrisma.application.findMany.mockResolvedValue([]);
   mockPrisma.application.count.mockResolvedValue(0);
@@ -158,6 +160,7 @@ describe('Employer Applications authorization and privacy', () => {
   });
 
   test.each(['SEEKER', 'ADMIN'])('%s cannot access employer applications', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .get(`/api/employer/jobs/${jobA}/applications`)
       .set('Authorization', `Bearer ${token(role, seekerA)}`);

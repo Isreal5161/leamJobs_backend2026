@@ -14,6 +14,7 @@ process.env.R2_ACCESS_KEY_ID = 'test-key-id';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   seekerProfile: {
     findUnique: jest.fn(),
     upsert: jest.fn(),
@@ -66,6 +67,7 @@ const createDocx = async () => {
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ resumeObjectKey: 'seekers/user/resume/current.pdf' });
   const pdfBuffer = await createPdf([
     'John Doe',
@@ -89,6 +91,7 @@ describe('seeker resume import endpoint', () => {
     const unauthenticated = await request(app).post('/api/seeker/profile/resume/import');
     expect(unauthenticated.status).toBe(401);
 
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const employer = await request(app)
       .post('/api/seeker/profile/resume/import')
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`);

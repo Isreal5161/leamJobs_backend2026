@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-const mockPrisma = { user: { findMany: jest.fn(), count: jest.fn() } };
+const mockPrisma = { user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn() } };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 const { default: app } = await import('../src/app.js');
@@ -44,6 +44,10 @@ const seekerRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
   mockPrisma.user.findMany.mockResolvedValue([]);
   mockPrisma.user.count.mockResolvedValue(0);
 });

@@ -97,7 +97,7 @@ const jobRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockPrisma.user.findUnique.mockResolvedValue(null);
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'ADMIN' });
   mockPrisma.user.create.mockResolvedValue(null);
   mockPrisma.employerProfile.upsert.mockResolvedValue(null);
   mockPrisma.job.findMany.mockResolvedValue([]);
@@ -139,6 +139,7 @@ describe('Admin job creation and editing', () => {
   });
 
   test('rejects non-admin POST /api/admin/jobs', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .post('/api/admin/jobs')
       .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
@@ -182,10 +183,11 @@ describe('Admin job creation and editing', () => {
   });
 
   test('creates an approved admin-owned job for a valid employer', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({
-      id: employerA,
-      role: 'EMPLOYER',
-      employerProfile: { id: 'profile-1' },
+    mockPrisma.user.findUnique.mockImplementation(async ({ where, select }) => {
+      if (select?.isActive && select?.role) return { isActive: true, role: 'ADMIN' };
+      return where?.id === employerA
+        ? { id: employerA, role: 'EMPLOYER', employerProfile: { id: 'profile-1' } }
+        : null;
     });
     mockPrisma.job.create.mockImplementation(async ({ data }) => ({
       id: jobA,
@@ -245,7 +247,8 @@ describe('Admin job creation and editing', () => {
 
   test('creates a canonical LeamJobs employer identity when the admin posts as LeamJobs', async () => {
     const leamJobsEmployerId = 'leamjobs-employer-id';
-    mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    mockPrisma.user.findUnique.mockImplementation(async ({ where, select }) => {
+      if (select?.isActive && select?.role) return { isActive: true, role: 'ADMIN' };
       if (where?.email === 'hiring@leamjobs.com') {
         return null;
       }
@@ -337,10 +340,11 @@ describe('Admin job creation and editing', () => {
   });
 
   test('updates an approved admin job without creating a duplicate row', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({
-      id: employerA,
-      role: 'EMPLOYER',
-      employerProfile: { id: 'profile-1' },
+    mockPrisma.user.findUnique.mockImplementation(async ({ where, select }) => {
+      if (select?.isActive && select?.role) return { isActive: true, role: 'ADMIN' };
+      return where?.id === employerA
+        ? { id: employerA, role: 'EMPLOYER', employerProfile: { id: 'profile-1' } }
+        : null;
     });
     mockPrisma.job.findFirst.mockResolvedValue(jobRecord({ id: jobA, status: 'APPROVED', reviewedById: adminId, reviewedAt: new Date('2026-09-11T00:00:00.000Z') }));
     mockPrisma.job.update.mockResolvedValue(jobRecord({
@@ -384,6 +388,7 @@ describe('Admin job creation and editing', () => {
 
 describe('Admin job approval routes', () => {
   test('requires ADMIN role for admin job endpoints', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .get('/api/admin/jobs')
       .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
@@ -507,6 +512,7 @@ describe('Admin job approval routes', () => {
   });
 
   test('rejects unauthenticated and non-admin job removal', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const unauthenticated = await request(app).patch(`/api/admin/jobs/${jobA}/remove`);
     expect(unauthenticated.status).toBe(401);
 

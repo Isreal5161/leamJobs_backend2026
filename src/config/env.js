@@ -11,6 +11,8 @@ const requiredEnvVars = [
   'JWT_AUDIENCE',
 ];
 
+export const parseEnabledFlag = (value) => value === 'true';
+
 // Check for missing required variables
 const missing = requiredEnvVars.filter((varName) => !process.env[varName]);
 
@@ -40,6 +42,20 @@ export const env = {
   // payout account create/update will succeed - not added to requiredEnvVars to avoid blocking
   // startup for unrelated deployments until this feature is rolled out)
   PAYOUT_ENCRYPTION_KEY: process.env.PAYOUT_ENCRYPTION_KEY || '',
+
+  // Nigerian USD domiciliary transfers require remitter details registered with Flutterwave.
+  // These must be copied from approved merchant/KYC records, never inferred from a user profile.
+  FLUTTERWAVE_DOM_REMITTER_NAME: process.env.FLUTTERWAVE_DOM_REMITTER_NAME || '',
+  FLUTTERWAVE_DOM_REMITTER_ADDRESS: process.env.FLUTTERWAVE_DOM_REMITTER_ADDRESS || '',
+  FLUTTERWAVE_DOM_REMITTER_CITY: process.env.FLUTTERWAVE_DOM_REMITTER_CITY || '',
+  FLUTTERWAVE_DOM_REMITTER_COUNTRY: process.env.FLUTTERWAVE_DOM_REMITTER_COUNTRY || '',
+  FLUTTERWAVE_DOM_REMITTER_ID_NUMBER: process.env.FLUTTERWAVE_DOM_REMITTER_ID_NUMBER || '',
+  FLUTTERWAVE_DOM_REMITTER_ID_TYPE: process.env.FLUTTERWAVE_DOM_REMITTER_ID_TYPE || '',
+  FLUTTERWAVE_DOM_REMITTER_ID_EXPIRY: process.env.FLUTTERWAVE_DOM_REMITTER_ID_EXPIRY || '',
+  FLUTTERWAVE_DOM_REMITTER_MOBILE_NUMBER: process.env.FLUTTERWAVE_DOM_REMITTER_MOBILE_NUMBER || '',
+  FLUTTERWAVE_DOM_REMITTER_EMAIL: process.env.FLUTTERWAVE_DOM_REMITTER_EMAIL || '',
+  FLUTTERWAVE_DOM_REMITTER_OCCUPATION: process.env.FLUTTERWAVE_DOM_REMITTER_OCCUPATION || '',
+  FLUTTERWAVE_DOM_REMITTER_BENEFICIARY_RELATIONSHIP: process.env.FLUTTERWAVE_DOM_REMITTER_BENEFICIARY_RELATIONSHIP || '',
 
   // Email
   EMAIL_ENABLED: process.env.EMAIL_ENABLED === 'true',
@@ -74,6 +90,13 @@ export const env = {
   PAYSTACK_BASE_URL: process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co',
   PAYSTACK_COLLECTION_ENABLED: process.env.PAYSTACK_COLLECTION_ENABLED === 'true',
   PAYSTACK_CONTRACT_CALLBACK_URL: process.env.PAYSTACK_CONTRACT_CALLBACK_URL || '',
+
+  // Freelance payment operations are opt-in; only the exact string "true" enables a flag.
+  LEAMJOBS_FREELANCE_PAYMENTS_ENABLED: parseEnabledFlag(process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED),
+  LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED: parseEnabledFlag(process.env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED),
+  LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED: parseEnabledFlag(process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED),
+  LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED: parseEnabledFlag(process.env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED),
+  LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED: parseEnabledFlag(process.env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED),
 };
 
 // Validate environment

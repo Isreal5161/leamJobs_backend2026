@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
 import { handleFlutterwaveWebhook as handleContractFlutterwaveWebhook } from './contractPayment.service.js';
 import { verifySeekerSubscriptionPayment } from './seekerSubscription.service.js';
@@ -47,7 +48,15 @@ export const handleFlutterwaveWebhook = async ({ payload }) => {
   if (providerReference) {
     const withdrawal = await prisma.withdrawal.findUnique({
       where: { providerReference },
-      select: { id: true, provider: true, status: true, payout: { select: { id: true } } },
+      select: {
+        id: true,
+        provider: true,
+        status: true,
+        providerReference: true,
+        currency: true,
+        payoutAmount: true,
+        payout: { select: { id: true, amount: true } },
+      },
     });
     if (withdrawal?.provider === 'FLUTTERWAVE') {
       return handleFlutterwaveWithdrawalWebhook({ payload, withdrawal, transferId: transactionId });
@@ -69,6 +78,23 @@ export const handleFlutterwaveWebhook = async ({ payload }) => {
 const handleFlutterwaveWithdrawalWebhook = async ({ payload, withdrawal, transferId }) => {
   if (!transferId || !/^\d+$/.test(transferId) || !withdrawal.payout) {
     throw new FlutterwaveWebhookError('Flutterwave withdrawal transfer identifiers are incomplete', 400);
+  }
+  const data = payload?.data;
+  const webhookReference = data?.reference || data?.tx_ref;
+  const webhookCurrency = String(data?.currency ?? '').trim().toUpperCase();
+  const webhookAmount = data?.amount;
+  if (webhookReference !== withdrawal.providerReference) {
+    throw new FlutterwaveWebhookError('Flutterwave withdrawal reference does not match the saved withdrawal', 409);
+  }
+  let amountMatches = false;
+  try {
+    amountMatches = webhookAmount !== undefined && webhookAmount !== null
+      && new Prisma.Decimal(webhookAmount).eq(withdrawal.payout.amount);
+  } catch {
+    amountMatches = false;
+  }
+  if (!amountMatches || webhookCurrency !== withdrawal.currency) {
+    throw new FlutterwaveWebhookError('Flutterwave withdrawal amount or currency does not match the saved withdrawal', 409);
   }
 
   const eventType = String(payload?.event ?? '').trim();
@@ -103,11 +129,15 @@ const handleFlutterwaveWithdrawalWebhook = async ({ payload, withdrawal, transfe
     if (attempt.providerReference && attempt.providerReference !== transferId) {
       throw new FlutterwaveWebhookError('Flutterwave transfer ID does not match the withdrawal attempt', 409);
     }
-    if (!attempt.providerReference) {
-      await prisma.payoutAttempt.update({
-        where: { id: attempt.id },
-        data: { providerReference: transferId },
-      });
+    const association = await prisma.payoutAttempt.updateMany({
+      where: {
+        id: attempt.id,
+        OR: [{ providerReference: null }, { providerReference: transferId }],
+      },
+      data: { providerReference: transferId },
+    });
+    if (association.count !== 1) {
+      throw new FlutterwaveWebhookError('A different Flutterwave transfer is already associated with this withdrawal attempt', 409);
     }
 
     const result = await reconcileWithdrawal(withdrawal.id);
@@ -130,7 +160,13 @@ const getSubscriptionWebhookEventId = ({ payload, transactionId, eventType, prov
   return `${eventIdentity}:${eventType || 'charge'}:${providerStatus || 'unknown'}`;
 };
 
-export const recordSubscriptionWebhookEvent = async ({ payload, payment, transactionId, processPayment }) => {
+export const recordSubscriptionWebhookEvent = async ({
+  provider = 'FLUTTERWAVE',
+  payload,
+  payment,
+  transactionId,
+  processPayment,
+}) => {
   const providerStatus = String(payload?.data?.status ?? payload?.status ?? '').trim().toLowerCase();
   const eventType = String(payload?.event ?? '').trim();
   const providerEventId = getSubscriptionWebhookEventId({ payload, transactionId, eventType, providerStatus });
@@ -139,13 +175,12 @@ export const recordSubscriptionWebhookEvent = async ({ payload, payment, transac
   }
 
   const payloadHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-  const eventWhere = { provider_providerEventId: { provider: 'FLUTTERWAVE', providerEventId } };
   let existingEvent;
 
   try {
     await prisma.providerWebhookEvent.create({
       data: {
-        provider: 'FLUTTERWAVE',
+        provider,
         providerEventId,
         eventType: eventType || null,
         payloadHash,
@@ -154,7 +189,7 @@ export const recordSubscriptionWebhookEvent = async ({ payload, payment, transac
   } catch (error) {
     if (error?.code !== 'P2002') throw error;
     existingEvent = await prisma.providerWebhookEvent.findUnique({
-      where: eventWhere,
+      where: { provider_providerEventId: { provider, providerEventId } },
       select: { payloadHash: true, processedAt: true },
     });
     if (!existingEvent) throw error;
@@ -166,13 +201,14 @@ export const recordSubscriptionWebhookEvent = async ({ payload, payment, transac
 
   const result = await processPayment();
   await prisma.providerWebhookEvent.update({
-    where: eventWhere,
+    where: { provider_providerEventId: { provider, providerEventId } },
     data: { processedAt: new Date() },
   });
   return {
     duplicate: false,
     paymentId: payment.id,
     status: result.failed ? 'FAILED' : result.pending ? 'PENDING' : result.payment?.status ?? null,
+    ...(result.manualReviewRequired ? { manualReviewRequired: true } : {}),
   };
 };
 
@@ -209,6 +245,7 @@ const handleSeekerSubscriptionWebhook = async ({ payload, providerReference, tra
       providerReference: payment.providerReference,
       transactionId: String(transactionId),
       returnProviderFailure: true,
+      recordCancelledPaymentForReview: true,
     }),
   });
 };

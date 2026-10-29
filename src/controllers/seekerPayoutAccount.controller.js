@@ -5,12 +5,35 @@ import {
   updateSeekerPayoutAccount,
 } from '../services/seekerPayoutAccount.service.js';
 import { getFlutterwaveBanks } from '../services/flutterwave.service.js';
-import { PAYOUT_CAPABILITIES } from '../config/payoutCountries.js';
+import { getMissingFlutterwaveDomRemitterConfiguration, PAYOUT_CAPABILITIES } from '../config/payoutCountries.js';
+import { resolveFreelancePaymentFeatures } from '../config/freelancePaymentFeatures.js';
+import { isWithdrawalCurrencyEnabled } from '../config/walletCurrencies.js';
 
-export const listSeekerPayoutCapabilities = async (_req, res) => res.status(200).json({
-  success: true,
-  data: { capabilities: PAYOUT_CAPABILITIES },
-});
+export const listSeekerPayoutCapabilities = async (_req, res) => {
+  const features = resolveFreelancePaymentFeatures();
+  const domRemitterConfigured = getMissingFlutterwaveDomRemitterConfiguration().length === 0;
+  return res.status(200).json({
+    success: true,
+    data: {
+      capabilities: PAYOUT_CAPABILITIES.map((capability) => ({
+        ...capability,
+        withdrawalEnabled: features.withdrawalsEnabled
+          && isWithdrawalCurrencyEnabled(capability.currency, features)
+          && (capability.route !== 'NG_DOMICILIARY_USD'
+            || (capability.providerAvailable === true && domRemitterConfigured)),
+        destinationSetupEnabled: capability.route !== 'NG_DOMICILIARY_USD'
+          || (capability.providerAvailable === true && domRemitterConfigured),
+        ...(capability.route === 'NG_DOMICILIARY_USD' && (!capability.providerAvailable || !domRemitterConfigured)
+          ? {
+            unavailableReason: !capability.providerAvailable
+              ? 'Flutterwave currently reports Nigerian USD domiciliary IMTO transfers as unavailable.'
+              : 'Verified Flutterwave merchant remitter configuration is missing.',
+          }
+          : {}),
+      })),
+    },
+  });
+};
 
 export const listSeekerPayoutAccounts = async (req, res, next) => {
   try {

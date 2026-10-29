@@ -6,6 +6,9 @@ import { initializeFlutterwavePayment, verifyFlutterwaveTransaction } from './fl
 import { initializePaystackPayment, isPaystackConfigured, verifyPaystackTransaction } from './paystack.service.js';
 import { contractSelect, ContractNotFoundError, mapContract } from './contract.service.js';
 import { createNotification } from './notification.service.js';
+import { assertCollectionCurrencyEnabled } from '../config/walletCurrencies.js';
+import { assertFreelancePaymentFeatureEnabled } from '../config/freelancePaymentFeatures.js';
+import { initializeSeekerWallet } from './wallet.service.js';
 
 export class ContractPaymentError extends Error {
   constructor(message, status = 409) {
@@ -69,6 +72,7 @@ const lockPaymentContract = async (transaction, contractId) => {
     select: {
       id: true,
       applicationId: true,
+      seekerId: true,
       type: true,
       status: true,
       employerId: true,
@@ -174,6 +178,7 @@ const assertPaystackCollectionAvailable = (currency) => {
 };
 
 export const initializeContractPayment = async ({ contractId, employerId, idempotencyKey, redirectPath }) => {
+  assertFreelancePaymentFeatureEnabled('contractFundingEnabled');
   const requestedKey = idempotencyKey?.trim();
   if (requestedKey && requestedKey.length > 100) throw new ContractPaymentError('Idempotency key is too long', 400);
   const initializationToken = crypto.randomUUID();
@@ -181,8 +186,9 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
   const attempt = await prisma.$transaction(async (transaction) => {
     const contract = await lockPaymentContract(transaction, contractId);
     assertPaymentContract(contract, employerId);
+    assertCollectionCurrencyEnabled(contract.freelanceDetails.currency);
     const existing = findExistingAttempt(contract.freelanceDetails.escrow.payments, requestedKey);
-    const provider = existing?.provider ?? (env.PAYSTACK_COLLECTION_ENABLED ? 'PAYSTACK' : 'FLUTTERWAVE');
+    const provider = existing?.provider ?? 'FLUTTERWAVE';
     if (existing?.status === 'SUCCESSFUL') {
       return {
         alreadyFunded: true,
@@ -243,6 +249,7 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
     if (provider === 'PAYSTACK') {
       assertPaystackCollectionAvailable(contract.freelanceDetails.currency);
     }
+    await initializeSeekerWallet(transaction, contract.seekerId, contract.freelanceDetails.currency);
     const providerReference = `leamjobs_${contractId}_${crypto.randomUUID()}`;
     const payment = await transaction.payment.create({
       data: {

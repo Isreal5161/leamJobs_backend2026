@@ -33,6 +33,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+app.post('/api/payments/paystack/webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 app.post('/api/payments/paystack/withdrawal-webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 
 // Body parsing middleware

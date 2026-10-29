@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   job: {
     count: jest.fn(),
     findMany: jest.fn(),
@@ -52,6 +53,10 @@ const createApplication = (id, name, title) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === 'seeker-1' ? 'SEEKER' : where.id === 'admin-1' ? 'ADMIN' : 'EMPLOYER',
+  }));
   mockPrisma.job.count.mockResolvedValue(0);
   mockPrisma.application.count.mockResolvedValue(0);
   mockPrisma.job.findMany.mockResolvedValue([]);

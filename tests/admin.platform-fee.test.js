@@ -20,6 +20,7 @@ const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JW
 const authorization = (role, subject) => ['Bearer', token(role, subject)].join(' ');
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   platformFeeConfiguration: { findUnique: jest.fn(), upsert: jest.fn() },
 };
 
@@ -28,6 +29,10 @@ const { default: app } = await import('../src/app.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
   mockPrisma.platformFeeConfiguration.findUnique.mockResolvedValue({
     key: 'default',
     percentage: new Prisma.Decimal('5.00'),

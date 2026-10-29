@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   conversation: {
     findMany: jest.fn(),
     count: jest.fn(),
@@ -51,6 +52,7 @@ const message = { id: messageId, conversationId, senderId: seekerId, body: 'Hell
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.message.count.mockResolvedValue(0);
   mockPrisma.message.groupBy.mockResolvedValue([]);
   mockPrisma.conversation.count.mockResolvedValue(0);
@@ -183,6 +185,7 @@ describe('seeker messaging endpoints', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('forbids %s from seeker messaging routes', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .get('/api/seeker/conversations')
       .set('Authorization', `Bearer ${token(role)}`);

@@ -1,7 +1,15 @@
 import { prisma } from '../config/database.js';
 import { decryptPayoutIdentifier, encryptPayoutIdentifier } from '../utils/payoutEncryption.js';
-import { getPayoutCapability, isSupportedPayoutAccount } from '../config/payoutCountries.js';
+import {
+  FLUTTERWAVE_NIGERIAN_DOM_BANK,
+  getFlutterwaveDomRemitterMetadata,
+  getPayoutCapability,
+  isSupportedPayoutAccount,
+} from '../config/payoutCountries.js';
 import { FlutterwaveRequestError, getFlutterwaveBanks, resolveFlutterwaveBankAccount } from './flutterwave.service.js';
+import { env } from '../config/env.js';
+import { isWithdrawalCurrencyEnabled } from '../config/walletCurrencies.js';
+import { resolveFreelancePaymentFeatures } from '../config/freelancePaymentFeatures.js';
 
 export class PayoutAccountValidationError extends Error {
   constructor(message) {
@@ -28,9 +36,86 @@ export class PayoutAccountConflictError extends Error {
 }
 
 const resolvePayoutDetails = async (payload) => {
-  const capability = getPayoutCapability(payload.country);
+  const currency = payload.currency ?? 'NGN';
+  const capability = getPayoutCapability(payload.country, currency);
   if (!capability) {
     throw new PayoutAccountValidationError('Withdrawals are not currently supported for this country.');
+  }
+  if (capability.destinationSetupEnabled === false) {
+    throw new PayoutAccountValidationError(
+      'Flutterwave currently reports Nigerian USD domiciliary IMTO transfers as unavailable. This destination cannot be added for payouts.',
+    );
+  }
+
+  if (capability.route === 'INTERNATIONAL_USD') {
+    const routingNumber = payload.routingNumber;
+    return {
+      payoutMethod: capability.payoutMethod,
+      provider: capability.provider,
+      currency: capability.currency,
+      bankName: payload.bankName.trim(),
+      bankCode: null,
+      identifier: payload.accountNumber,
+      accountName: payload.beneficiaryName.trim(),
+      encryptedPayoutMetadata: JSON.stringify({
+        route: capability.route,
+        routing_number: routingNumber,
+        swift_code: payload.swiftCode.trim().toUpperCase(),
+        bank_name: payload.bankName.trim(),
+        account_type: payload.accountType,
+        beneficiary_address: payload.beneficiaryAddress.trim(),
+        postal_code: payload.postalCode.trim(),
+        street_number: payload.streetNumber.trim(),
+        street_name: payload.streetName.trim(),
+        city: payload.city.trim(),
+        ...(payload.email ? { email: payload.email.trim().toLowerCase() } : {}),
+        ...(payload.mobileNumber ? { mobile_number: payload.mobileNumber.trim() } : {}),
+      }),
+      verifiedAt: null,
+    };
+  }
+
+  if (capability.route === 'NG_DOMICILIARY_USD') {
+    if (!capability.providerAvailable) {
+      throw new PayoutAccountValidationError(
+        'Flutterwave currently reports Nigerian USD domiciliary IMTO transfers as unavailable. This destination cannot be added for payouts.',
+      );
+    }
+    const { missing } = getFlutterwaveDomRemitterMetadata(env);
+    if (missing.length) {
+      const error = new PayoutAccountValidationError(
+        `Nigerian USD domiciliary payouts are unavailable until verified Flutterwave remitter details are configured: ${missing.join(', ')}.`,
+      );
+      error.status = 503;
+      throw error;
+    }
+    const banks = await getFlutterwaveBanks(capability.countryCode);
+    const bank = banks.find((entry) => entry.code === payload.bankCode);
+    if (!bank || bank.code !== FLUTTERWAVE_NIGERIAN_DOM_BANK.code
+      || !bank.name.toUpperCase().includes(FLUTTERWAVE_NIGERIAN_DOM_BANK.nameIncludes)) {
+      throw new PayoutAccountValidationError('Only a Flutterwave-listed FCMB USD domiciliary account is currently supported.');
+    }
+    const firstName = payload.beneficiaryFirstName.trim();
+    const lastName = payload.beneficiaryLastName.trim();
+    return {
+      payoutMethod: capability.payoutMethod,
+      provider: capability.provider,
+      currency: capability.currency,
+      bankName: bank.name,
+      bankCode: bank.code,
+      identifier: payload.accountNumber,
+      accountName: `${firstName} ${lastName}`,
+      encryptedPayoutMetadata: JSON.stringify({
+        route: capability.route,
+        first_name: firstName,
+        last_name: lastName,
+        email: payload.beneficiaryEmail.trim().toLowerCase(),
+        mobile_number: payload.beneficiaryMobileNumber.trim(),
+        recipient_address: payload.beneficiaryAddress.trim(),
+        beneficiary_occupation: payload.beneficiaryOccupation.trim(),
+      }),
+      verifiedAt: null,
+    };
   }
 
   const banks = await getFlutterwaveBanks(capability.countryCode);
@@ -77,6 +162,7 @@ const payoutAccountSelect = {
   bankCode: true,
   bankName: true,
   accountName: true,
+  encryptedPayoutMetadata: true,
   accountNumberLast4: true,
   isDefault: true,
   verifiedAt: true,
@@ -84,11 +170,12 @@ const payoutAccountSelect = {
   createdAt: true,
 };
 
-const isWithdrawalSupported = (account) => isSupportedPayoutAccount(account) && !account.disabledAt;
+const isWithdrawalSupported = (account) => isSupportedPayoutAccount(account)
+  && !account.disabledAt;
 
 const deriveStatus = (account) => {
   if (account.disabledAt) return 'DISABLED';
-  const capability = getPayoutCapability(account.country);
+  const capability = getPayoutCapability(account.country, account.currency);
   if (!capability || account.provider !== capability.provider
     || account.payoutMethod !== capability.payoutMethod || account.currency !== capability.currency) {
     return 'UNSUPPORTED';
@@ -111,7 +198,7 @@ const mapPayoutAccount = (account) => ({
   maskedAccountNumber: `****${account.accountNumberLast4}`,
   isDefault: account.isDefault,
   verifiedAt: account.verifiedAt,
-  verified: Boolean(account.verifiedAt && getPayoutCapability(account.country)?.verifiedBeforeWithdrawal && isWithdrawalSupported(account)),
+  verified: Boolean(account.verifiedAt && getPayoutCapability(account.country, account.currency)?.verifiedBeforeWithdrawal && isWithdrawalSupported(account)),
   withdrawalSupported: isWithdrawalSupported(account),
   status: deriveStatus(account),
 });
@@ -122,10 +209,11 @@ export const getEligibleSeekerPayoutAccounts = async (seekerId) => {
       userId: seekerId,
       provider: 'FLUTTERWAVE',
       payoutMethod: 'BANK_ACCOUNT',
-      country: 'Nigeria',
-      currency: 'NGN',
-      verifiedAt: { not: null },
       disabledAt: null,
+      OR: [
+        { country: 'Nigeria', currency: 'NGN', verifiedAt: { not: null } },
+        { country: 'United States', currency: 'USD', verifiedAt: null, encryptedPayoutMetadata: { not: null } },
+      ],
     },
     orderBy: [
       { isDefault: 'desc' },
@@ -135,7 +223,7 @@ export const getEligibleSeekerPayoutAccounts = async (seekerId) => {
     select: payoutAccountSelect,
   });
 
-  return accounts.map(mapPayoutAccount);
+  return accounts.map(mapPayoutAccount).filter((account) => account.withdrawalSupported);
 };
 
 // Every non-disabled account the seeker owns, including ones still awaiting verification -
@@ -207,7 +295,9 @@ export const createSeekerPayoutAccount = async (seekerId, payload) => {
           bankCode: resolved.bankCode,
           bankName: resolved.bankName,
           encryptedAccountNumber: encryptPayoutIdentifier(normalizedIdentifier),
-          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata ?? null,
+          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata
+            ? encryptPayoutIdentifier(resolved.encryptedPayoutMetadata)
+            : null,
           accountNumberLast4: last4,
           accountName: resolved.accountName,
           isDefault: shouldBeDefault,
@@ -298,7 +388,9 @@ export const updateSeekerPayoutAccount = async (seekerId, accountId, payload) =>
           bankCode: resolved.bankCode,
           bankName: resolved.bankName,
           encryptedAccountNumber: encryptPayoutIdentifier(normalizedIdentifier),
-          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata ?? null,
+          encryptedPayoutMetadata: resolved.encryptedPayoutMetadata
+            ? encryptPayoutIdentifier(resolved.encryptedPayoutMetadata)
+            : null,
           accountNumberLast4: last4,
           accountName: resolved.accountName,
           isDefault: shouldBeDefault,

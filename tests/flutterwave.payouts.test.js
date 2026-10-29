@@ -53,7 +53,7 @@ test('retains expected provider status and symbolic diagnostic code without reta
     originalHttpStatus: 422,
     providerStatus: 'error',
     providerCode: 'INVALID_ACCOUNT',
-    message: 'Invalid account',
+    message: 'Flutterwave declined this operation. Contact support if the issue persists.',
   });
   expect(error).not.toHaveProperty('data');
   expect(error).not.toHaveProperty('payload');
@@ -159,16 +159,57 @@ test('creates a deterministic NGN transfer with the saved net amount', async () 
   expect(options.headers.Authorization).toContain(process.env.FLW_SECRET_KEY);
 });
 
-test('rejects non-NGN withdrawal transfers before contacting Flutterwave', async () => {
-  await expect(createFlutterwaveTransfer({
-    amount: '95.00',
+test('creates an international USD transfer with the official beneficiary metadata mapping', async () => {
+  fetchMock.mockResolvedValue(response({ status: 'success', data: { id: 12346, status: 'NEW', amount: 500, currency: 'USD', reference: 'lj_wd_usd' } }));
+  const meta = [{
+    routing_number: '101019644',
+    swift_code: 'IRVTUS3N',
+    bank_name: 'BANK OF AMERICA, N.A.',
+    account_type: 'checking',
+    beneficiary_address: '4 Newton Street, San Francisco',
+    postal_code: '94105',
+    street_number: '4',
+    street_name: 'Newton Street',
+  }];
+
+  await createFlutterwaveTransfer({
+    amount: '500.00',
     accountNumber: '210868791872',
     beneficiaryName: 'Jane Doe',
     reference: 'lj_wd_usd',
     narration: 'LeamJobs wallet withdrawal',
     currency: 'USD',
     debitCurrency: 'USD',
-  })).rejects.toMatchObject({ status: 422 });
+    meta,
+  });
+
+  const [url, options] = fetchMock.mock.calls[0];
+  expect(url).toBe('https://api.flutterwave.com/v3/transfers');
+  expect(JSON.parse(options.body)).toEqual({
+    amount: 500,
+    account_number: '210868791872',
+    beneficiary_name: 'Jane Doe',
+    currency: 'USD',
+    debit_currency: 'USD',
+    reference: 'lj_wd_usd',
+    narration: 'LeamJobs wallet withdrawal',
+    meta,
+  });
+});
+
+test('rejects USD transfers with fractional amounts or incomplete metadata before provider request', async () => {
+  const transfer = {
+    amount: '95.50',
+    accountNumber: '210868791872',
+    beneficiaryName: 'Jane Doe',
+    reference: 'lj_wd_usd',
+    narration: 'LeamJobs wallet withdrawal',
+    currency: 'USD',
+    debitCurrency: 'USD',
+    meta: [],
+  };
+  await expect(createFlutterwaveTransfer(transfer)).rejects.toMatchObject({ status: 422 });
+  await expect(createFlutterwaveTransfer({ ...transfer, amount: '95.00', meta: [{}] })).rejects.toMatchObject({ status: 422 });
 
   expect(fetchMock).not.toHaveBeenCalled();
 });

@@ -105,6 +105,8 @@ beforeEach(() => {
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.user.findUnique.mockResolvedValue({
     id: seekerId,
+    isActive: true,
+    role: 'SEEKER',
     firstName: 'Ada',
     lastName: 'Lovelace',
     email: 'ada@example.com',
@@ -554,6 +556,7 @@ describe('seeker job and application endpoints', () => {
     expect(invalidResponse.status).toBe(400);
     expect(mockPrisma.job.findFirst).not.toHaveBeenCalled();
 
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const employerResponse = await request(app)
       .get(`/api/seeker/jobs/${jobId}`)
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`);

@@ -209,8 +209,8 @@ test('handleGoogleCallback creates a user and keeps the email-verification workf
     }),
   }));
   expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
-    where: { userId: 'user-1' },
-    create: { userId: 'user-1' },
+    where: { userId_currency: { userId: 'user-1', currency: 'NGN' } },
+    create: { userId: 'user-1', currency: 'NGN' },
     update: {},
   });
   expect(mockRegisterEmailVerificationOnUser).toHaveBeenCalledWith(expect.objectContaining({

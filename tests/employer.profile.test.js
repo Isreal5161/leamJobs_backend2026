@@ -45,7 +45,9 @@ const profile = (overrides = {}) => ({
   ...overrides,
 });
 
-const user = (employerProfile = profile()) => ({
+const user = (employerProfile = profile(), role = 'EMPLOYER') => ({
+  isActive: true,
+  role,
   email: 'employer@example.com',
   employerProfile,
 });
@@ -92,6 +94,7 @@ describe('Employer Profile authentication and authorization', () => {
   });
 
   test.each(['SEEKER', 'ADMIN'])('%s cannot access employer profile management', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue(user(profile(), role));
     const getResponse = await request(app).get('/api/employer/profile').set('Authorization', `Bearer ${token(role, employerA)}`);
     const patchResponse = await request(app).patch('/api/employer/profile').set('Authorization', `Bearer ${token(role, employerA)}`).send({ companyName: 'Attempt' });
     expect(getResponse.status).toBe(403);

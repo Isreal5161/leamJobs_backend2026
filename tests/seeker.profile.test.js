@@ -33,6 +33,8 @@ const createToken = (role = 'SEEKER', subject = seekerId) =>
 
 const createUserRecord = (overrides = {}) => ({
   id: seekerId,
+  isActive: true,
+  role: 'SEEKER',
   firstName: 'Jane',
   lastName: 'Doe',
   email: 'jane@example.com',
@@ -54,6 +56,7 @@ const createUserRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
 });
 
@@ -95,6 +98,7 @@ describe('seeker profile onboarding endpoints', () => {
   });
 
   test('GET /api/seeker/profile returns 403 for an EMPLOYER token', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ ...createUserRecord(), role: 'EMPLOYER' });
     const response = await request(app)
       .get('/api/seeker/profile')
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`);
@@ -216,6 +220,7 @@ describe('seeker profile onboarding endpoints', () => {
   });
 
   test('employers cannot modify seeker availability', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .patch('/api/seeker/profile')
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`)
@@ -266,6 +271,8 @@ describe('seeker profile onboarding endpoints', () => {
   test('GET /api/seeker/profile returns the neutral profile object when the seeker has no profile', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: seekerId,
+      isActive: true,
+      role: 'SEEKER',
       firstName: 'Jane',
       lastName: 'Doe',
       email: 'jane@example.com',
@@ -426,6 +433,8 @@ describe('seeker profile onboarding endpoints', () => {
   test('PATCH /api/seeker/profile accepts fullName and splits it into firstName and lastName without storing a duplicate fullName field', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: seekerId,
+      isActive: true,
+      role: 'SEEKER',
       firstName: 'Jane',
       lastName: 'Doe',
       email: 'jane@example.com',
@@ -515,6 +524,8 @@ describe('seeker profile CV endpoints', () => {
   test('GET /api/seeker/profile returns linkedinUrl, bio, education, experience, certifications, and cvTemplate', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: seekerId,
+      isActive: true,
+      role: 'SEEKER',
       firstName: 'Jane',
       lastName: 'Doe',
       email: 'jane@example.com',
@@ -918,6 +929,7 @@ describe('seeker profile CV endpoints', () => {
   });
 
   test('PATCH /api/seeker/profile/cv returns 403 for an EMPLOYER token', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
     const response = await request(app)
       .patch('/api/seeker/profile/cv')
       .set('Authorization', `Bearer ${createToken('EMPLOYER')}`)
@@ -930,6 +942,8 @@ describe('seeker profile CV endpoints', () => {
   test('GET /api/seeker/profile still calculates onboardingComplete based only on onboarding fields', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: seekerId,
+      isActive: true,
+      role: 'SEEKER',
       firstName: 'Jane',
       lastName: 'Doe',
       email: 'jane@example.com',
@@ -960,6 +974,8 @@ describe('seeker profile CV endpoints', () => {
   test('GET /api/seeker/profile returns false for onboardingComplete when CV fields are missing onboarding fields', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: seekerId,
+      isActive: true,
+      role: 'SEEKER',
       firstName: 'Jane',
       lastName: 'Doe',
       email: 'jane@example.com',

@@ -5,27 +5,29 @@ const createDatabase = (users) => ({
   wallet: {
     upsert: async ({ where, create, update }) => {
       if (Object.keys(update).length !== 0) throw new Error('Existing wallet update must be empty');
-      const user = database.users.find(({ id }) => id === where.userId);
+      const user = database.users.find(({ id }) => id === where.userId_currency.userId);
       if (!user) throw new Error('User not found');
-      if (!user.wallet) {
-        user.wallet = {
+      if (!user.wallets.some(({ currency }) => currency === where.userId_currency.currency)) {
+        const wallet = {
           id: `wallet-${user.id}`,
           userId: create.userId,
-          currency: 'NGN',
+          currency: create.currency,
           availableBalance: '0.00',
           pendingWithdrawalBalance: '0.00',
           version: 0,
           updatedAt: 'unchanged-on-retry',
         };
+        user.wallets.push(wallet);
+        return wallet;
       }
-      return user.wallet;
+      return user.wallets.find(({ currency }) => currency === where.userId_currency.currency);
     },
   },
   user: {
     findMany: async ({ where }) => database.users
       .filter((user) => user.role === where.role)
       .sort((left, right) => left.id.localeCompare(right.id))
-      .map(({ id, wallet }) => ({ id, wallet: wallet ? { id: wallet.id } : null })),
+      .map(({ id, wallets }) => ({ id, wallets: wallets.filter(({ currency }) => currency === 'NGN').map(({ id: walletId }) => ({ id: walletId })) })),
   },
 });
 
@@ -36,7 +38,7 @@ beforeEach(() => {
     {
       id: 'seeker-with-wallet',
       role: 'SEEKER',
-      wallet: {
+      wallets: [{
         id: 'existing-wallet',
         userId: 'seeker-with-wallet',
         currency: 'NGN',
@@ -44,10 +46,10 @@ beforeEach(() => {
         pendingWithdrawalBalance: '25.00',
         version: 3,
         updatedAt: 'must-not-change',
-      },
+      }],
     },
-    { id: 'seeker-without-wallet', role: 'SEEKER', wallet: null },
-    { id: 'employer-without-wallet', role: 'EMPLOYER', wallet: null },
+    { id: 'seeker-without-wallet', role: 'SEEKER', wallets: [] },
+    { id: 'employer-without-wallet', role: 'EMPLOYER', wallets: [] },
   ]);
 });
 
@@ -61,12 +63,12 @@ test('dry run counts missing seeker wallets without creating any', async () => {
     walletsCreated: 0,
     failures: [],
   });
-  expect(database.users.find(({ id }) => id === 'seeker-without-wallet').wallet).toBeNull();
-  expect(database.users.find(({ id }) => id === 'employer-without-wallet').wallet).toBeNull();
+  expect(database.users.find(({ id }) => id === 'seeker-without-wallet').wallets).toHaveLength(0);
+  expect(database.users.find(({ id }) => id === 'employer-without-wallet').wallets).toHaveLength(0);
 });
 
 test('backfill initializes only missing seeker wallets and preserves existing financial state', async () => {
-  const existingWallet = database.users[0].wallet;
+  const existingWallet = database.users[0].wallets[0];
 
   const result = await backfillSeekerWallets(database, { dryRun: false });
 
@@ -77,22 +79,22 @@ test('backfill initializes only missing seeker wallets and preserves existing fi
     walletsCreated: 1,
     failures: [],
   });
-  expect(database.users[0].wallet).toBe(existingWallet);
-  expect(database.users[0].wallet).toMatchObject({
+  expect(database.users[0].wallets[0]).toBe(existingWallet);
+  expect(database.users[0].wallets[0]).toMatchObject({
     currency: 'NGN',
     availableBalance: '125.00',
     pendingWithdrawalBalance: '25.00',
     version: 3,
     updatedAt: 'must-not-change',
   });
-  expect(database.users[1].wallet).toMatchObject({
+  expect(database.users[1].wallets[0]).toMatchObject({
     userId: 'seeker-without-wallet',
     currency: 'NGN',
     availableBalance: '0.00',
     pendingWithdrawalBalance: '0.00',
     version: 0,
   });
-  expect(database.users[2].wallet).toBeNull();
+  expect(database.users[2].wallets).toHaveLength(0);
 });
 
 test('a second backfill creates no additional wallets', async () => {
@@ -112,14 +114,14 @@ test('a second backfill creates no additional wallets', async () => {
 test('wallet failures are reported per seeker and do not stop other seekers', async () => {
   const originalUpsert = database.wallet.upsert;
   database.wallet.upsert = async (arguments_) => {
-    if (arguments_.where.userId === 'seeker-without-wallet') throw new Error('simulated failure');
+      if (arguments_.where.userId_currency.userId === 'seeker-without-wallet') throw new Error('simulated failure');
     return originalUpsert(arguments_);
   };
-  database.users.push({ id: 'seeker-also-missing', role: 'SEEKER', wallet: null });
+  database.users.push({ id: 'seeker-also-missing', role: 'SEEKER', wallets: [] });
 
   const result = await backfillSeekerWallets(database, { dryRun: false });
 
   expect(result.walletsCreated).toBe(1);
   expect(result.failures).toEqual([{ userId: 'seeker-without-wallet', message: 'simulated failure' }]);
-  expect(database.users.find(({ id }) => id === 'seeker-also-missing').wallet).not.toBeNull();
+  expect(database.users.find(({ id }) => id === 'seeker-also-missing').wallets).toHaveLength(1);
 });

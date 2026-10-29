@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { assertPaystackWebhookSignature } from '../services/paystack.service.js';
 import { handlePaystackContractWebhook } from '../services/contractPayment.service.js';
-import { executePendingWithdrawals, executeWithdrawal, reconcilePendingWithdrawals, reconcileWithdrawal } from '../services/withdrawalExecution.service.js';
+import { handlePaystackSubscriptionWebhook } from '../services/paystackWebhook.service.js';
+import { executePendingWithdrawals, executeWithdrawal, reconcilePendingWithdrawals, reconcileWithdrawal, recoverFlutterwaveTransfer } from '../services/withdrawalExecution.service.js';
 
 export const paystackWithdrawalWebhook = async (req, res, next) => {
   try {
@@ -10,6 +11,17 @@ export const paystackWithdrawalWebhook = async (req, res, next) => {
     assertPaystackWebhookSignature(req.get('x-paystack-signature'), rawBody);
     const payload = JSON.parse(rawBody.toString('utf8'));
     if (payload?.event === 'charge.success') {
+      const reference = payload?.data?.reference;
+      const payment = typeof reference === 'string' && reference.trim()
+        ? await prisma.payment.findUnique({
+          where: { providerReference: reference },
+          select: { provider: true, paymentType: true },
+        })
+        : null;
+      if (payment?.provider === 'PAYSTACK' && payment.paymentType === 'SUBSCRIPTION') {
+        const result = await handlePaystackSubscriptionWebhook({ payload });
+        return res.status(200).json({ success: true, data: result });
+      }
       const result = await handlePaystackContractWebhook({ payload });
       return res.status(200).json({ success: true, data: result });
     }
@@ -53,6 +65,15 @@ export const executeWithdrawalController = async (req, res, next) => {
 export const reconcileWithdrawalController = async (req, res, next) => {
   try {
     return res.status(200).json({ success: true, data: await reconcileWithdrawal(req.params.id) });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const recoverFlutterwaveTransferController = async (req, res, next) => {
+  try {
+    const result = await recoverFlutterwaveTransfer(req.params.id, req.validatedTransferId, req.user.sub);
+    return res.status(200).json({ success: true, data: result });
   } catch (error) {
     return next(error);
   }

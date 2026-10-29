@@ -7,6 +7,8 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 
 const adminId = '99999999-9999-4999-8999-999999999999';
 const employerId = '11111111-1111-4111-8111-111111111111';
@@ -30,8 +32,21 @@ const fundedEscrow = (status = 'FUNDED') => ({
   seekerNetAmount: new Prisma.Decimal('95000.00'),
   currency: 'NGN',
   fundedAmount: new Prisma.Decimal('100000.00'),
+  fundedAt: new Date('2026-09-10T05:00:00.000Z'),
   releasedAmount: new Prisma.Decimal('0.00'),
   refundedAmount: new Prisma.Decimal('0.00'),
+  refunds: [],
+  payments: [{
+    id: 'payment-id',
+    amount: new Prisma.Decimal('100000.00'),
+    currency: 'NGN',
+    paymentType: 'CONTRACT_FUNDING',
+    provider: 'FLUTTERWAVE',
+    providerReference: 'leamjobs_contract_payment_1',
+    status: 'SUCCESSFUL',
+    transactionId: 'provider-transaction-1',
+    verifiedAt: new Date('2026-09-10T05:00:00.000Z'),
+  }],
   status,
   releasedAt: null,
   freelanceContract: {
@@ -52,11 +67,15 @@ const fundedEscrow = (status = 'FUNDED') => ({
 });
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   escrow: { findUnique: jest.fn(), update: jest.fn() },
+  payment: { findMany: jest.fn() },
   dispute: { findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn(), update: jest.fn() },
+  refund: { findMany: jest.fn() },
   wallet: { update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   financialLedgerEntry: { create: jest.fn() },
+  financialAuditLog: { create: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
 };
@@ -76,6 +95,17 @@ beforeEach(() => {
   currentEscrow = fundedEscrow();
   currentDispute = null;
   transactionTail = Promise.resolve();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    const roleById = new Map([
+      [adminId, 'ADMIN'],
+      [employerId, 'EMPLOYER'],
+      [otherEmployerId, 'EMPLOYER'],
+      [seekerId, 'SEEKER'],
+      [otherSeekerId, 'SEEKER'],
+    ]);
+    const role = roleById.get(where.id);
+    return role ? { isActive: true, role } : null;
+  });
   mockPrisma.$transaction.mockImplementation((callback) => {
     const transaction = transactionTail.then(() => callback(mockPrisma));
     transactionTail = transaction.catch(() => undefined);
@@ -117,6 +147,7 @@ beforeEach(() => {
   });
   mockPrisma.wallet.update.mockResolvedValue({ availableBalance: new Prisma.Decimal('96000.00') });
   mockPrisma.financialLedgerEntry.create.mockResolvedValue({ id: 'ledger-id' });
+  mockPrisma.financialAuditLog.create.mockResolvedValue({ id: 'audit-id' });
   mockPrisma.freelanceContract.update.mockResolvedValue({});
 });
 
@@ -459,7 +490,7 @@ test('dispute creation and release serialize on the escrow row', async () => {
       role: 'EMPLOYER',
       reason: 'The agreed project requirements were not met.',
     }),
-    releaseContractFunds(contractId),
+    releaseContractFunds(contractId, adminId),
   ]);
 
   const submitted = results[0].status === 'fulfilled';

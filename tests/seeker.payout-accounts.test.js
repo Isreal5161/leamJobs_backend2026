@@ -10,6 +10,7 @@ process.env.PAYOUT_ENCRYPTION_KEY = 'test-payout-encryption-key';
 process.env.FLW_SECRET_KEY = 'test-flutterwave-secret';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   payoutAccount: { findMany: jest.fn(), findFirst: jest.fn() },
   $transaction: jest.fn(),
 };
@@ -22,15 +23,17 @@ jest.unstable_mockModule('../src/config/database.js', () => ({
 }));
 
 const { default: app } = await import('../src/app.js');
-const { encryptPayoutIdentifier } = await import('../src/utils/payoutEncryption.js');
+const { decryptPayoutIdentifier, encryptPayoutIdentifier } = await import('../src/utils/payoutEncryption.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
 const otherSeekerId = '22222222-2222-4222-8222-222222222222';
+const employerId = '55555555-5555-4555-8555-555555555555';
+const adminId = '66666666-6666-4666-8666-666666666666';
 const defaultAccountId = '33333333-3333-4333-8333-333333333333';
 const secondAccountId = '44444444-4444-4444-8444-444444444444';
 const createdAt = new Date('2026-09-05T12:00:00.000Z');
 
-const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role = 'SEEKER', subject = role === 'EMPLOYER' ? employerId : role === 'ADMIN' ? adminId : seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
   algorithm: 'HS256',
   issuer: process.env.JWT_ISSUER,
   audience: process.env.JWT_AUDIENCE,
@@ -53,6 +56,16 @@ const account = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    const roles = new Map([
+      [seekerId, 'SEEKER'],
+      [otherSeekerId, 'SEEKER'],
+      [employerId, 'EMPLOYER'],
+      [adminId, 'ADMIN'],
+    ]);
+    const role = roles.get(where.id);
+    return role ? { isActive: true, role } : null;
+  });
   mockPrisma.payoutAccount.findMany.mockResolvedValue([]);
   mockPrisma.payoutAccount.findFirst.mockResolvedValue(null);
   fetchMock.mockImplementation(async (url) => {
@@ -107,10 +120,11 @@ describe('GET /api/seeker/payout-accounts', () => {
         userId: seekerId,
         provider: 'FLUTTERWAVE',
         payoutMethod: 'BANK_ACCOUNT',
-        country: 'Nigeria',
-        currency: 'NGN',
-        verifiedAt: { not: null },
         disabledAt: null,
+        OR: [
+          { country: 'Nigeria', currency: 'NGN', verifiedAt: { not: null } },
+          { country: 'United States', currency: 'USD', verifiedAt: null, encryptedPayoutMetadata: { not: null } },
+        ],
       },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
       select: expect.objectContaining({ accountNumberLast4: true }),
@@ -125,19 +139,11 @@ describe('GET /api/seeker/payout-accounts', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true, data: { payoutAccounts: [] } });
     expect(mockPrisma.payoutAccount.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: {
-        userId: seekerId,
-        provider: 'FLUTTERWAVE',
-        payoutMethod: 'BANK_ACCOUNT',
-        country: 'Nigeria',
-        currency: 'NGN',
-        verifiedAt: { not: null },
-        disabledAt: null,
-      },
+      where: expect.objectContaining({ userId: seekerId, provider: 'FLUTTERWAVE', payoutMethod: 'BANK_ACCOUNT', disabledAt: null }),
     }));
   });
 
-  test('does not expose stored US routing details or treat the account as payout-ready', async () => {
+  test('does not expose stored US routing details and reports destination eligibility separately', async () => {
     mockPrisma.payoutAccount.findMany.mockResolvedValue([
       account({
         country: 'United States',
@@ -158,8 +164,8 @@ describe('GET /api/seeker/payout-accounts', () => {
       currency: 'USD',
       bankCode: null,
       verified: false,
-      withdrawalSupported: false,
-      status: 'UNSUPPORTED',
+      withdrawalSupported: true,
+      status: 'SUPPORTED_FOR_PAYOUT',
     });
     expect(JSON.stringify(response.body)).not.toContain('101019644');
     expect(JSON.stringify(response.body)).not.toContain('encrypted-us-metadata');
@@ -173,14 +179,7 @@ describe('GET /api/seeker/payout-accounts', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.payoutAccounts).toEqual([]);
     expect(mockPrisma.payoutAccount.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        provider: 'FLUTTERWAVE',
-        payoutMethod: 'BANK_ACCOUNT',
-        country: 'Nigeria',
-        currency: 'NGN',
-        verifiedAt: { not: null },
-        disabledAt: null,
-      }),
+      where: expect.objectContaining({ provider: 'FLUTTERWAVE', payoutMethod: 'BANK_ACCOUNT', disabledAt: null }),
     }));
   });
 });
@@ -196,25 +195,28 @@ describe('GET /api/seeker/payout-accounts/banks', () => {
   });
 
   describe('GET /api/seeker/payout-accounts/capabilities', () => {
-    test('returns only the currently supported Nigeria NGN destination', async () => {
+    test('reports NGN and US USD destinations with effective feature availability', async () => {
       const response = await request(app)
         .get('/api/seeker/payout-accounts/capabilities')
         .set('Authorization', `Bearer ${token()}`);
 
       expect(response.status).toBe(200);
-      expect(response.body.data.capabilities).toEqual([
-        {
-          country: 'Nigeria',
-          countryCode: 'NG',
-          currency: 'NGN',
-          provider: 'FLUTTERWAVE',
-          payoutMethod: 'BANK_ACCOUNT',
-          verificationMethod: 'FLUTTERWAVE_ACCOUNT_RESOLVE',
-          verifiedBeforeWithdrawal: true,
-          bankListAvailable: true,
-          requiredFields: ['bankCode', 'accountNumber'],
-        },
-      ]);
+      expect(response.body.data.capabilities).toHaveLength(3);
+      expect(response.body.data.capabilities.find((entry) => entry.country === 'Nigeria' && entry.currency === 'NGN'))
+        .toMatchObject({ verificationMethod: 'FLUTTERWAVE_ACCOUNT_RESOLVE', withdrawalEnabled: false });
+      expect(response.body.data.capabilities.find((entry) => entry.country === 'United States'))
+        .toMatchObject({
+          route: 'INTERNATIONAL_USD',
+          verificationMethod: 'BENEFICIARY_DETAILS',
+          withdrawalEnabled: false,
+          destinationSetupEnabled: true,
+        });
+      expect(response.body.data.capabilities.find((entry) => entry.route === 'NG_DOMICILIARY_USD'))
+        .toMatchObject({
+          withdrawalEnabled: false,
+          destinationSetupEnabled: false,
+          unavailableReason: expect.stringContaining('IMTO transfers as unavailable'),
+        });
     });
   });
 
@@ -380,10 +382,11 @@ describe('POST /api/seeker/payout-accounts', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  test('rejects new United States USD payout accounts', async () => {
+  test('stores complete US USD transfer details encrypted and does not expose them', async () => {
     const details = {
       country: 'United States',
-      accountHolderName: 'Jane Doe',
+      currency: 'USD',
+      beneficiaryName: 'Jane Doe',
       accountNumber: '210868791872',
       routingNumber: '101019644',
       swiftCode: 'IRVTUS3N',
@@ -393,11 +396,91 @@ describe('POST /api/seeker/payout-accounts', () => {
       postalCode: '94105',
       streetNumber: '4',
       streetName: 'Newton Street',
+      city: 'San Francisco',
     };
+    const tx = buildTransaction();
+    mockPrisma.$transaction.mockImplementation((callback) => callback(tx));
     const response = await request(app)
       .post('/api/seeker/payout-accounts')
       .set('Authorization', `Bearer ${token()}`)
       .send(details);
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.payoutAccount).toMatchObject({
+      country: 'United States',
+      currency: 'USD',
+      accountName: 'Jane Doe',
+      bankName: 'BANK OF AMERICA, N.A.',
+      verified: false,
+      withdrawalSupported: true,
+      status: 'SUPPORTED_FOR_PAYOUT',
+    });
+    expect(JSON.stringify(response.body)).not.toContain('101019644');
+    expect(JSON.stringify(response.body)).not.toContain('210868791872');
+    const saved = tx.payoutAccount.create.mock.calls[0][0].data;
+    expect(saved.bankCode).toBeNull();
+    expect(decryptPayoutIdentifier(saved.encryptedAccountNumber)).toBe('210868791872');
+    expect(JSON.parse(decryptPayoutIdentifier(saved.encryptedPayoutMetadata))).toMatchObject({
+      route: 'INTERNATIONAL_USD',
+      routing_number: '101019644',
+      swift_code: 'IRVTUS3N',
+      bank_name: 'BANK OF AMERICA, N.A.',
+      account_type: 'checking',
+      beneficiary_address: '4 Newton Street, San Francisco',
+      postal_code: '94105',
+      street_number: '4',
+      street_name: 'Newton Street',
+      city: 'San Francisco',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(tx.payoutAccount.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ provider: 'FLUTTERWAVE', payoutMethod: 'BANK_ACCOUNT', currency: 'USD', verifiedAt: null }),
+    }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('keeps Nigerian USD domiciliary setup closed while Flutterwave reports IMTO transfers unavailable', async () => {
+    const response = await request(app)
+      .post('/api/seeker/payout-accounts')
+      .set('Authorization', ['Bearer', token('SEEKER', seekerId)].join(' '))
+      .send({
+        country: 'Nigeria',
+        currency: 'USD',
+        bankCode: '144',
+        accountNumber: '5090280719',
+        beneficiaryFirstName: 'Tobi',
+        beneficiaryLastName: 'Jones',
+        beneficiaryEmail: 'tobi@example.com',
+        beneficiaryMobileNumber: '+2348000000000',
+        beneficiaryAddress: '19 Olubunmi Rotimi Street, Lekki',
+        beneficiaryOccupation: 'Consultant',
+      });
+
+    expect(response.status).toBe(422);
+    expect(response.body.message).toMatch(/IMTO transfers as unavailable/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a US destination with an invalid ABA routing checksum', async () => {
+    const response = await request(app)
+      .post('/api/seeker/payout-accounts')
+      .set('Authorization', ['Bearer', token('SEEKER', seekerId)].join(' '))
+      .send({
+        country: 'United States',
+        currency: 'USD',
+        beneficiaryName: 'Jane Doe',
+        accountNumber: '210868791872',
+        routingNumber: '101019645',
+        swiftCode: 'IRVTUS3N',
+        bankName: 'BANK OF AMERICA, N.A.',
+        accountType: 'checking',
+        beneficiaryAddress: '4 Newton Street, San Francisco',
+        postalCode: '94105',
+        streetNumber: '4',
+        streetName: 'Newton Street',
+        city: 'San Francisco',
+      });
 
     expect(response.status).toBe(400);
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();

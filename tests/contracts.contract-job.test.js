@@ -125,7 +125,7 @@ const mockPrisma = {
   escrow: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   payment: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   financialLedgerEntry: { createMany: jest.fn() },
-  wallet: { update: jest.fn() },
+  wallet: { update: jest.fn(), upsert: jest.fn().mockResolvedValue({ id: 'usd-wallet', currency: 'USD' }) },
   platformFeeConfiguration: { findUnique: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
@@ -151,6 +151,10 @@ const { getPaystackContractReturnUrl, initializeContractPayment, verifyContractP
 
 beforeEach(() => {
   jest.resetAllMocks();
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = true;
   env.PAYSTACK_COLLECTION_ENABLED = false;
   env.PAYSTACK_CONTRACT_CALLBACK_URL = process.env.PAYSTACK_CONTRACT_CALLBACK_URL;
   isPaystackConfigured.mockReturnValue(true);
@@ -168,6 +172,7 @@ beforeEach(() => {
     storedPayment = { ...payment(), ...data };
     return storedPayment;
   });
+
   mockPrisma.payment.findUnique.mockImplementation(async () => storedPayment ?? payment());
   mockPrisma.payment.update.mockImplementation(async ({ data }) => {
     storedPayment = { ...(storedPayment ?? payment()), ...data };
@@ -181,6 +186,18 @@ beforeEach(() => {
   verifyFlutterwaveTransaction.mockResolvedValue({ id: 456789, tx_ref: providerReference, amount: 525000, currency: 'NGN', status: 'successful' });
   initializePaystackPayment.mockImplementation(async ({ reference }) => ({ checkoutUrl: 'https://checkout.paystack.test', providerReference: reference }));
   verifyPaystackTransaction.mockResolvedValue({ id: 456789, reference: providerReference, amount: 52500000, currency: 'NGN', status: 'success' });
+});
+
+test('contract funding fails closed before opening a transaction or calling a provider', async () => {
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'blocked-funding' }))
+    .rejects.toMatchObject({ status: 503 });
+
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
 });
 
 test('contract selection creates protected engagement and leaves application payment pending', async () => {
@@ -605,23 +622,42 @@ test('a zero-percent snapshot charges only the project amount', async () => {
   expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '500000.00' }));
 });
 
-test('Paystack collection initializes with the trusted NGN amount and configured callback', async () => {
+test('new contract funding defaults to Flutterwave even when legacy Paystack collection is enabled', async () => {
   env.PAYSTACK_COLLECTION_ENABLED = true;
 
   const result = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'paystack-collection-key' });
 
   expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
-    data: expect.objectContaining({ provider: 'PAYSTACK', amount: new Prisma.Decimal('525000.00'), currency: 'NGN' }),
+    data: expect.objectContaining({ provider: 'FLUTTERWAVE', amount: new Prisma.Decimal('525000.00'), currency: 'NGN' }),
   }));
-  expect(initializePaystackPayment).toHaveBeenCalledWith(expect.objectContaining({
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({
     amount: '525000.00',
     currency: 'NGN',
     email: 'employer@example.com',
-    reference: expect.any(String),
-    callbackUrl: process.env.PAYSTACK_CONTRACT_CALLBACK_URL,
+    txRef: expect.any(String),
   }));
-  expect(result.payment.provider).toBe('PAYSTACK');
-  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
+  expect(result.payment.provider).toBe('FLUTTERWAVE');
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
+});
+
+test('new USD contract funding provisions a matching wallet and uses Flutterwave', async () => {
+  const usdContract = contractRecord();
+  usdContract.freelanceDetails.currency = 'USD';
+  usdContract.freelanceDetails.escrow.currency = 'USD';
+  mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
+
+  const result = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'usd-contract-funding' });
+
+  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
+    where: { userId_currency: { userId: seekerId, currency: 'USD' } },
+    create: { userId: seekerId, currency: 'USD' },
+    update: {},
+  });
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'USD' }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
+  expect(result.payment.provider).toBe('FLUTTERWAVE');
 });
 
 test('Paystack verification validates the provider reference and kobo amount before funding', async () => {
@@ -658,17 +694,20 @@ test.each([
   expect(mockPrisma.financialLedgerEntry.createMany).not.toHaveBeenCalled();
 });
 
-test('Paystack collection rejects non-NGN contracts before creating a payment', async () => {
+test('an existing Paystack funding intent remains pinned and rejects unsupported USD collection', async () => {
   env.PAYSTACK_COLLECTION_ENABLED = true;
   const usdContract = contractRecord();
   usdContract.freelanceDetails.currency = 'USD';
   usdContract.freelanceDetails.escrow.currency = 'USD';
+  storedPayment = payment({ provider: 'PAYSTACK' });
+  usdContract.freelanceDetails.escrow.payments = [storedPayment];
   mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
 
   await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'paystack-usd-key' }))
     .rejects.toMatchObject({ status: 422 });
   expect(mockPrisma.payment.create).not.toHaveBeenCalled();
   expect(initializePaystackPayment).not.toHaveBeenCalled();
+  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
 });
 
 test('Paystack verification rejects mismatched provider references without funding escrow', async () => {
@@ -702,6 +741,7 @@ test('Paystack verification provider failure leaves payment unsettled and escrow
 
 test('Paystack ambiguous initialization is not retried into a second checkout', async () => {
   env.PAYSTACK_COLLECTION_ENABLED = true;
+  storedPayment = payment({ provider: 'PAYSTACK' });
   mockPrisma.contract.findUnique.mockImplementation(async () => {
     const record = contractRecord();
     if (storedPayment) record.freelanceDetails.escrow.payments = [storedPayment];
@@ -728,6 +768,7 @@ test('Paystack ambiguous initialization is not retried into a second checkout', 
 
 test('definite Paystack initialization rejection releases the claim for a later attempt', async () => {
   env.PAYSTACK_COLLECTION_ENABLED = true;
+  storedPayment = payment({ provider: 'PAYSTACK' });
   mockPrisma.contract.findUnique.mockImplementation(async () => {
     const record = contractRecord();
     if (storedPayment) record.freelanceDetails.escrow.payments = [storedPayment];

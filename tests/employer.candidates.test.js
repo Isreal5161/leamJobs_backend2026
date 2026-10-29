@@ -9,7 +9,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
   $queryRaw: jest.fn(),
-  user: { findFirst: jest.fn() },
+  user: { findFirst: jest.fn(), findUnique: jest.fn() },
 };
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 
@@ -45,6 +45,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.$queryRaw.mockResolvedValue([]);
   mockPrisma.user.findFirst.mockResolvedValue(null);
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
 });
 
 describe('Employer candidate discovery', () => {
@@ -163,6 +164,7 @@ describe('Employer candidate discovery', () => {
   });
 
   test.each(['SEEKER', 'ADMIN'])('%s cannot access candidates', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .get('/api/employer/candidates')
       .set('Authorization', `Bearer ${token(role, 'restricted-user')}`);

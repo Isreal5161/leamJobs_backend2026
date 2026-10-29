@@ -71,6 +71,7 @@ const mockPrisma = {
   escrow: { findUnique: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   financialLedgerEntry: { createMany: jest.fn() },
+  wallet: { upsert: jest.fn().mockResolvedValue({ id: 'usd-wallet', currency: 'USD' }) },
   providerWebhookEvent: { create: jest.fn(), update: jest.fn(), delete: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
@@ -87,9 +88,14 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
 const { initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
 const { submitContractCompletion, confirmContractCompletion } = await import('../src/services/contract.service.js');
+const { env } = await import('../src/config/env.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = true;
   storedPayment = null;
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: contractId }]);
@@ -121,6 +127,25 @@ test('payment initialization uses server-side gross amount and currency', async 
   }));
   expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '100000.00', currency: 'NGN' }));
   expect(result.payment.checkoutUrl).toBe('https://checkout.test');
+});
+
+test('USD contract collection uses the Flutterwave funding path and provisions a USD wallet', async () => {
+  const usdContract = contract();
+  usdContract.freelanceDetails.currency = 'USD';
+  usdContract.freelanceDetails.escrow.currency = 'USD';
+  mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
+
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'usd-payment-key' }))
+    .resolves.toMatchObject({ payment: { provider: 'FLUTTERWAVE', currency: 'USD' } });
+  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
+    where: { userId_currency: { userId: seekerId, currency: 'USD' } },
+    create: { userId: seekerId, currency: 'USD' },
+    update: {},
+  });
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'USD' }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
 });
 
 test('wrong employer cannot initialize payment', async () => {

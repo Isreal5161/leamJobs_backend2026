@@ -8,7 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
-  user: { findMany: jest.fn(), count: jest.fn() },
+  user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn() },
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -51,6 +51,7 @@ const companyRecord = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'ADMIN' });
   mockPrisma.user.findMany.mockResolvedValue([]);
   mockPrisma.user.count.mockResolvedValue(0);
 });
@@ -63,6 +64,7 @@ test('unauthenticated requests are rejected', async () => {
 
 test.each(['SEEKER', 'EMPLOYER'])('%s users cannot access admin companies', async (role) => {
   const subject = role === 'SEEKER' ? seekerId : employerId;
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
   const response = await request(app)
     .get('/api/admin/companies')
     .set('Authorization', `Bearer ${token(role, subject)}`);

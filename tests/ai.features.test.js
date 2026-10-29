@@ -12,6 +12,7 @@ const seekerId = '11111111-1111-4111-8111-111111111111';
 const jobId = '22222222-2222-4222-8222-222222222222';
 let aiUsageAmount = 0;
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   subscription: { findFirst: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   job: { findFirst: jest.fn() },
@@ -72,6 +73,7 @@ const signedInterviewSession = ({ subject = seekerId, expiresIn = '45m', ...clai
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.subscription.findFirst.mockResolvedValue(null);
   mockPrisma.job.findFirst.mockResolvedValue({ id: jobId, title: 'Engineer', description: 'Build things', skills: ['JS'], requirements: [], responsibilities: [], benefits: [] });
   mockPrisma.seekerProfile.findUnique.mockResolvedValue({ professionalTitle: 'Engineer', bio: 'Builds products', skills: ['JS'], experience: [], education: [] });
@@ -182,6 +184,7 @@ test('AI profile assistant accepts rich frontend experience payloads without cha
 
 test('AI profile assistant rejects unauthenticated and non-seeker requests', async () => {
   await expect(request(app).post('/api/seeker/ai/profile-assistant').send({ request: 'Help' })).resolves.toMatchObject({ status: 401 });
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
   await expect(request(app).post('/api/seeker/ai/profile-assistant').set('Authorization', `Bearer ${token('EMPLOYER')}`).send({ request: 'Help' })).resolves.toMatchObject({ status: 403 });
 });
 
@@ -498,6 +501,7 @@ test('interactive interview endpoints require an authenticated seeker', async ()
   await expect(request(app).post('/api/seeker/ai/interview/evaluate').send({ sessionToken: 'token', answers: [] })).resolves.toMatchObject({ status: 401 });
 
   const employer = { Authorization: `Bearer ${token('EMPLOYER', randomUUID())}` };
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
   await expect(request(app).post('/api/seeker/ai/interview/start').set(employer).send({ jobId })).resolves.toMatchObject({ status: 403 });
   await expect(request(app).post('/api/seeker/ai/interview/evaluate').set(employer).send({ sessionToken: 'token', answers: [] })).resolves.toMatchObject({ status: 403 });
   expect(mockCompletion).not.toHaveBeenCalled();

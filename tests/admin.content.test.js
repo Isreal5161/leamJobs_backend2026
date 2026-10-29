@@ -7,7 +7,10 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-const mockPrisma = { siteContent: { findMany: jest.fn(), upsert: jest.fn() } };
+const mockPrisma = {
+  user: { findUnique: jest.fn() },
+  siteContent: { findMany: jest.fn(), upsert: jest.fn() },
+};
 const mockStorage = {
   createObjectKey: jest.fn(() => 'site-content/about/team/11111111-1111-4111-8111-111111111111.jpeg'),
   uploadObject: jest.fn(),
@@ -25,6 +28,10 @@ const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JW
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : 'SEEKER',
+  }));
   mockPrisma.siteContent.findMany.mockResolvedValue([]);
   mockPrisma.siteContent.upsert.mockResolvedValue({ pageKey: 'welcome', content: { heroTitle: 'Updated' }, updatedAt: new Date() });
   mockStorage.uploadObject.mockResolvedValue({});

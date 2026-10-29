@@ -3,6 +3,7 @@ import { z } from 'zod';
 const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(25),
   cursor: z.string().uuid().optional(),
+  currency: z.enum(['NGN', 'USD']).default('NGN'),
 }).strict();
 
 export const validateSeekerPaymentPagination = (req, res, next) => {

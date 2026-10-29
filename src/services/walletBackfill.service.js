@@ -4,9 +4,9 @@ export const backfillSeekerWallets = async (database, { dryRun = true } = {}) =>
   const seekers = await database.user.findMany({
     where: { role: 'SEEKER' },
     orderBy: { id: 'asc' },
-    select: { id: true, wallet: { select: { id: true } } },
+    select: { id: true, wallets: { where: { currency: 'NGN' }, select: { id: true } } },
   });
-  const missingWallets = seekers.filter((seeker) => !seeker.wallet);
+  const missingWallets = seekers.filter((seeker) => seeker.wallets.length === 0);
 
   if (dryRun) {
     return {
@@ -25,7 +25,7 @@ export const backfillSeekerWallets = async (database, { dryRun = true } = {}) =>
   for (const seeker of seekers) {
     try {
       await initializeSeekerWallet(database, seeker.id);
-      if (!seeker.wallet) walletsCreated += 1;
+      if (seeker.wallets.length === 0) walletsCreated += 1;
     } catch (error) {
       failures.push({
         userId: seeker.id,

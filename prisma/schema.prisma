@@ -28,20 +28,20 @@ model User {
   seekerProfile                 SeekerProfile?
   employerProfile               EmployerProfile?
   employerVerification          EmployerVerification?
-  reviewedEmployerVerifications EmployerVerification[]  @relation("EmployerVerificationReviewers")
+  reviewedEmployerVerifications EmployerVerification[]     @relation("EmployerVerificationReviewers")
 
-  jobs                  Job[]           @relation("EmployerJobs")
-  reviewedJobs          Job[]           @relation("JobReviewers")
-  applications          Application[]   @relation("SeekerApplications")
-  seekerConversations   Conversation[]  @relation("SeekerConversations")
-  employerConversations Conversation[]  @relation("EmployerConversations")
-  sentInvitations       JobInvitation[] @relation("EmployerInvitations")
-  receivedInvitations   JobInvitation[] @relation("SeekerInvitations")
-  employerInterviews   Interview[]        @relation("EmployerInterviews")
-  seekerInterviews     Interview[]        @relation("SeekerInterviews")
-  interviewHistory     InterviewHistory[] @relation("InterviewHistoryActors")
-  sentMessages         Message[]          @relation("MessageSenders")
-  contractActivities   ContractActivity[]  @relation("ContractActivityActors")
+  jobs                  Job[]                   @relation("EmployerJobs")
+  reviewedJobs          Job[]                   @relation("JobReviewers")
+  applications          Application[]           @relation("SeekerApplications")
+  seekerConversations   Conversation[]          @relation("SeekerConversations")
+  employerConversations Conversation[]          @relation("EmployerConversations")
+  sentInvitations       JobInvitation[]         @relation("EmployerInvitations")
+  receivedInvitations   JobInvitation[]         @relation("SeekerInvitations")
+  employerInterviews    Interview[]             @relation("EmployerInterviews")
+  seekerInterviews      Interview[]             @relation("SeekerInterviews")
+  interviewHistory      InterviewHistory[]      @relation("InterviewHistoryActors")
+  sentMessages          Message[]               @relation("MessageSenders")
+  contractActivities    ContractActivity[]      @relation("ContractActivityActors")
   subscriptions         Subscription[]
   payments              Payment[]
   subscriptionTrials    UserSubscriptionTrial[]
@@ -50,10 +50,12 @@ model User {
   employerContracts Contract[] @relation("EmployerContracts")
   seekerContracts   Contract[] @relation("SeekerContracts")
 
-  wallet           Wallet?
-  payoutAccounts   PayoutAccount[]
-  withdrawals      Withdrawal[]    @relation("SeekerWithdrawals")
-  payoutRecipients Payout[]        @relation("PayoutRecipients")
+  wallets                   Wallet[]
+  conversionOperations      ConversionOperation[]
+  conversionOperationEvents ConversionOperationEvent[] @relation("ConversionOperationEventActors")
+  payoutAccounts            PayoutAccount[]
+  withdrawals               Withdrawal[]               @relation("SeekerWithdrawals")
+  payoutRecipients          Payout[]                   @relation("PayoutRecipients")
 
   openedDisputes   Dispute[] @relation("DisputeOpeners")
   resolvedDisputes Dispute[] @relation("DisputeResolvers")
@@ -93,16 +95,16 @@ model EmailVerificationCode {
 }
 
 model OAuthAccount {
-  id             String   @id @default(uuid())
-  provider       String
+  id              String   @id @default(uuid())
+  provider        String
   providerSubject String
-  email          String
-  userId         String
-  firstName      String?
-  lastName       String?
-  pictureUrl     String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  email           String
+  userId          String
+  firstName       String?
+  lastName        String?
+  pictureUrl      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -112,20 +114,20 @@ model OAuthAccount {
 }
 
 model PendingOAuthRegistration {
-  id             String    @id @default(uuid())
-  provider       String
+  id              String    @id @default(uuid())
+  provider        String
   providerSubject String?
-  email          String
-  intendedRole   String
-  nonce          String
-  stateHash      String    @unique
-  codeVerifier   String?
-  status         String    @default("PENDING")
-  expiresAt      DateTime
-  consumedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  userId         String?
+  email           String
+  intendedRole    String
+  nonce           String
+  stateHash       String    @unique
+  codeVerifier    String?
+  status          String    @default("PENDING")
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  userId          String?
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -160,12 +162,12 @@ model SubscriptionPlan {
 }
 
 model SubscriptionSettings {
-  id               String   @id @default("default")
-  trialEnabled     Boolean  @default(true)
+  id                String   @id @default("default")
+  trialEnabled      Boolean  @default(true)
   trialDurationDays Int      @default(7)
-  trialPlanKey     String   @default("PREMIUM")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  trialPlanKey      String   @default("PREMIUM")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model Entitlement {
@@ -201,19 +203,19 @@ enum TrialStatus {
 }
 
 model UserSubscriptionTrial {
-  id             String       @id @default(uuid())
+  id             String      @id @default(uuid())
   userId         String
   grantedPlanKey String
-  status         TrialStatus  @default(ACTIVE)
-  durationDays   Int          @default(7)
-  startAt        DateTime     @default(now())
+  status         TrialStatus @default(ACTIVE)
+  durationDays   Int         @default(7)
+  startAt        DateTime    @default(now())
   endAt          DateTime
   endedAt        DateTime?
   source         String?
   description    String?
   metadata       Json?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -370,15 +372,15 @@ model EmailCampaign {
 }
 
 model SeekerProfile {
-  id                String   @id @default(uuid())
-  userId            String   @unique
+  id                String             @id @default(uuid())
+  userId            String             @unique
   professionalTitle String?
   bio               String?
   country           String?
   state             String?
   city              String?
   location          String?
-  skills            String[] @default([])
+  skills            String[]           @default([])
   education         Json?
   experience        Json?
   certifications    Json?
@@ -392,8 +394,8 @@ model SeekerProfile {
   profilePictureUrl String?
   profilePictureKey String?
   availability      SeekerAvailability @default(NOT_AVAILABLE)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -591,20 +593,20 @@ model SavedJob {
 }
 
 model JobAlert {
-  id              String          @id @default(uuid())
+  id              String           @id @default(uuid())
   seekerId        String
   name            String
   keywords        String?
-  skills          String[]        @default([])
+  skills          String[]         @default([])
   location        String?
   jobType         JobType?
-  workArrangement  WorkArrangement?
-  salaryMin       Decimal?        @db.Decimal(12, 2)
-  salaryMax       Decimal?        @db.Decimal(12, 2)
-  isActive        Boolean         @default(true)
+  workArrangement WorkArrangement?
+  salaryMin       Decimal?         @db.Decimal(12, 2)
+  salaryMax       Decimal?         @db.Decimal(12, 2)
+  isActive        Boolean          @default(true)
   lastRunAt       DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   seeker User @relation(fields: [seekerId], references: [id], onDelete: Cascade)
 
@@ -612,16 +614,16 @@ model JobAlert {
 }
 
 model SupportRequest {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   seekerId    String
   subject     String
   category    String
   message     String
-  status      String   @default("OPEN")
+  status      String    @default("OPEN")
   response    String?
   respondedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   seeker User @relation(fields: [seekerId], references: [id], onDelete: Cascade)
 
@@ -724,29 +726,29 @@ enum InterviewHistoryEvent {
 }
 
 model Interview {
-  id                         String          @id @default(uuid())
-  applicationId              String
-  jobId                      String
-  employerId                 String
-  seekerId                   String
-  method                     InterviewMethod
-  status                     InterviewStatus @default(SCHEDULED)
-  scheduledAt                DateTime
-  timezone                   String          @db.VarChar(100)
-  durationMinutes            Int             @default(30)
-  message                    String?         @db.VarChar(2000)
-  meetingUrl                 String?         @db.VarChar(2048)
-  phoneNumber                String?         @db.VarChar(40)
-  location                   String?         @db.VarChar(300)
+  id                        String            @id @default(uuid())
+  applicationId             String
+  jobId                     String
+  employerId                String
+  seekerId                  String
+  method                    InterviewMethod
+  status                    InterviewStatus   @default(SCHEDULED)
+  scheduledAt               DateTime
+  timezone                  String            @db.VarChar(100)
+  durationMinutes           Int               @default(30)
+  message                   String?           @db.VarChar(2000)
+  meetingUrl                String?           @db.VarChar(2048)
+  phoneNumber               String?           @db.VarChar(40)
+  location                  String?           @db.VarChar(300)
   previousApplicationStatus ApplicationStatus
-  cancelledAt                DateTime?
-  createdAt                  DateTime        @default(now())
-  updatedAt                  DateTime        @updatedAt
+  cancelledAt               DateTime?
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
 
-  application Application       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  job         Job               @relation(fields: [jobId], references: [id], onDelete: Restrict)
-  employer    User              @relation("EmployerInterviews", fields: [employerId], references: [id], onDelete: Restrict)
-  seeker      User              @relation("SeekerInterviews", fields: [seekerId], references: [id], onDelete: Restrict)
+  application Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  job         Job                @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  employer    User               @relation("EmployerInterviews", fields: [employerId], references: [id], onDelete: Restrict)
+  seeker      User               @relation("SeekerInterviews", fields: [seekerId], references: [id], onDelete: Restrict)
   history     InterviewHistory[]
 
   @@index([employerId, status, scheduledAt])
@@ -864,22 +866,22 @@ enum ContractProgressStatus {
 }
 
 model ContractActivity {
-  id                 String                 @id @default(uuid())
-  contractId         String
-  actorId            String?
-  actorName          String
-  type               ContractActivityType
-  progressStatus     ContractProgressStatus?
-  description        String                 @db.Text
-  links              Json?                  @db.JsonB
-  submissionVersion  Int?
-  parentActivityId   String?
-  createdAt          DateTime               @default(now())
+  id                String                  @id @default(uuid())
+  contractId        String
+  actorId           String?
+  actorName         String
+  type              ContractActivityType
+  progressStatus    ContractProgressStatus?
+  description       String                  @db.Text
+  links             Json?                   @db.JsonB
+  submissionVersion Int?
+  parentActivityId  String?
+  createdAt         DateTime                @default(now())
 
-  contract       Contract             @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  actor          User?                @relation("ContractActivityActors", fields: [actorId], references: [id], onDelete: SetNull)
-  parentActivity ContractActivity?    @relation("ContractActivityThread", fields: [parentActivityId], references: [id], onDelete: SetNull)
-  replies        ContractActivity[]   @relation("ContractActivityThread")
+  contract       Contract                 @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  actor          User?                    @relation("ContractActivityActors", fields: [actorId], references: [id], onDelete: SetNull)
+  parentActivity ContractActivity?        @relation("ContractActivityThread", fields: [parentActivityId], references: [id], onDelete: SetNull)
+  replies        ContractActivity[]       @relation("ContractActivityThread")
   attachments    ContractWorkAttachment[]
 
   @@index([contractId, createdAt, id])
@@ -888,13 +890,13 @@ model ContractActivity {
 }
 
 model ContractWorkAttachment {
-  id          String          @id @default(uuid())
+  id          String   @id @default(uuid())
   activityId  String
-  objectKey   String          @unique
-  fileName    String          @db.VarChar(255)
-  contentType String          @db.VarChar(100)
+  objectKey   String   @unique
+  fileName    String   @db.VarChar(255)
+  contentType String   @db.VarChar(100)
   fileSize    Int
-  createdAt   DateTime        @default(now())
+  createdAt   DateTime @default(now())
 
   activity ContractActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
 
@@ -929,11 +931,12 @@ model Escrow {
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
-  freelanceContract FreelanceContract      @relation(fields: [freelanceContractId], references: [contractId], onDelete: Restrict)
-  payments          Payment[]
-  refunds           Refund[]
-  disputes          Dispute[]
-  ledgerEntries     FinancialLedgerEntry[]
+  freelanceContract   FreelanceContract      @relation(fields: [freelanceContractId], references: [contractId], onDelete: Restrict)
+  payments            Payment[]
+  refunds             Refund[]
+  disputes            Dispute[]
+  ledgerEntries       FinancialLedgerEntry[]
+  conversionOperation ConversionOperation?
 
   @@index([status, createdAt])
   @@index([status, fundedAt])
@@ -999,11 +1002,12 @@ model Payment {
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
-  subscription  Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  escrow        Escrow?                @relation(fields: [escrowId], references: [id], onDelete: Restrict)
-  refunds       Refund[]
-  ledgerEntries FinancialLedgerEntry[]
+  user                 User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  subscription         Subscription?          @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  escrow               Escrow?                @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  refunds              Refund[]
+  ledgerEntries        FinancialLedgerEntry[]
+  conversionOperations ConversionOperation[]
 
   @@index([userId, createdAt])
   @@index([subscriptionId])
@@ -1013,7 +1017,7 @@ model Payment {
 
 model Wallet {
   id                       String   @id @default(uuid())
-  userId                   String   @unique
+  userId                   String
   currency                 String   @default("NGN") @db.VarChar(3)
   availableBalance         Decimal  @default(0) @db.Decimal(12, 2)
   pendingWithdrawalBalance Decimal  @default(0) @db.Decimal(12, 2)
@@ -1021,35 +1025,40 @@ model Wallet {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
-  ledgerEntries FinancialLedgerEntry[]
-  withdrawals   Withdrawal[]
+  user                            User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  ledgerEntries                   FinancialLedgerEntry[]
+  withdrawals                     Withdrawal[]
+  destinationConversionOperations ConversionOperation[]  @relation("ConversionDestinationWallet")
+
+  @@unique([userId, currency])
 }
 
 model FinancialLedgerEntry {
-  id             String          @id @default(uuid())
-  entryType      LedgerEntryType
-  amount         Decimal         @db.Decimal(12, 2)
-  currency       String          @db.VarChar(3)
-  balanceAfter   Decimal?        @db.Decimal(12, 2)
-  idempotencyKey String          @unique
-  description    String?
-  walletId       String?
-  contractId     String?
-  escrowId       String?
-  paymentId      String?
-  withdrawalId   String?
-  payoutId       String?
-  refundId       String?
-  createdAt      DateTime        @default(now())
+  id                    String          @id @default(uuid())
+  entryType             LedgerEntryType
+  amount                Decimal         @db.Decimal(12, 2)
+  currency              String          @db.VarChar(3)
+  balanceAfter          Decimal?        @db.Decimal(12, 2)
+  idempotencyKey        String          @unique
+  description           String?
+  walletId              String?
+  contractId            String?
+  escrowId              String?
+  paymentId             String?
+  withdrawalId          String?
+  payoutId              String?
+  refundId              String?
+  conversionOperationId String?         @unique
+  createdAt             DateTime        @default(now())
 
-  wallet     Wallet?     @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  contract   Contract?   @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  escrow     Escrow?     @relation(fields: [escrowId], references: [id], onDelete: Restrict)
-  payment    Payment?    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  withdrawal Withdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
-  payout     Payout?     @relation(fields: [payoutId], references: [id], onDelete: Restrict)
-  refund     Refund?     @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  wallet              Wallet?              @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  contract            Contract?            @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  escrow              Escrow?              @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  payment             Payment?             @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  withdrawal          Withdrawal?          @relation(fields: [withdrawalId], references: [id], onDelete: Restrict)
+  payout              Payout?              @relation(fields: [payoutId], references: [id], onDelete: Restrict)
+  refund              Refund?              @relation(fields: [refundId], references: [id], onDelete: Restrict)
+  conversionOperation ConversionOperation? @relation(fields: [conversionOperationId], references: [id], onDelete: Restrict)
 
   @@index([walletId, createdAt])
   @@index([contractId, createdAt])
@@ -1058,24 +1067,86 @@ model FinancialLedgerEntry {
   @@index([entryType, createdAt])
 }
 
+model ConversionOperation {
+  id                     String                    @id @default(uuid())
+  seekerId               String
+  escrowId               String                    @unique
+  sourcePaymentId        String?
+  destinationWalletId    String?
+  idempotencyKey         String                    @unique
+  sourceCurrency         String                    @db.VarChar(3)
+  destinationCurrency    String                    @db.VarChar(3)
+  sourceAmount           Decimal                   @db.Decimal(20, 8)
+  convertedAmount        Decimal?                  @db.Decimal(20, 8)
+  rate                   Decimal?                  @db.Decimal(28, 12)
+  rateDirection          String?
+  rateSource             String?
+  quoteReference         String?
+  quoteCreatedAt         DateTime?
+  quoteExpiresAt         DateTime?
+  feeAmount              Decimal?                  @db.Decimal(20, 8)
+  spreadAmount           Decimal?                  @db.Decimal(20, 8)
+  roundingAmount         Decimal?                  @db.Decimal(20, 8)
+  providerIdempotencyKey String?
+  providerTransactionId  String?
+  status                 ConversionOperationStatus @default(BLOCKED)
+  statusReason           String?
+  submittedAt            DateTime?
+  confirmedAt            DateTime?
+  lastReconciledAt       DateTime?
+  reconciliationAttempts Int                       @default(0)
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+
+  seeker            User                       @relation(fields: [seekerId], references: [id], onDelete: Restrict)
+  escrow            Escrow                     @relation(fields: [escrowId], references: [id], onDelete: Restrict)
+  sourcePayment     Payment?                   @relation(fields: [sourcePaymentId], references: [id], onDelete: Restrict)
+  destinationWallet Wallet?                    @relation("ConversionDestinationWallet", fields: [destinationWalletId], references: [id], onDelete: Restrict)
+  ledgerEntry       FinancialLedgerEntry?
+  events            ConversionOperationEvent[]
+
+  @@index([status, updatedAt])
+  @@index([seekerId, createdAt])
+  @@index([providerTransactionId])
+}
+
+model ConversionOperationEvent {
+  id                    String                     @id @default(uuid())
+  conversionOperationId String
+  actorUserId           String?
+  fromStatus            ConversionOperationStatus?
+  toStatus              ConversionOperationStatus
+  eventType             String
+  reason                String?
+  providerReference     String?
+  metadata              Json?
+  createdAt             DateTime                   @default(now())
+
+  conversionOperation ConversionOperation @relation(fields: [conversionOperationId], references: [id], onDelete: Restrict)
+  actor               User?               @relation("ConversionOperationEventActors", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversionOperationId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
 model PayoutAccount {
-  id                     String          @id @default(uuid())
-  userId                 String
-  provider               PaymentProvider
-  payoutMethod           PayoutMethod
-  country                String
-  currency               String          @db.VarChar(3)
-  bankCode               String?
-  bankName               String?
-  encryptedAccountNumber String
+  id                      String          @id @default(uuid())
+  userId                  String
+  provider                PaymentProvider
+  payoutMethod            PayoutMethod
+  country                 String
+  currency                String          @db.VarChar(3)
+  bankCode                String?
+  bankName                String?
+  encryptedAccountNumber  String
   encryptedPayoutMetadata String?
-  accountNumberLast4     String
-  accountName            String
-  isDefault              Boolean         @default(false)
-  verifiedAt             DateTime?
-  disabledAt             DateTime?
-  createdAt              DateTime        @default(now())
-  updatedAt              DateTime        @updatedAt
+  accountNumberLast4      String
+  accountName             String
+  isDefault               Boolean         @default(false)
+  verifiedAt              DateTime?
+  disabledAt              DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
 
   user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
   withdrawals Withdrawal[]
@@ -1085,26 +1156,35 @@ model PayoutAccount {
 }
 
 model Withdrawal {
-  id                String           @id @default(uuid())
-  walletId          String
-  seekerId          String
-  payoutAccountId   String
-  amount            Decimal          @db.Decimal(12, 2)
-  withdrawalFeePercentage Decimal    @default(0) @db.Decimal(5, 2)
-  withdrawalFeeAmount Decimal        @default(0) @db.Decimal(12, 2)
-  payoutAmount      Decimal          @default(0) @db.Decimal(12, 2)
-  currency          String           @db.VarChar(3)
-  status            WithdrawalStatus @default(PENDING)
-  idempotencyKey    String           @unique
-  provider          PaymentProvider?
-  providerReference String?          @unique
-  requestedAt       DateTime         @default(now())
-  processingAt      DateTime?
-  completedAt       DateTime?
-  failedAt          DateTime?
-  failureReason     String?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  id                      String           @id @default(uuid())
+  walletId                String
+  seekerId                String
+  payoutAccountId         String
+  amount                  Decimal          @db.Decimal(12, 2)
+  withdrawalFeePercentage Decimal          @default(0) @db.Decimal(5, 2)
+  withdrawalFeeAmount     Decimal          @default(0) @db.Decimal(12, 2)
+  payoutAmount            Decimal          @default(0) @db.Decimal(12, 2)
+  currency                String           @db.VarChar(3)
+  status                  WithdrawalStatus @default(PENDING)
+  idempotencyKey          String           @unique
+  provider                PaymentProvider?
+  providerReference       String?          @unique
+  payoutMethodSnapshot            PayoutMethod?
+  payoutCountrySnapshot           String?
+  bankCodeSnapshot                String?
+  bankNameSnapshot                String?
+  accountNameSnapshot             String?
+  encryptedAccountNumberSnapshot  String?
+  encryptedTransferMetadataSnapshot String?
+  accountNumberLast4Snapshot      String?
+  payoutAccountVerifiedAtSnapshot DateTime?
+  requestedAt             DateTime         @default(now())
+  processingAt            DateTime?
+  completedAt             DateTime?
+  failedAt                DateTime?
+  failureReason           String?
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
 
   wallet        Wallet                 @relation(fields: [walletId], references: [id], onDelete: Restrict)
   seeker        User                   @relation("SeekerWithdrawals", fields: [seekerId], references: [id], onDelete: Restrict)
@@ -1246,6 +1326,16 @@ enum NotificationType {
   SUCCESS
   WARNING
   ALERT
+}
+
+enum ConversionOperationStatus {
+  BLOCKED
+  QUOTED
+  SUBMITTED
+  UNCERTAIN
+  CONFIRMED
+  FAILED
+  RECONCILIATION_REQUIRED
 }
 
 enum NotificationCategory {

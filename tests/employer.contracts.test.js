@@ -86,6 +86,7 @@ const contractRecord = ({ owner = employerId, status = 'PENDING', escrowStatus =
 });
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   contract: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
   escrow: { update: jest.fn() },
   freelanceContract: { update: jest.fn() },
@@ -99,6 +100,7 @@ const { default: app } = await import('../src/app.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'EMPLOYER' });
   mockPrisma.contract.findMany.mockResolvedValue([contractRecord()]);
   mockPrisma.contract.count.mockResolvedValue(1);
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());

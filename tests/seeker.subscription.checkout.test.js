@@ -6,6 +6,12 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.FRONTEND_URL = 'https://leamjobs.test';
+process.env.FRONTEND_URL_PROD = '';
+process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'false';
+process.env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
+process.env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = 'true';
 
 const mockPrisma = {
   withdrawal: { findUnique: jest.fn().mockResolvedValue(null) },
@@ -17,8 +23,21 @@ const mockPrisma = {
   $transaction: jest.fn(async (callback) => callback(mockPrisma)),
   $queryRaw: jest.fn().mockResolvedValue([]),
 };
+const mockPaystack = {
+  initializePaystackPayment: jest.fn(),
+  verifyPaystackTransaction: jest.fn(),
+  assertPaystackWebhookSignature: jest.fn(),
+  isPaystackConfigured: jest.fn(() => true),
+  createPaystackTransferRecipient: jest.fn(),
+  createPaystackTransfer: jest.fn(),
+  getPaystackTransferByReference: jest.fn(),
+  getPaystackTransferByCode: jest.fn(),
+  normalizePaystackTransferStatus: jest.fn(),
+};
+let createdPayment = null;
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
+jest.unstable_mockModule('../src/services/paystack.service.js', () => mockPaystack);
 jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   FlutterwaveRequestError: class FlutterwaveRequestError extends Error {},
   getFlutterwaveBanks: jest.fn(),
@@ -32,6 +51,7 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   normalizeFlutterwaveTransferStatus: jest.fn(),
 }));
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
+const { initializePaystackPayment, verifyPaystackTransaction } = await import('../src/services/paystack.service.js');
 const { default: app } = await import('../src/app.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
@@ -94,6 +114,7 @@ const pendingPayment = (overrides = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  createdPayment = null;
   mockPrisma.subscriptionPlan.findMany.mockResolvedValue([subscriptionPlan]);
   mockPrisma.subscriptionPlan.findFirst.mockResolvedValue(subscriptionPlan);
   mockPrisma.subscriptionPlan.findUnique.mockResolvedValue(subscriptionPlan);
@@ -123,10 +144,13 @@ beforeEach(() => {
     payments: [{ ...paymentRecord, status: 'PENDING' }],
   });
   mockPrisma.subscription.create.mockResolvedValue({ id: 'sub-1', userId: seekerId, planId, status: 'PENDING', priceSnapshot: '49.00', currencySnapshot: 'NGN', billingIntervalSnapshot: 'MONTHLY', startDate: new Date(), endDate: null, nextRenewalAt: null, createdAt: new Date(), updatedAt: new Date() });
-  mockPrisma.payment.create.mockResolvedValue({ ...paymentRecord, id: 'payment-1', status: 'PENDING', metadata: { planId, checkoutUrl: null } });
+  mockPrisma.payment.create.mockImplementation(async ({ data }) => {
+    createdPayment = { ...paymentRecord, ...data, id: 'payment-1', status: 'PENDING' };
+    return createdPayment;
+  });
   mockPrisma.payment.findFirst.mockResolvedValue({ ...paymentRecord, status: 'PENDING', metadata: { planId, checkoutUrl: 'https://checkout.test' } });
   mockPrisma.payment.findUnique.mockResolvedValue({ ...paymentRecord, status: 'PENDING', metadata: { planId, checkoutUrl: 'https://checkout.test' } });
-  mockPrisma.payment.update.mockImplementation(async ({ data }) => ({ ...paymentRecord, ...data, id: 'payment-1' }));
+  mockPrisma.payment.update.mockImplementation(async ({ data }) => ({ ...(createdPayment ?? paymentRecord), ...data, id: 'payment-1' }));
   mockPrisma.payment.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.subscription.update.mockImplementation(async ({ data }) => ({ id: 'sub-1', userId: seekerId, planId, status: data.status ?? 'ACTIVE', priceSnapshot: '49.00', currencySnapshot: 'NGN', billingIntervalSnapshot: 'MONTHLY', createdAt: new Date(), updatedAt: new Date(), plan: subscriptionPlan }));
   mockPrisma.subscription.updateMany.mockImplementation(async ({ data }) => {
@@ -135,7 +159,9 @@ beforeEach(() => {
   });
   mockPrisma.subscriptionEvent.create.mockResolvedValue({ id: 'event-1' });
   initializeFlutterwavePayment.mockResolvedValue({ checkoutUrl: 'https://checkout.test', providerReference: paymentProviderRef });
+  initializePaystackPayment.mockResolvedValue({ checkoutUrl: 'https://checkout.paystack.test', providerReference: paymentProviderRef });
   verifyFlutterwaveTransaction.mockResolvedValue({ id: 123, tx_ref: paymentProviderRef, amount: 49, currency: 'NGN', status: 'successful' });
+  verifyPaystackTransaction.mockResolvedValue({ id: 123, reference: paymentProviderRef, amount: 4900, currency: 'NGN', status: 'success' });
 });
 
 test('unauthenticated user cannot start a subscription purchase', async () => {
@@ -151,6 +177,24 @@ test('non-seeker cannot start a subscription purchase', async () => {
     .send({ planId });
 
   expect(response.status).toBe(403);
+});
+
+test('USD subscription checkout uses Flutterwave and a persisted USD payment intent', async () => {
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  mockPrisma.subscriptionPlan.findUnique.mockResolvedValue({ ...subscriptionPlan, currency: 'USD' });
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/checkout')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ planId });
+
+  expect(response.status).toBe(200);
+  expect(mockPrisma.subscription.create).toHaveBeenCalled();
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'USD' }),
+  }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
 });
 
 test('authenticated seeker can cancel their own pending subscription checkout', async () => {
@@ -169,7 +213,7 @@ test('authenticated seeker can cancel their own pending subscription checkout', 
       userId: seekerId,
       providerReference: paymentProviderRef,
       paymentType: 'SUBSCRIPTION',
-      provider: 'FLUTTERWAVE',
+      provider: { in: ['FLUTTERWAVE', 'PAYSTACK'] },
     },
   }));
   expect(mockPrisma.subscription.updateMany).toHaveBeenCalledWith({
@@ -301,7 +345,7 @@ test('unknown plan is rejected before payment initialization', async () => {
   expect(response.body.message).toMatch(/plan/i);
 });
 
-test('backend uses database plan price instead of frontend amount', async () => {
+test('new subscription checkout uses Flutterwave and the trusted database price', async () => {
   mockPrisma.payment.findFirst.mockResolvedValue(null);
   let transactionActive = false;
   mockPrisma.$transaction.mockImplementation(async (callback) => {
@@ -323,11 +367,15 @@ test('backend uses database plan price instead of frontend amount', async () => 
     .send({ planId, amount: '999.99', currency: 'USD' });
 
   expect(response.status).toBe(200);
-  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ amount: '49.00', currency: 'NGN' }));
-  expect(response.body.data.checkoutUrl).toBe('https://checkout.test');
-  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({
-    redirectUrl: expect.stringContaining('/seeker/subscription/payment-result'),
+  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'NGN' }),
   }));
+  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({
+    amount: '49.00',
+    currency: 'NGN',
+  }));
+  expect(response.body.data.checkoutUrl).toBe('https://checkout.test');
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
   expect(mockPrisma.payment.updateMany).toHaveBeenCalledWith(expect.objectContaining({
     where: { id: 'payment-1', status: 'PENDING' },
     data: { status: 'PROCESSING' },
@@ -335,7 +383,7 @@ test('backend uses database plan price instead of frontend amount', async () => 
   expect(transactionActive).toBe(false);
 });
 
-test('Flutterwave initialization failure marks the pending intent failed without activating access', async () => {
+test('definitive Flutterwave initialization failure marks the pending intent failed without activating access', async () => {
   mockPrisma.payment.findFirst.mockResolvedValue(null);
   initializeFlutterwavePayment.mockRejectedValue(Object.assign(new Error('Flutterwave unavailable'), { status: 502 }));
 
@@ -353,6 +401,27 @@ test('Flutterwave initialization failure marks the pending intent failed without
     where: { id: 'sub-1', status: 'PENDING' },
     data: { status: 'FAILED' },
   }));
+});
+
+test('ambiguous Flutterwave initialization remains recoverable and is not marked failed', async () => {
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  initializeFlutterwavePayment.mockRejectedValue(Object.assign(new Error('Flutterwave outcome unknown'), {
+    status: 502,
+    outcomeUnknown: true,
+  }));
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/checkout')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ planId, idempotencyKey: 'checkout-init-unknown' });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toMatchObject({
+    initializing: true,
+    payment: { provider: 'FLUTTERWAVE', status: 'PROCESSING', providerReference: expect.stringMatching(/^leamjobs_sub_/) },
+  });
+  expect(mockPrisma.payment.updateMany).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalled();
 });
 
 test('checkout uses the supplied idempotency key to reuse one same-user same-plan intent', async () => {
@@ -384,6 +453,7 @@ test('checkout uses the supplied idempotency key to reuse one same-user same-pla
   expect(second.body.data.checkoutUrl).toBe('https://checkout.test');
   expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
   expect(initializeFlutterwavePayment).toHaveBeenCalledTimes(1);
+  expect(initializePaystackPayment).not.toHaveBeenCalled();
 });
 
 test('idempotency key cannot be reused by another user or for a different plan', async () => {
@@ -448,6 +518,74 @@ test('successful payment verification activates subscription and records event',
   expect(mockPrisma.subscriptionEvent.create).toHaveBeenCalled();
   expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
     where: { userId: seekerId, paymentType: 'SUBSCRIPTION', providerReference: paymentProviderRef },
+  }));
+});
+
+test('Paystack callback reference is verified in kobo before activating the subscription', async () => {
+  const pending = pendingPayment({ provider: 'PAYSTACK' });
+  createdPayment = pending;
+  mockPrisma.payment.findFirst.mockResolvedValue(pending);
+  mockPrisma.payment.findUnique.mockResolvedValue({
+    ...pending,
+    subscription: {
+      ...pending.subscription,
+      startDate: new Date(),
+      endDate: null,
+      nextRenewalAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      payments: [{ ...paymentRecord, provider: 'PAYSTACK', status: 'PENDING' }],
+    },
+  });
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/verify')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.subscription.status).toBe('ACTIVE');
+  expect(verifyPaystackTransaction).toHaveBeenCalledWith(paymentProviderRef);
+  expect(verifyFlutterwaveTransaction).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'SUCCESSFUL', transactionId: '123' }),
+  }));
+});
+
+test.each([
+  ['minor-unit amount mismatch', { amount: 4901, currency: 'NGN' }],
+  ['currency mismatch', { amount: 4900, currency: 'USD' }],
+])('rejects Paystack %s without activating subscription', async (_label, providerFields) => {
+  const pending = pendingPayment({ provider: 'PAYSTACK' });
+  mockPrisma.payment.findFirst.mockResolvedValue(pending);
+  mockPrisma.payment.findUnique.mockResolvedValue({
+    ...pending,
+    subscription: {
+      ...pending.subscription,
+      payments: [{ ...paymentRecord, provider: 'PAYSTACK', status: 'PENDING' }],
+    },
+  });
+  verifyPaystackTransaction.mockResolvedValue({
+    id: 123,
+    reference: paymentProviderRef,
+    status: 'success',
+    amount: providerFields.amount,
+    currency: providerFields.currency,
+    customer: { email: 'seeker@example.com' },
+    metadata: { userId: seekerId, planId, subscriptionId: 'sub-1', planKey: 'PROFESSIONAL' },
+  });
+
+  const response = await request(app)
+    .post('/api/seeker/subscriptions/verify')
+    .set('Authorization', `Bearer ${token('SEEKER', seekerId)}`)
+    .send({ providerReference: paymentProviderRef });
+
+  expect(response.status).toBe(422);
+  expect(mockPrisma.subscription.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'ACTIVE' }),
+  }));
+  expect(mockPrisma.payment.update).not.toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'SUCCESSFUL' }),
   }));
 });
 

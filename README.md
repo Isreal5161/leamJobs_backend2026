@@ -124,6 +124,18 @@ Lists accept `page`, `limit` (1–50; defaults to 1 and 20), `status`, `from`, a
 
 - **User** - User accounts with UUID primary key, supporting multiple roles (SEEKER, EMPLOYER, ADMIN)
 
+### Withdrawal destination snapshots
+
+New withdrawal records persist the provider, payout method, country, bank details, masked account number, verification time, encrypted account identifier, and encrypted transfer metadata as a snapshot of the destination used for that request. Sensitive snapshots use the existing AES-256-GCM `PAYOUT_ENCRYPTION_KEY`; storing a copy on each withdrawal extends retention and requires the same access controls and retention policy as payout-account data.
+
+The additive snapshot migrations do not backfill existing withdrawals: a current payout account cannot prove which destination was used historically. Legacy NGN and provider-pinned Paystack withdrawals continue to use their linked payout account when snapshots are absent; USD withdrawals without both the encrypted account-number and transfer-metadata snapshots are held for manual review and must not be executed. Apply the prepared additive migrations before deploying code that writes snapshot fields.
+
+The United States USD Flutterwave route stores and snapshots the beneficiary's account number and the required routing number, SWIFT code, bank name, account type, address, ZIP/postal code, street number, and street name. It is controlled by the default-off `LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED` flag in addition to the existing payment and withdrawal switches. Flutterwave's transfer API requires an integer USD amount; quotes that would produce a fractional USD payout are rejected.
+
+If a Flutterwave transfer request has an unknown outcome and no transfer ID was returned, keep the withdrawal in `PROCESSING` with its reservation intact; do not retry or execute it again. An authorized admin must locate the original transfer ID from Flutterwave's trusted merchant records using the saved withdrawal reference, then submit only that ID to `POST /api/admin/withdrawals/:id/recover-flutterwave-transfer`. The backend looks up the transfer directly with Flutterwave and checks its ID, saved reference, payout amount, currency, and withdrawal owner before associating it, writing a financial audit record, and allowing normal reconciliation. If Flutterwave cannot verify a matching transfer, no association or financial state change is made and the withdrawal remains pending manual review.
+
+The Nigerian USD domiciliary route is deliberately unavailable: current Flutterwave documentation says IMTO transfers to USD domiciliary accounts are unavailable. The implementation also requires approved merchant/KYC remitter details before accepting the route if provider availability changes. These values must not be inferred from user profile information.
+
 ### Running Migrations
 
 ```bash

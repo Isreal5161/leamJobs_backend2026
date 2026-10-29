@@ -49,6 +49,7 @@ const token = (role = 'SEEKER', sub = userId) => jwt.sign({ sub, role }, process
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
   mockPrisma.notification.findMany.mockResolvedValue([]);
   mockPrisma.notification.findFirst.mockResolvedValue({
     id: notificationId,
@@ -265,6 +266,7 @@ describe('notification service', () => {
 
 describe('notification endpoints', () => {
   test('lists only the authenticated user notifications', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
     mockPrisma.notification.findMany.mockResolvedValue([{
       id: notificationId,
       recipientUserId: userId,
@@ -294,6 +296,7 @@ describe('notification endpoints', () => {
   });
 
   test('marks a notification read for the authenticated user only', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
     mockPrisma.notification.findUnique.mockResolvedValue({
       id: notificationId,
       recipientUserId: userId,

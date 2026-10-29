@@ -95,7 +95,7 @@ const createApplication = (overrides = {}) => ({
 });
 
 const configureDashboardData = ({ user = createUser(), jobs = [createJob()] } = {}) => {
-  mockPrisma.user.findUnique.mockResolvedValue(user);
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER', ...user });
   mockPrisma.application.count.mockImplementation(({ where }) =>
     Promise.resolve(where.status === 'INTERVIEW' ? 2 : 7),
   );
@@ -127,13 +127,16 @@ describe('GET /api/seeker/dashboard', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('returns 403 for a valid %s token', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app)
       .get('/api/seeker/dashboard')
       .set('Authorization', `Bearer ${createToken(role)}`);
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ message: 'Forbidden' });
-    expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: seekerId },
+    }));
   });
 
   test('returns isolated seeker data and the approved response shape', async () => {

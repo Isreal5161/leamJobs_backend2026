@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   payment: { findMany: jest.fn() },
 };
 
@@ -44,6 +45,15 @@ const payment = (id = paymentId) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    const roles = new Map([
+      [adminId, 'ADMIN'],
+      [seekerId, 'SEEKER'],
+      [employerId, 'EMPLOYER'],
+    ]);
+    const role = roles.get(where.id);
+    return role ? { isActive: true, role } : null;
+  });
   mockPrisma.payment.findMany.mockResolvedValue([]);
 });
 
@@ -81,6 +91,28 @@ test('returns safe payment records with cursor pagination and related context', 
   expect(query.where).toEqual(expect.objectContaining({ status: 'SUCCESSFUL', paymentType: 'CONTRACT_FUNDING', provider: 'FLUTTERWAVE', currency: 'NGN' }));
   expect(query.where.createdAt).toEqual({ gte: new Date('2026-09-01T00:00:00.000Z'), lt: new Date('2026-09-13T00:00:00.000Z') });
   expect(query.where.OR).toHaveLength(3);
+});
+
+test('exposes only the manual-review indicator and subscription status for reconciled payments', async () => {
+  mockPrisma.payment.findMany.mockResolvedValue([{
+    ...payment(),
+    paymentType: 'SUBSCRIPTION',
+    metadata: { manualReviewRequired: true, customerEmail: 'private@example.com' },
+    subscription: { id: 'subscription-1', status: 'CANCELLED', plan: { key: 'PROFESSIONAL', displayName: 'Professional' } },
+    escrow: null,
+  }]);
+
+  const response = await request(app)
+    .get('/api/admin/payments')
+    .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+  expect(response.status).toBe(200);
+  expect(response.body.data.items[0]).toEqual(expect.objectContaining({
+    manualReviewRequired: true,
+    context: expect.objectContaining({ subscriptionStatus: 'CANCELLED' }),
+  }));
+  expect(response.body.data.items[0].metadata).toBeUndefined();
+  expect(response.body.data.items[0].manualReviewReason).toBeUndefined();
 });
 
 test('supports cursor pagination and empty results', async () => {

@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-const model = () => ({ count: jest.fn(), groupBy: jest.fn() });
+const model = () => ({ count: jest.fn(), groupBy: jest.fn(), findUnique: jest.fn() });
 const mockPrisma = {
   user: model(), job: model(), application: model(), contract: model(), payment: model(), subscription: model(), escrow: model(),
   $queryRaw: jest.fn(),
@@ -25,6 +25,10 @@ const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JW
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
+    isActive: true,
+    role: where.id === adminId ? 'ADMIN' : where.id === employerId ? 'EMPLOYER' : 'SEEKER',
+  }));
   for (const resource of [mockPrisma.user, mockPrisma.job, mockPrisma.application, mockPrisma.contract, mockPrisma.payment, mockPrisma.subscription, mockPrisma.escrow]) {
     resource.count.mockResolvedValue(0);
     resource.groupBy.mockResolvedValue([]);

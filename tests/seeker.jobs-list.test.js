@@ -8,6 +8,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  user: { findUnique: jest.fn() },
   job: { findMany: jest.fn() },
 };
 
@@ -41,7 +42,10 @@ const createJob = (overrides = {}) => ({
   ...overrides,
 });
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
+});
 
 describe('GET /api/seeker/jobs', () => {
   test('lists approved jobs for an authenticated seeker with safe fields', async () => {
@@ -135,6 +139,7 @@ describe('GET /api/seeker/jobs', () => {
   });
 
   test.each(['EMPLOYER', 'ADMIN'])('rejects %s role', async (role) => {
+    mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role });
     const response = await request(app).get('/api/seeker/jobs').set('Authorization', `Bearer ${token(role)}`);
     expect(response.status).toBe(403);
     expect(mockPrisma.job.findMany).not.toHaveBeenCalled();

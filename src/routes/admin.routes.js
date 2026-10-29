@@ -47,10 +47,15 @@ import {
 import { validateEmployerApplicationStatus } from '../validators/employerApplications.validation.js';
 import { validateContractPayment, validateContractPaymentVerification } from '../validators/contract.validation.js';
 import { validateAdminPaymentsQuery } from '../validators/adminPayments.validation.js';
-import { listAdminPaymentsController } from '../controllers/adminPayments.controller.js';
+import {
+  listAdminConversionOperationsController,
+  listAdminPaymentsController,
+} from '../controllers/adminPayments.controller.js';
+import { validateAdminConversionOperationsQuery } from '../validators/adminConversionOperations.validation.js';
 import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription, trialSettings, updateTrialSettings } from '../controllers/adminSubscriptions.controller.js';
 import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId, validateAdminSubscriptionTrialSettings } from '../validators/adminSubscriptions.validation.js';
-import { executeWithdrawalController, reconcileWithdrawalController } from '../controllers/withdrawal.controller.js';
+import { executeWithdrawalController, reconcileWithdrawalController, recoverFlutterwaveTransferController } from '../controllers/withdrawal.controller.js';
+import { validateFlutterwaveWithdrawalRecovery } from '../validators/withdrawalRecovery.validation.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { campaignDeliveries, campaignPreview, campaignRecipients, campaignRecords, campaignReport, createCampaign, previewTemplate, sendCampaign, templates, updateCampaign, updateTemplate } from '../controllers/adminCommunications.controller.js';
@@ -83,8 +88,16 @@ adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminA
 adminRouter.get('/platform-fee', authenticate, requireRole('ADMIN'), getAdminPlatformFee);
 adminRouter.patch('/platform-fee', authenticate, requireRole('ADMIN'), validatePlatformFeeUpdate, updateAdminPlatformFee);
 adminRouter.get('/payments', authenticate, requireRole('ADMIN'), validateAdminPaymentsQuery, listAdminPaymentsController);
+adminRouter.get(
+  '/conversion-operations',
+  authenticate,
+  requireRole('ADMIN'),
+  validateAdminConversionOperationsQuery,
+  listAdminConversionOperationsController,
+);
 adminRouter.post('/withdrawals/:id/execute', authenticate, requireRole('ADMIN'), executeWithdrawalController);
 adminRouter.post('/withdrawals/:id/reconcile', authenticate, requireRole('ADMIN'), reconcileWithdrawalController);
+adminRouter.post('/withdrawals/:id/recover-flutterwave-transfer', authenticate, requireRole('ADMIN'), validateFlutterwaveWithdrawalRecovery, recoverFlutterwaveTransferController);
 adminRouter.get('/subscription-plans', authenticate, requireRole('ADMIN'), listPlans);
 adminRouter.post('/subscription-plans', authenticate, requireRole('ADMIN'), validateAdminSubscriptionPlanCreate, createPlan);
 adminRouter.patch('/subscription-plans/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);
