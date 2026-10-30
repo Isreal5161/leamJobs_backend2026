@@ -2,6 +2,28 @@ import { env } from '../config/env.js';
 import { FLUTTERWAVE_NIGERIAN_DOM_USD_AVAILABLE, getFlutterwaveDomRemitterMetadata } from '../config/payoutCountries.js';
 import { decryptPayoutIdentifier } from '../utils/payoutEncryption.js';
 
+const requiredNigerianUsdMetadataFields = [
+  'sender',
+  'sender_address',
+  'sender_city',
+  'sender_country',
+  'sender_id_number',
+  'sender_id_type',
+  'sender_id_expiry',
+  'sender_mobile_number',
+  'sender_email_address',
+  'sender_occupation',
+  'sender_beneficiary_relationship',
+  'first_name',
+  'last_name',
+  'email',
+  'beneficiary_country',
+  'mobile_number',
+  'recipient_address',
+  'beneficiary_occupation',
+  'transfer_purpose',
+];
+
 export class WithdrawalTransferMetadataError extends Error {
   constructor(message, status = 422) {
     super(message);
@@ -25,7 +47,7 @@ export const buildWithdrawalTransferMetadata = (payoutAccount) => {
     if (required.some((key) => !String(metadata?.[key] ?? '').trim())) {
       throw new WithdrawalTransferMetadataError('The saved US bank destination is incomplete. Update the payout details before requesting a withdrawal.');
     }
-    return [metadata];
+    return [{ ...metadata, route: 'INTERNATIONAL_USD' }];
   }
 
   if (payoutAccount.country === 'Nigeria' && payoutAccount.currency === 'USD') {
@@ -36,6 +58,9 @@ export const buildWithdrawalTransferMetadata = (payoutAccount) => {
       );
     }
     const beneficiary = decryptJson(payoutAccount.encryptedPayoutMetadata);
+    if (!beneficiary || typeof beneficiary !== 'object' || Array.isArray(beneficiary)) {
+      throw new WithdrawalTransferMetadataError('The saved Nigerian USD beneficiary details are incomplete. Update the payout details before requesting a withdrawal.');
+    }
     const { missing, metadata: remitter } = getFlutterwaveDomRemitterMetadata(env);
     if (missing.length) {
       throw new WithdrawalTransferMetadataError(
@@ -43,7 +68,7 @@ export const buildWithdrawalTransferMetadata = (payoutAccount) => {
         503,
       );
     }
-    return [{
+    const transferMetadata = {
       ...remitter,
       first_name: beneficiary.first_name,
       last_name: beneficiary.last_name,
@@ -53,7 +78,12 @@ export const buildWithdrawalTransferMetadata = (payoutAccount) => {
       recipient_address: beneficiary.recipient_address,
       beneficiary_occupation: beneficiary.beneficiary_occupation,
       transfer_purpose: 'Wallet withdrawal',
-    }];
+      route: 'NG_DOMICILIARY_USD',
+    };
+    if (requiredNigerianUsdMetadataFields.some((key) => !String(transferMetadata[key] ?? '').trim())) {
+      throw new WithdrawalTransferMetadataError('The saved Nigerian USD destination is incomplete. Update the payout details before requesting a withdrawal.');
+    }
+    return [transferMetadata];
   }
 
   if (payoutAccount.country === 'Nigeria' && payoutAccount.currency === 'NGN') return null;
@@ -82,6 +112,10 @@ export const decryptWithdrawalTransferMetadataSnapshot = (encryptedSnapshot) => 
     if (required.some((key) => !String(filteredFields[key] ?? '').trim())
       || !['checking', 'depository'].includes(String(filteredFields.account_type).toLowerCase())) {
       throw new WithdrawalTransferMetadataError('The saved US bank destination snapshot is incomplete. Contact support before payout.', 409);
+    }
+  } else {
+    if (requiredNigerianUsdMetadataFields.some((key) => !String(filteredFields[key] ?? '').trim())) {
+      throw new WithdrawalTransferMetadataError('The saved Nigerian USD destination snapshot is incomplete. Contact support before payout.', 409);
     }
   }
   return [filteredFields];

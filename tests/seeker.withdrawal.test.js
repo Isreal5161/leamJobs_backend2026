@@ -366,7 +366,6 @@ describe('POST /api/seeker/payments/withdrawals', () => {
     test('reserves US USD funds with an encrypted immutable transfer-metadata snapshot', async () => {
       env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
       const metadata = {
-        route: 'INTERNATIONAL_USD',
         routing_number: '101019644',
         swift_code: 'IRVTUS3N',
         bank_name: 'BANK OF AMERICA, N.A.',
@@ -412,7 +411,10 @@ describe('POST /api/seeker/payments/withdrawals', () => {
         accountNameSnapshot: 'Jane Doe',
       });
       expect(saved.encryptedTransferMetadataSnapshot).not.toContain('101019644');
-      expect(JSON.parse(decryptPayoutIdentifier(saved.encryptedTransferMetadataSnapshot))).toEqual([metadata]);
+      expect(JSON.parse(decryptPayoutIdentifier(saved.encryptedTransferMetadataSnapshot))).toEqual([{
+        ...metadata,
+        route: 'INTERNATIONAL_USD',
+      }]);
       expect(tx.wallet.update).toHaveBeenCalled();
       expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({ entryType: 'WITHDRAWAL_RESERVED', currency: 'USD' }),

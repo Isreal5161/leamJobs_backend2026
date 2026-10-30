@@ -16,7 +16,6 @@ const {
 const { decryptPayoutIdentifier, encryptPayoutIdentifier } = await import('../src/utils/payoutEncryption.js');
 
 const usMetadata = {
-  route: 'INTERNATIONAL_USD',
   routing_number: '101019644',
   swift_code: 'IRVTUS3N',
   bank_name: 'BANK OF AMERICA, N.A.',
@@ -38,7 +37,10 @@ test('US transfer metadata is decrypted, snapshotted encrypted, and mapped witho
   const encryptedSnapshot = encryptPayoutIdentifier(JSON.stringify(metadata));
 
   expect(encryptedSnapshot).not.toContain('101019644');
-  expect(JSON.parse(decryptPayoutIdentifier(encryptedSnapshot))).toEqual([usMetadata]);
+  expect(JSON.parse(decryptPayoutIdentifier(encryptedSnapshot))).toEqual([{
+    ...usMetadata,
+    route: 'INTERNATIONAL_USD',
+  }]);
   expect(decryptWithdrawalTransferMetadataSnapshot(encryptedSnapshot)).toEqual([{
     routing_number: '101019644',
     swift_code: 'IRVTUS3N',
@@ -55,6 +57,27 @@ test('US transfer metadata is decrypted, snapshotted encrypted, and mapped witho
 test('invalid or absent immutable snapshots fail closed', () => {
   expect(() => decryptWithdrawalTransferMetadataSnapshot(null)).toThrow(/immutable transfer metadata snapshot/i);
   expect(() => decryptWithdrawalTransferMetadataSnapshot(encryptPayoutIdentifier('not-json'))).toThrow(/metadata is unavailable/i);
+});
+
+test('missing and unsupported snapshot routes fail closed', () => {
+  expect(() => decryptWithdrawalTransferMetadataSnapshot(encryptPayoutIdentifier(JSON.stringify([usMetadata]))))
+    .toThrow(/route is not supported/i);
+  expect(() => decryptWithdrawalTransferMetadataSnapshot(encryptPayoutIdentifier(JSON.stringify([{
+    ...usMetadata,
+    route: 'UNSUPPORTED_ROUTE',
+  }])))).toThrow(/route is not supported/i);
+});
+
+test('incomplete US snapshots fail closed', () => {
+  const { routing_number: _routingNumber, ...incompleteMetadata } = usMetadata;
+  expect(() => decryptWithdrawalTransferMetadataSnapshot(encryptPayoutIdentifier(JSON.stringify([{
+    ...incompleteMetadata,
+    route: 'INTERNATIONAL_USD',
+  }])))).toThrow(/US bank destination snapshot is incomplete/i);
+});
+
+test('NGN metadata building remains unchanged', () => {
+  expect(buildWithdrawalTransferMetadata({ country: 'Nigeria', currency: 'NGN' })).toBeNull();
 });
 
 test('Nigerian domiciliary transfer does not proceed when Flutterwave currently disables IMTO', () => {
