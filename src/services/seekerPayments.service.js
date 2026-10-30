@@ -79,9 +79,6 @@ export const getSeekerPaymentSummary = async (seekerId) => {
 const paymentLedgerSelect = {
   id: true,
   amount: true,
-  withdrawalFeePercentage: true,
-  withdrawalFeeAmount: true,
-  payoutAmount: true,
   currency: true,
   description: true,
   createdAt: true,

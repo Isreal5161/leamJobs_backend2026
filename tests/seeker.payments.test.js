@@ -140,6 +140,10 @@ describe('seeker read-only payment endpoints', () => {
     expect(response.status).toBe(200);
     expect(response.body.data.items[0]).toMatchObject({ id: ledgerId, jobTitle: 'Frontend Developer', employerName: 'Example Ltd', amount: '900.00', platformFee: '100.00', netAmount: '900.00', status: 'CREDITED' });
     expect(mockPrisma.financialLedgerEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { walletId, currency: 'NGN', entryType: 'WALLET_CREDIT' }, take: 2 }));
+    const paymentHistoryQuery = mockPrisma.financialLedgerEntry.findMany.mock.calls[0][0];
+    expect(paymentHistoryQuery.select).not.toHaveProperty('withdrawalFeePercentage');
+    expect(paymentHistoryQuery.select).not.toHaveProperty('withdrawalFeeAmount');
+    expect(paymentHistoryQuery.select).not.toHaveProperty('payoutAmount');
   });
 
   test('returns safe transaction and withdrawal fields without encrypted account data', async () => {
