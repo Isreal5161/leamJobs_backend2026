@@ -196,9 +196,9 @@ const mapWithdrawal = (withdrawal) => ({
   } : null,
 });
 
-export const getSeekerWithdrawals = async (seekerId, { limit, cursor, currency }) => {
+export const getSeekerWithdrawals = async (seekerId, { limit, cursor, currency = 'NGN' }) => {
   const withdrawals = await prisma.withdrawal.findMany({
-    where: { seekerId, ...(currency ? { currency } : {}) },
+    where: { seekerId, currency },
     orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),

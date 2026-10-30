@@ -181,6 +181,67 @@ describe('seeker read-only payment endpoints', () => {
     expect(invalid.status).toBe(400);
   });
 
+  test.each([
+    ['/api/seeker/payments', 'payments'],
+    ['/api/seeker/payments/transactions', 'transactions'],
+    ['/api/seeker/payments/withdrawals', 'withdrawals'],
+  ])('accepts NGN currency and paginates %s within the authenticated seeker scope', async (endpoint, historyType) => {
+    const response = await request(app)
+      .get(`${endpoint}?limit=1&currency=NGN&cursor=${ledgerId}`)
+      .set('Authorization', ['Bearer', token()].join(' '));
+
+    expect(response.status).toBe(200);
+    if (historyType === 'withdrawals') {
+      expect(mockPrisma.withdrawal.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { seekerId, currency: 'NGN' },
+        take: 2,
+        cursor: { id: ledgerId },
+        skip: 1,
+      }));
+      return;
+    }
+
+    expect(mockPrisma.wallet.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_currency: { userId: seekerId, currency: 'NGN' } },
+    }));
+    expect(mockPrisma.financialLedgerEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ walletId, currency: 'NGN' }),
+      take: 2,
+      cursor: { id: ledgerId },
+      skip: 1,
+    }));
+  });
+
+  test.each([
+    '/api/seeker/payments',
+    '/api/seeker/payments/transactions',
+    '/api/seeker/payments/withdrawals',
+  ])('rejects unsupported currency for %s before querying payment data', async (endpoint) => {
+    const response = await request(app)
+      .get(`${endpoint}?currency=EUR`)
+      .set('Authorization', ['Bearer', token()].join(' '));
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.wallet.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.financialLedgerEntry.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.withdrawal.findMany).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '/api/seeker/payments',
+    '/api/seeker/payments/transactions',
+    '/api/seeker/payments/withdrawals',
+  ])('does not allow a client-supplied owner ID on %s', async (endpoint) => {
+    const response = await request(app)
+      .get(`${endpoint}?userId=${otherSeekerId}`)
+      .set('Authorization', ['Bearer', token()].join(' '));
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.wallet.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.financialLedgerEntry.findMany).not.toHaveBeenCalled();
+    expect(mockPrisma.withdrawal.findMany).not.toHaveBeenCalled();
+  });
+
   test.each([['EMPLOYER', employerId], ['ADMIN', adminId]])('forbids %s from seeker payment endpoints', async (role, subject) => {
     const response = await request(app).get('/api/seeker/payments/summary').set('Authorization', ['Bearer', token(role, subject)].join(' '));
     expect(response.status).toBe(403);

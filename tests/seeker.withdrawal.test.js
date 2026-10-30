@@ -268,6 +268,10 @@ test('rejects a client-supplied USD quote request for a Nigerian NGN account', a
 
 test('read-only capability endpoint reports effective features after master-switch enforcement', async () => {
   env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = false;
+  env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
 
   const response = await request(app).get('/api/public/capabilities/freelance-payments');
 
@@ -278,6 +282,29 @@ test('read-only capability endpoint reports effective features after master-swit
     escrowReleaseEnabled: false,
     withdrawalsEnabled: false,
     usdWithdrawalsEnabled: false,
+  });
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+});
+
+test('public capability endpoint reports configured effective flags without provider approval assumptions', async () => {
+  env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = false;
+  env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = true;
+  env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = false;
+
+  const response = await request(app).get('/api/public/capabilities/freelance-payments');
+
+  expect(response.status).toBe(200);
+  expect(response.body).toEqual({
+    success: true,
+    data: {
+      enabled: true,
+      contractFundingEnabled: true,
+      escrowReleaseEnabled: false,
+      withdrawalsEnabled: true,
+      usdWithdrawalsEnabled: false,
+    },
   });
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
 });
