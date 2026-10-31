@@ -23,6 +23,7 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   emailVerificationCodes        EmailVerificationCode[]
+  legalAcceptances              UserLegalAcceptance[]
   oauthAccounts                 OAuthAccount[]
   pendingOAuthRegistrations     PendingOAuthRegistration[]
   seekerProfile                 SeekerProfile?
@@ -135,6 +136,22 @@ model PendingOAuthRegistration {
   @@index([email])
   @@index([status, expiresAt])
   @@index([userId])
+}
+
+
+model UserLegalAcceptance {
+  id                 String               @id @default(uuid())
+  userId             String
+  documentType       LegalDocumentType
+  version            String               @db.VarChar(64)
+  acceptedAt         DateTime             @default(now())
+  registrationMethod LegalRegistrationMethod
+
+  // Restrict hard deletion so acceptance history is retained; anonymization keeps the user row.
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, documentType, version])
+  @@index([userId, documentType, acceptedAt])
 }
 
 model SubscriptionPlan {
@@ -1373,6 +1390,17 @@ enum EmailCampaignStatus {
   DRAFT
   SENDING
   SENT
+}
+
+enum LegalDocumentType {
+  TERMS
+  PRIVACY
+}
+
+enum LegalRegistrationMethod {
+  PASSWORD
+  GOOGLE
+  ACCOUNT
 }
 
 enum Role {

@@ -1,4 +1,21 @@
 import { z } from 'zod';
+import { env } from '../config/env.js';
+
+const legalAcceptanceFields = {
+  termsAccepted: z.literal(true, { error: 'Terms acceptance is required' }),
+  privacyAccepted: z.literal(true, { error: 'Privacy acknowledgement is required' }),
+  acceptedTermsVersion: z.string().trim().min(1, 'Terms acceptance is required').max(64),
+  acceptedPrivacyVersion: z.string().trim().min(1, 'Privacy acceptance is required').max(64),
+};
+
+const enforceCurrentLegalVersions = (value, context) => {
+  if (value.acceptedTermsVersion !== env.TERMS_DOCUMENT_VERSION) {
+    context.addIssue({ code: 'custom', path: ['acceptedTermsVersion'], message: 'Please accept the current Terms and Conditions.' });
+  }
+  if (value.acceptedPrivacyVersion !== env.PRIVACY_DOCUMENT_VERSION) {
+    context.addIssue({ code: 'custom', path: ['acceptedPrivacyVersion'], message: 'Please accept the current Privacy Policy.' });
+  }
+};
 
 const publicRegistrationRoleSchema = z.enum(['SEEKER', 'EMPLOYER'], {
   required_error: 'Role is required',
@@ -18,7 +35,10 @@ const registrationSchema = z.object({
     .regex(/[^A-Za-z0-9]/, 'Password must contain a special character'),
   phone: z.string().trim().min(1, 'Phone must not be empty').optional(),
   role: publicRegistrationRoleSchema,
-}).strict();
+  ...legalAcceptanceFields,
+}).strict().superRefine(enforceCurrentLegalVersions);
+
+const legalAcceptanceSchema = z.object(legalAcceptanceFields).strict().superRefine(enforceCurrentLegalVersions);
 
 const loginSchema = z.object({
   email: z.string().trim().email('A valid email is required'),
@@ -49,6 +69,23 @@ const googleCompleteSchema = z.object({
 
 export const validateRegistration = (req, res, next) => {
   const result = registrationSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
+export const validateLegalAcceptance = (req, res, next) => {
+  const result = legalAcceptanceSchema.safeParse(req.body);
 
   if (!result.success) {
     return res.status(400).json({

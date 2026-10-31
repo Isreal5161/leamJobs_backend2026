@@ -5,8 +5,44 @@ import { env } from '../config/env.js';
 import { queueWelcomeEmail } from './adminCommunications.service.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
 import { initializeSeekerWallet } from './wallet.service.js';
+import { assertCurrentLegalAcceptance, recordLegalAcceptance } from './legalAcceptance.service.js';
 
 const BCRYPT_ROUNDS = 12;
+
+export const getLegalAcceptanceStatus = async (userId) => {
+  const [terms, privacy] = await Promise.all([
+    prisma.userLegalAcceptance.findUnique({
+      where: {
+        userId_documentType_version: {
+          userId,
+          documentType: 'TERMS',
+          version: env.TERMS_DOCUMENT_VERSION,
+        },
+      },
+      select: { acceptedAt: true },
+    }),
+    prisma.userLegalAcceptance.findUnique({
+      where: {
+        userId_documentType_version: {
+          userId,
+          documentType: 'PRIVACY',
+          version: env.PRIVACY_DOCUMENT_VERSION,
+        },
+      },
+      select: { acceptedAt: true },
+    }),
+  ]);
+  return {
+    terms: { version: env.TERMS_DOCUMENT_VERSION, acceptedAt: terms?.acceptedAt ?? null },
+    privacy: { version: env.PRIVACY_DOCUMENT_VERSION, acceptedAt: privacy?.acceptedAt ?? null },
+  };
+};
+
+export const recordAccountLegalAcceptance = async (userId, versions) => {
+  assertCurrentLegalAcceptance(versions);
+  await prisma.$transaction((transaction) => recordLegalAcceptance(transaction, userId, versions, 'ACCOUNT'));
+  return getLegalAcceptanceStatus(userId);
+};
 
 export class DuplicateEmailError extends Error {
   constructor() {
@@ -71,7 +107,9 @@ const normalizePublicRegistrationRole = (role) => {
   throw new InvalidPublicRegistrationRoleError();
 };
 
-export const registerUser = async ({ firstName, lastName, email, password, phone, role }) => {
+export const registerUser = async ({ firstName, lastName, email, password, phone, role, termsAccepted, privacyAccepted, acceptedTermsVersion, acceptedPrivacyVersion }) => {
+  const legalVersions = { termsAccepted, privacyAccepted, acceptedTermsVersion, acceptedPrivacyVersion };
+  assertCurrentLegalAcceptance(legalVersions);
   const normalizedFirstName = firstName.trim();
   const normalizedLastName = lastName.trim();
   const normalizedEmail = email.trim().toLowerCase();
@@ -97,6 +135,7 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
         await initializeSeekerWallet(transaction, createdUser.id);
       }
 
+      await recordLegalAcceptance(transaction, createdUser.id, legalVersions, 'PASSWORD');
       return createdUser;
     });
 

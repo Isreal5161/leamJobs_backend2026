@@ -1,4 +1,4 @@
-import { getCurrentUser, loginUser, registerUser } from '../services/auth.service.js';
+import { getCurrentUser, getLegalAcceptanceStatus, loginUser, recordAccountLegalAcceptance, registerUser } from '../services/auth.service.js';
 import { requestPasswordReset, resetPassword } from '../services/passwordReset.service.js';
 import { resendEmailVerification, verifyEmailWithCode } from '../services/emailVerification.service.js';
 import { completeGoogleRegistration, handleGoogleCallback, startGoogleOAuth } from '../services/googleOAuth.service.js';
@@ -32,6 +32,23 @@ export const me = async (req, res, next) => {
   try {
     const user = await getCurrentUser(req.user.sub);
     return res.status(200).json(toUserResponse(user));
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const legalAcceptanceStatus = async (req, res, next) => {
+  try {
+    return res.status(200).json({ success: true, data: await getLegalAcceptanceStatus(req.user.sub) });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const acceptCurrentLegalDocuments = async (req, res, next) => {
+  try {
+    const data = await recordAccountLegalAcceptance(req.user.sub, req.body);
+    return res.status(200).json({ success: true, data });
   } catch (error) {
     return next(error);
   }

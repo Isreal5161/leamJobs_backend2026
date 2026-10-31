@@ -71,6 +71,10 @@ export const env = {
   // Frontend URLs
   FRONTEND_URL: process.env.FRONTEND_URL || '',
   FRONTEND_URL_PROD: process.env.FRONTEND_URL_PROD || '',
+
+  // Current legal document versions are server-controlled; client submissions must match.
+  TERMS_DOCUMENT_VERSION: process.env.TERMS_DOCUMENT_VERSION || '1.0-draft',
+  PRIVACY_DOCUMENT_VERSION: process.env.PRIVACY_DOCUMENT_VERSION || '1.0-draft',
   PASSWORD_RESET_EXPIRE_MINUTES: parseInt(process.env.PASSWORD_RESET_EXPIRE_MINUTES || '30', 10),
 
   // Google OAuth
