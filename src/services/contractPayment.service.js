@@ -9,6 +9,7 @@ import { createNotification } from './notification.service.js';
 import { assertCollectionCurrencyEnabled } from '../config/walletCurrencies.js';
 import { assertFreelancePaymentFeatureEnabled } from '../config/freelancePaymentFeatures.js';
 import { initializeSeekerWallet } from './wallet.service.js';
+import { assertFlutterwaveUsdCollectionAvailable } from '../config/flutterwaveUsdCapabilities.js';
 
 export class ContractPaymentError extends Error {
   constructor(message, status = 409) {
@@ -215,6 +216,9 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
           fundingBreakdown: fundingBreakdown(contract.freelanceDetails, lockedPayment.amount),
         };
       }
+      if (lockedPayment?.provider === 'FLUTTERWAVE' && contract.freelanceDetails.currency === 'USD') {
+        assertFlutterwaveUsdCollectionAvailable();
+      }
       if (lockedPayment?.provider === 'PAYSTACK') {
         assertPaystackCollectionAvailable(contract.freelanceDetails.currency);
       }
@@ -248,6 +252,9 @@ export const initializeContractPayment = async ({ contractId, employerId, idempo
 
     if (provider === 'PAYSTACK') {
       assertPaystackCollectionAvailable(contract.freelanceDetails.currency);
+    }
+    if (provider === 'FLUTTERWAVE' && contract.freelanceDetails.currency === 'USD') {
+      assertFlutterwaveUsdCollectionAvailable();
     }
     await initializeSeekerWallet(transaction, contract.seekerId, contract.freelanceDetails.currency);
     const providerReference = `leamjobs_${contractId}_${crypto.randomUUID()}`;

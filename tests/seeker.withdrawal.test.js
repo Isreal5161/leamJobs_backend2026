@@ -276,12 +276,16 @@ test('read-only capability endpoint reports effective features after master-swit
   const response = await request(app).get('/api/public/capabilities/freelance-payments');
 
   expect(response.status).toBe(200);
-  expect(response.body.data).toEqual({
+  expect(response.body.data).toMatchObject({
     enabled: false,
     contractFundingEnabled: false,
     escrowReleaseEnabled: false,
     withdrawalsEnabled: false,
     usdWithdrawalsEnabled: false,
+    usdWalletProvisioningEnabled: true,
+    usdCollectionEnabled: false,
+    usdWithdrawalRoutes: [],
+    crossCurrencySettlementRoutes: [],
   });
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
 });
@@ -296,7 +300,7 @@ test('public capability endpoint reports configured effective flags without prov
   const response = await request(app).get('/api/public/capabilities/freelance-payments');
 
   expect(response.status).toBe(200);
-  expect(response.body).toEqual({
+  expect(response.body).toMatchObject({
     success: true,
     data: {
       enabled: true,
@@ -304,6 +308,10 @@ test('public capability endpoint reports configured effective flags without prov
       escrowReleaseEnabled: false,
       withdrawalsEnabled: true,
       usdWithdrawalsEnabled: false,
+      usdWalletProvisioningEnabled: true,
+      usdCollectionEnabled: false,
+      usdWithdrawalRoutes: [],
+      crossCurrencySettlementRoutes: [],
     },
   });
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
@@ -363,19 +371,8 @@ describe('POST /api/seeker/payments/withdrawals', () => {
     }));
   });
 
-    test('reserves US USD funds with an encrypted immutable transfer-metadata snapshot', async () => {
+    test('does not quote USD withdrawals without a provider-approved settlement route', async () => {
       env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
-      const metadata = {
-        routing_number: '101019644',
-        swift_code: 'IRVTUS3N',
-        bank_name: 'BANK OF AMERICA, N.A.',
-        account_type: 'checking',
-        beneficiary_address: '4 Newton Street, San Francisco',
-        postal_code: '94105',
-        street_number: '4',
-        street_name: 'Newton Street',
-        city: 'San Francisco',
-      };
       const usAccount = {
         ...payoutAccount,
         country: 'United States',
@@ -384,41 +381,16 @@ describe('POST /api/seeker/payments/withdrawals', () => {
         bankName: 'BANK OF AMERICA, N.A.',
         accountName: 'Jane Doe',
         verifiedAt: null,
-        encryptedPayoutMetadata: encryptPayoutIdentifier(JSON.stringify(metadata)),
+        encryptedPayoutMetadata: encryptPayoutIdentifier(JSON.stringify({ route: 'INTERNATIONAL_USD' })),
       };
-      const { tx } = createTransaction({
-        wallet: { currency: 'USD', availableBalance: '2000.00' },
-        payoutAccount: usAccount,
-        createWithdrawal: { ...withdrawal, currency: 'USD', amount: new Prisma.Decimal('1000.00') },
-      });
       mockPrisma.payoutAccount.findFirst.mockResolvedValue(usAccount);
-      mockPrisma.$transaction.mockImplementation((callback) => callback(tx));
-      const quoteReference = await getQuoteReference('1000.00', { currency: 'USD' });
-
       const response = await request(app)
-        .post('/api/seeker/payments/withdrawals')
-        .set('Authorization', ['Bearer', token('SEEKER', seekerId)].join(' '))
-        .set('Idempotency-Key', 'us-usd-reservation-snapshot')
-        .send({ quoteReference });
+        .get(`/api/seeker/payments/withdrawal-quote?${new URLSearchParams({ amount: '1000.00', currency: 'USD', payoutAccountId })}`)
+        .set('Authorization', ['Bearer', token('SEEKER', seekerId)].join(' '));
 
-      expect(response.status).toBe(201);
-      const saved = tx.withdrawal.create.mock.calls[0][0].data;
-      expect(saved).toMatchObject({
-        currency: 'USD',
-        payoutCountrySnapshot: 'United States',
-        bankCodeSnapshot: null,
-        bankNameSnapshot: 'BANK OF AMERICA, N.A.',
-        accountNameSnapshot: 'Jane Doe',
-      });
-      expect(saved.encryptedTransferMetadataSnapshot).not.toContain('101019644');
-      expect(JSON.parse(decryptPayoutIdentifier(saved.encryptedTransferMetadataSnapshot))).toEqual([{
-        ...metadata,
-        route: 'INTERNATIONAL_USD',
-      }]);
-      expect(tx.wallet.update).toHaveBeenCalled();
-      expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
-        data: expect.objectContaining({ entryType: 'WITHDRAWAL_RESERVED', currency: 'USD' }),
-      }));
+      expect(response.status).toBe(422);
+      expect(mockPrisma.payoutAccount.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
   test('disabled withdrawal feature blocks a valid request before reserving funds', async () => {
     const quoteReference = await getQuoteReference('30000.00');

@@ -17,6 +17,8 @@ import {
   normalizePaystackTransferStatus,
 } from './paystack.service.js';
 import { assertFreelancePaymentFeatureEnabled, resolveFreelancePaymentFeatures } from '../config/freelancePaymentFeatures.js';
+import { isFlutterwaveUsdWithdrawalAvailable } from '../config/flutterwaveUsdCapabilities.js';
+import { isWithdrawalCurrencyEnabled } from '../config/walletCurrencies.js';
 import { decryptWithdrawalTransferMetadataSnapshot } from './withdrawalTransferMetadata.js';
 import { FLUTTERWAVE_NIGERIAN_DOM_USD_AVAILABLE } from '../config/payoutCountries.js';
 
@@ -451,6 +453,9 @@ export const executeWithdrawal = async (withdrawalId) => {
     return { status: existingWithdrawal.status, alreadyHandled: true };
   }
   assertFreelancePaymentFeatureEnabled('withdrawalsEnabled');
+  if (existingWithdrawal.currency === 'USD' && !isFlutterwaveUsdWithdrawalAvailable()) {
+    throw providerError('USD withdrawals are unavailable until an approved beneficiary verification and settlement route are implemented', 503);
+  }
   if (existingWithdrawal.currency === 'USD' && !resolveFreelancePaymentFeatures().usdWithdrawalsEnabled) {
     throw providerError('USD withdrawals are currently disabled', 503);
   }
@@ -548,7 +553,7 @@ export const executeWithdrawal = async (withdrawalId) => {
 export const executePendingWithdrawals = async ({ batchSize = 25 } = {}) => {
   const features = resolveFreelancePaymentFeatures();
   if (!features.withdrawalsEnabled) return [];
-  const currencyFilter = features.usdWithdrawalsEnabled
+  const currencyFilter = isWithdrawalCurrencyEnabled('USD', features)
     ? { currency: { in: ['NGN', 'USD'] } }
     : { currency: 'NGN' };
   const withdrawals = await prisma.withdrawal.findMany({ where: { status: 'PENDING', ...currencyFilter }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: Math.min(Math.max(Number(batchSize) || 25, 1), 100), select: { id: true } });

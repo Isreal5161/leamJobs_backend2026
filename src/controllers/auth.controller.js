@@ -90,7 +90,10 @@ export const resendEmailVerificationController = async (req, res, next) => {
 
 export const googleStartController = async (req, res, next) => {
   try {
-    const { redirectUrl } = await startGoogleOAuth(req.query.role || 'SEEKER');
+    const { redirectUrl } = await startGoogleOAuth(
+      req.legalAcceptance?.role || req.query.role || 'SEEKER',
+      req.legalAcceptance,
+    );
     return res.redirect(302, redirectUrl);
   } catch (error) {
     return next(error);

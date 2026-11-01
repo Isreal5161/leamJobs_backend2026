@@ -57,7 +57,32 @@ const resendEmailVerificationSchema = z.object({
 
 const googleStartSchema = z.object({
   role: z.enum(['SEEKER', 'EMPLOYER']).default('SEEKER'),
-}).strict();
+  termsAccepted: z.literal('true').optional(),
+  privacyAccepted: z.literal('true').optional(),
+  acceptedTermsVersion: z.string().trim().min(1).max(64).optional(),
+  acceptedPrivacyVersion: z.string().trim().min(1).max(64).optional(),
+}).strict().superRefine((value, context) => {
+  const provided = [
+    value.termsAccepted,
+    value.privacyAccepted,
+    value.acceptedTermsVersion,
+    value.acceptedPrivacyVersion,
+  ].some((entry) => entry !== undefined);
+  if (!provided) return;
+
+  if (value.termsAccepted !== 'true') {
+    context.addIssue({ code: 'custom', path: ['termsAccepted'], message: 'Terms acceptance is required.' });
+  }
+  if (value.privacyAccepted !== 'true') {
+    context.addIssue({ code: 'custom', path: ['privacyAccepted'], message: 'Privacy acknowledgement is required.' });
+  }
+  if (value.acceptedTermsVersion !== env.TERMS_DOCUMENT_VERSION) {
+    context.addIssue({ code: 'custom', path: ['acceptedTermsVersion'], message: 'Please accept the current Terms and Conditions.' });
+  }
+  if (value.acceptedPrivacyVersion !== env.PRIVACY_DOCUMENT_VERSION) {
+    context.addIssue({ code: 'custom', path: ['acceptedPrivacyVersion'], message: 'Please acknowledge the current Privacy Policy.' });
+  }
+});
 
 const googleCompleteSchema = z.object({
   pendingId: z.string().trim().min(1, 'Pending registration is required'),
@@ -155,6 +180,10 @@ export const validateResendEmailVerification = (req, res, next) => {
 export const validateGoogleStart = (req, res, next) => {
   const result = googleStartSchema.safeParse({
     role: req.query?.role ?? 'SEEKER',
+    termsAccepted: req.query?.termsAccepted,
+    privacyAccepted: req.query?.privacyAccepted,
+    acceptedTermsVersion: req.query?.acceptedTermsVersion,
+    acceptedPrivacyVersion: req.query?.acceptedPrivacyVersion,
   });
 
   if (!result.success) {
@@ -167,7 +196,13 @@ export const validateGoogleStart = (req, res, next) => {
     });
   }
 
-  req.query.role = result.data.role;
+  req.legalAcceptance = result.data.termsAccepted
+    ? {
+      ...result.data,
+      termsAccepted: true,
+      privacyAccepted: result.data.privacyAccepted === 'true',
+    }
+    : null;
   return next();
 };
 

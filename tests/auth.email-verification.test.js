@@ -9,6 +9,8 @@ process.env.FRONTEND_URL = 'https://leamjobs.com';
 process.env.EMAIL_VERIFICATION_EXPIRE_MINUTES = '15';
 process.env.EMAIL_VERIFICATION_MAX_ATTEMPTS = '5';
 process.env.EMAIL_VERIFICATION_RESEND_COOLDOWN_SECONDS = '60';
+process.env.TERMS_DOCUMENT_VERSION = '1.0';
+process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 
 const validPasswordHash = '$2b$12$nhfTVb9Q68D9Ba7lekU84OktU/FXE2WcEd5//HUWj.mi0SN8Fk11K';
 
@@ -21,6 +23,7 @@ const mockPrisma = {
   wallet: {
     upsert: jest.fn(),
   },
+  userLegalAcceptance: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   emailVerificationCode: {
     findUnique: jest.fn(),
     create: jest.fn(),
@@ -86,6 +89,10 @@ test('registration creates a pending unverified user and queues an email verific
     password: 'ValidPassword1!',
     phone: '+2348000000000',
     role: 'SEEKER',
+    termsAccepted: true,
+    privacyAccepted: true,
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
   });
 
   expect(created.isActive).toBe(false);
@@ -95,6 +102,13 @@ test('registration creates a pending unverified user and queues an email verific
     where: { userId_currency: { userId: 'user-1', currency: 'NGN' } },
     create: { userId: 'user-1', currency: 'NGN' },
     update: {},
+  });
+  expect(mockPrisma.userLegalAcceptance.createMany).toHaveBeenCalledWith({
+    data: [
+      { userId: 'user-1', documentType: 'TERMS', version: '1.0', registrationMethod: 'PASSWORD' },
+      { userId: 'user-1', documentType: 'PRIVACY', version: '1.0', registrationMethod: 'PASSWORD' },
+    ],
+    skipDuplicates: true,
   });
   expect(mockQueueEmail).toHaveBeenCalledWith(expect.objectContaining({
     emailType: 'EMAIL_VERIFICATION_CODE',
@@ -123,9 +137,20 @@ test('employer registration creates no wallet', async () => {
     email: createdEmployer.email,
     password: 'ValidPassword1!',
     role: 'EMPLOYER',
+    termsAccepted: true,
+    privacyAccepted: true,
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
   })).resolves.toMatchObject({ id: createdEmployer.id, role: 'EMPLOYER' });
 
   expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+  expect(mockPrisma.userLegalAcceptance.createMany).toHaveBeenCalledWith({
+    data: [
+      { userId: createdEmployer.id, documentType: 'TERMS', version: '1.0', registrationMethod: 'PASSWORD' },
+      { userId: createdEmployer.id, documentType: 'PRIVACY', version: '1.0', registrationMethod: 'PASSWORD' },
+    ],
+    skipDuplicates: true,
+  });
 });
 
 test('wallet initialization failure rolls seeker registration back before email verification', async () => {
@@ -157,6 +182,10 @@ test('wallet initialization failure rolls seeker registration back before email 
     email: 'rollback@example.com',
     password: 'ValidPassword1!',
     role: 'SEEKER',
+    termsAccepted: true,
+    privacyAccepted: true,
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
   })).rejects.toThrow('wallet initialization failed');
 
   expect(transactionState.users).toEqual([]);

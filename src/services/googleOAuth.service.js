@@ -6,6 +6,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
 import { initializeSeekerWallet } from './wallet.service.js';
+import { assertCurrentLegalAcceptance, recordLegalAcceptance } from './legalAcceptance.service.js';
 
 const GOOGLE_PROVIDER = 'GOOGLE';
 const PENDING_LINK_TTL_MINUTES = 15;
@@ -121,7 +122,8 @@ const normalizeRole = (requestedRole) => {
   throw error;
 };
 
-export const startGoogleOAuth = async (requestedRole) => {
+export const startGoogleOAuth = async (requestedRole, legalVersions) => {
+  if (legalVersions) assertCurrentLegalAcceptance(legalVersions);
   ensureGoogleConfig();
   const role = normalizeRole(requestedRole);
   const state = crypto.randomBytes(24).toString('hex');
@@ -133,6 +135,8 @@ export const startGoogleOAuth = async (requestedRole) => {
     data: {
       provider: GOOGLE_PROVIDER,
       intendedRole: role,
+      acceptedTermsVersion: legalVersions?.acceptedTermsVersion?.trim() || null,
+      acceptedPrivacyVersion: legalVersions?.acceptedPrivacyVersion?.trim() || null,
       nonce,
       stateHash: hashValue(state),
       codeVerifier,
@@ -343,6 +347,14 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
       throw emailConflict;
     }
 
+    const legalVersions = {
+      termsAccepted: true,
+      privacyAccepted: true,
+      acceptedTermsVersion: pending.acceptedTermsVersion,
+      acceptedPrivacyVersion: pending.acceptedPrivacyVersion,
+    };
+    assertCurrentLegalAcceptance(legalVersions);
+
     let createdUser;
     try {
       createdUser = await transaction.user.create({
@@ -374,6 +386,7 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
     if (createdUser.role === 'SEEKER') {
       await initializeSeekerWallet(transaction, createdUser.id);
     }
+    await recordLegalAcceptance(transaction, createdUser.id, legalVersions, 'GOOGLE');
 
     try {
       await transaction.oauthAccount.create({
@@ -519,32 +532,39 @@ export const completeGoogleRegistration = async ({ pendingId, continuationToken,
   }
 
   if (pending.intendedRole === 'EMPLOYER') {
-    const trimmedCompanyName = String(companyName || '').trim();
-    const trimmedPhone = String(phone || user.phone || '').trim();
-
-    if (!trimmedCompanyName || !trimmedPhone) {
-      const error = new Error('Company name and phone number are required.');
-      error.status = 400;
-      error.publicMessage = 'Company name and phone number are required to complete employer signup.';
-      throw error;
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { phone: trimmedPhone },
-    });
-
-    await prisma.employerProfile.upsert({
+    const existingEmployerProfile = await prisma.employerProfile.findUnique({
       where: { userId: user.id },
-      create: {
-        userId: user.id,
-        companyName: trimmedCompanyName,
-        companyLogoUrl: null,
-      },
-      update: {
-        companyName: trimmedCompanyName,
-      },
+      select: { id: true },
     });
+
+    if (!existingEmployerProfile) {
+      const trimmedCompanyName = String(companyName || '').trim();
+      const trimmedPhone = String(phone || user.phone || '').trim();
+
+      if (!trimmedCompanyName || !trimmedPhone) {
+        const error = new Error('Company name and phone number are required.');
+        error.status = 400;
+        error.publicMessage = 'Company name and phone number are required to complete employer signup.';
+        throw error;
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { phone: trimmedPhone },
+      });
+
+      await prisma.employerProfile.upsert({
+        where: { userId: user.id },
+        create: {
+          userId: user.id,
+          companyName: trimmedCompanyName,
+          companyLogoUrl: null,
+        },
+        update: {
+          companyName: trimmedCompanyName,
+        },
+      });
+    }
   }
 
   const consumed = await prisma.pendingOAuthRegistration.updateMany({

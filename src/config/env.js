@@ -9,6 +9,8 @@ const requiredEnvVars = [
   'JWT_SECRET',
   'JWT_ISSUER',
   'JWT_AUDIENCE',
+  'TERMS_DOCUMENT_VERSION',
+  'PRIVACY_DOCUMENT_VERSION',
 ];
 
 export const parseEnabledFlag = (value) => value === 'true';

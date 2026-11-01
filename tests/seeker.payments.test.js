@@ -9,9 +9,9 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
   user: { findUnique: jest.fn() },
-  wallet: { findUnique: jest.fn(), findMany: jest.fn() },
+  wallet: { findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn() },
   escrow: { aggregate: jest.fn() },
-  financialLedgerEntry: { aggregate: jest.fn(), findMany: jest.fn() },
+  financialLedgerEntry: { aggregate: jest.fn(), findMany: jest.fn(), create: jest.fn() },
   withdrawal: { findMany: jest.fn() },
 };
 
@@ -42,6 +42,7 @@ beforeEach(() => {
   }));
   mockPrisma.wallet.findUnique.mockResolvedValue({ id: walletId, currency: 'NGN', availableBalance: money('1000.00'), pendingWithdrawalBalance: money('250.00') });
   mockPrisma.wallet.findMany.mockResolvedValue([{ id: walletId, currency: 'NGN', availableBalance: money('1000.00'), pendingWithdrawalBalance: money('250.00') }]);
+  mockPrisma.wallet.upsert.mockResolvedValue({ id: 'usd-wallet-id', currency: 'USD' });
   mockPrisma.escrow.aggregate.mockResolvedValue({ _sum: { seekerNetAmount: money('300000.00') } });
   mockPrisma.financialLedgerEntry.aggregate.mockResolvedValue({ _sum: { amount: money('1250.00') } });
   mockPrisma.financialLedgerEntry.findMany.mockResolvedValue([]);
@@ -49,6 +50,49 @@ beforeEach(() => {
 });
 
 describe('seeker read-only payment endpoints', () => {
+  test('authenticated seekers can idempotently provision only their internal USD wallet', async () => {
+    const [first, repeated] = await Promise.all([
+      request(app).post('/api/seeker/payments/wallets/USD').set('Authorization', ['Bearer', token()].join(' ')).send({ seekerId: otherSeekerId, currency: 'NGN' }),
+      request(app).post('/api/seeker/payments/wallets/USD').set('Authorization', ['Bearer', token()].join(' ')).send({ seekerId: otherSeekerId, currency: 'NGN' }),
+    ]);
+
+    expect(first.status).toBe(200);
+    expect(repeated.status).toBe(200);
+    expect(first.body.data.wallet).toEqual({ currency: 'USD' });
+    expect(mockPrisma.wallet.upsert).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
+      where: { userId_currency: { userId: seekerId, currency: 'USD' } },
+      create: { userId: seekerId, currency: 'USD' },
+      update: {},
+    });
+    expect(mockPrisma.financialLedgerEntry.create).not.toHaveBeenCalled();
+  });
+
+  test('wallet provisioning rejects unauthenticated users and non-seekers', async () => {
+    const unauthenticated = await request(app).post('/api/seeker/payments/wallets/USD');
+    const employer = await request(app)
+      .post('/api/seeker/payments/wallets/USD')
+      .set('Authorization', ['Bearer', token('EMPLOYER', employerId)].join(' '));
+
+    expect(unauthenticated.status).toBe(401);
+    expect(employer.status).toBe(403);
+    expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+  });
+
+  test('public capability response reports USD provider-dependent routes as unavailable', async () => {
+    const response = await request(app).get('/api/public/capabilities/freelance-payments');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      usdWalletProvisioningEnabled: true,
+      usdCollectionEnabled: false,
+      usdWithdrawalRoutes: [],
+      crossCurrencySettlementRoutes: [],
+    });
+    expect(response.body.data.usdCollectionUnavailableReason).toMatch(/approval/i);
+    expect(response.body.data.usdWithdrawalUnavailableReason).toMatch(/verification/i);
+  });
+
   test('returns the authenticated seeker wallet summary from the wallet and ledger', async () => {
     const response = await request(app)
       .get('/api/seeker/payments/summary')

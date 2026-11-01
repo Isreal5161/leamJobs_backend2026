@@ -34,6 +34,7 @@ import {
 	listPayments,
 	listTransactions,
 	listWithdrawals,
+	provisionSeekerUsdWallet,
 } from '../controllers/seekerPayments.controller.js';
 import { validateSeekerPaymentPagination } from '../validators/seekerPayments.validation.js';
 import { validateSeekerWithdrawal } from '../validators/seekerWithdrawal.validation.js';
@@ -127,6 +128,7 @@ seekerRouter.post('/conversations/:conversationId/messages', authenticate, requi
 seekerRouter.patch('/invitations/:invitationId', authenticate, requireRole('SEEKER'), validateInvitationResponse, respondToInvitation);
 seekerRouter.patch('/conversations/:conversationId/read', authenticate, requireRole('SEEKER'), markConversationRead);
 seekerRouter.get('/payments/summary', authenticate, requireRole('SEEKER'), getPaymentSummary);
+seekerRouter.post('/payments/wallets/USD', authenticate, requireRole('SEEKER'), provisionSeekerUsdWallet);
 seekerRouter.get('/payments', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listPayments);
 seekerRouter.get('/payments/transactions', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listTransactions);
 seekerRouter.get('/payments/withdrawals', authenticate, requireRole('SEEKER'), validateSeekerPaymentPagination, listWithdrawals);

@@ -1,3 +1,5 @@
+import { prisma } from '../config/database.js';
+import { initializeSeekerWallet } from '../services/wallet.service.js';
 import {
   getSeekerPaymentSummary,
   getSeekerPayments,
@@ -5,6 +7,15 @@ import {
   getSeekerWithdrawals,
 } from '../services/seekerPayments.service.js';
 import { createSeekerWithdrawal, getSeekerWithdrawalQuote } from '../services/seekerWithdrawal.service.js';
+
+export const provisionSeekerUsdWallet = async (req, res, next) => {
+  try {
+    const wallet = await initializeSeekerWallet(prisma, req.user.sub, 'USD');
+    return res.status(200).json({ success: true, data: { wallet: { currency: wallet.currency } } });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 export const getWithdrawalQuote = async (req, res, next) => {
   try {

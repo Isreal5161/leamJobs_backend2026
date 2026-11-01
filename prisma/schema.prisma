@@ -129,6 +129,8 @@ model PendingOAuthRegistration {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   userId          String?
+  acceptedTermsVersion  String? @db.VarChar(64)
+  acceptedPrivacyVersion String? @db.VarChar(64)
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 

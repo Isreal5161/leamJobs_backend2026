@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { resolveFreelancePaymentFeatures } from './freelancePaymentFeatures.js';
+import { isFlutterwaveUsdWithdrawalAvailable } from './flutterwaveUsdCapabilities.js';
 
 const DECIMAL_ROUNDING_MODES = Object.freeze({
   HALF_UP: Prisma.Decimal.ROUND_HALF_UP,
@@ -24,7 +25,8 @@ export const assertWalletProvisioningEnabled = (currency) => {
 
 export const isWithdrawalCurrencyEnabled = (currency, features = resolveFreelancePaymentFeatures()) => {
   if (WALLET_CURRENCY_POLICY[currency]?.withdrawalEnabled !== true) return false;
-  return currency !== 'USD' || features?.usdWithdrawalsEnabled === true;
+  return currency !== 'USD'
+    || (features?.usdWithdrawalsEnabled === true && isFlutterwaveUsdWithdrawalAvailable());
 };
 
 export const roundWalletAmount = (currency, amount) => {

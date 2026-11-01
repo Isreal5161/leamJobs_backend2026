@@ -129,23 +129,17 @@ test('payment initialization uses server-side gross amount and currency', async 
   expect(result.payment.checkoutUrl).toBe('https://checkout.test');
 });
 
-test('USD contract collection uses the Flutterwave funding path and provisions a USD wallet', async () => {
+test('USD contract collection fails closed until an approved Flutterwave method is configured', async () => {
   const usdContract = contract();
   usdContract.freelanceDetails.currency = 'USD';
   usdContract.freelanceDetails.escrow.currency = 'USD';
   mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
 
   await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'usd-payment-key' }))
-    .resolves.toMatchObject({ payment: { provider: 'FLUTTERWAVE', currency: 'USD' } });
-  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
-    where: { userId_currency: { userId: seekerId, currency: 'USD' } },
-    create: { userId: seekerId, currency: 'USD' },
-    update: {},
-  });
-  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
-    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'USD' }),
-  }));
-  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
+    .rejects.toMatchObject({ status: 503, code: 'FLUTTERWAVE_USD_COLLECTION_UNAVAILABLE' });
+  expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
 });
 
 test('wrong employer cannot initialize payment', async () => {

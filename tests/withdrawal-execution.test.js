@@ -356,7 +356,7 @@ test('payout execution uses the immutable destination snapshot instead of change
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
 });
 
-test('does not execute a US/USD withdrawal when the separate USD feature flag is disabled', async () => {
+test('does not execute a US/USD withdrawal when no approved settlement route is available', async () => {
   const usWithdrawal = {
     ...baseWithdrawal,
     currency: 'USD',
@@ -373,13 +373,13 @@ test('does not execute a US/USD withdrawal when the separate USD feature flag is
   };
   setupTransaction({ withdrawal: usWithdrawal });
 
-  await expect(executeWithdrawal(withdrawalId)).rejects.toThrow(/USD withdrawals are currently disabled/i);
+  await expect(executeWithdrawal(withdrawalId)).rejects.toThrow(/approved beneficiary verification and settlement route/i);
 
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
 });
 
-test('executes a US USD transfer only from the immutable metadata snapshot', async () => {
+test('USD execution remains blocked even when a USD feature flag is enabled without an approved route', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const usWithdrawal = usUsdWithdrawal({
     accountNumberLast4Snapshot: '1872',
@@ -389,7 +389,7 @@ test('executes a US USD transfer only from the immutable metadata snapshot', asy
       accountName: 'Changed Name',
     },
   });
-  const tx = setupTransaction({ withdrawal: usWithdrawal });
+  setupTransaction({ withdrawal: usWithdrawal });
   flutterwave.createFlutterwaveTransfer.mockResolvedValue({
     id: 9234,
     reference: 'lj_wd_withdrawal-1',
@@ -398,45 +398,17 @@ test('executes a US USD transfer only from the immutable metadata snapshot', asy
     currency: 'USD',
   });
 
-  const result = await executeWithdrawal(withdrawalId);
-
-  expect(result).toMatchObject({ status: 'PROCESSING', unresolved: true });
-  expect(decryptPayoutIdentifier).toHaveBeenCalledWith('snapshot-us-account');
-  expect(decryptPayoutIdentifier).toHaveBeenCalledWith('encrypted-transfer-metadata');
-  expect(decryptPayoutIdentifier).not.toHaveBeenCalledWith('changed-account');
-  expect(decryptPayoutIdentifier).not.toHaveBeenCalledWith('changed-metadata');
-  expect(flutterwave.createFlutterwaveTransfer).toHaveBeenCalledWith({
-    amount: '1000',
-    accountNumber: '0123456789',
-    bankCode: null,
-    beneficiaryName: 'Jane Doe',
-    reference: 'lj_wd_withdrawal-1',
-    narration: 'LeamJobs wallet withdrawal',
-    currency: 'USD',
-    debitCurrency: 'USD',
-    meta: [{
-      routing_number: '101019644',
-      swift_code: 'IRVTUS3N',
-      bank_name: 'BANK OF AMERICA, N.A.',
-      account_type: 'checking',
-      beneficiary_address: '4 Newton Street, San Francisco',
-      postal_code: '94105',
-      street_number: '4',
-      street_name: 'Newton Street',
-      city: 'San Francisco',
-    }],
-  });
-  expect(tx.payout.create).toHaveBeenCalledWith(expect.objectContaining({
-    data: expect.objectContaining({ amount: new Prisma.Decimal('1000.00'), currency: 'USD', provider: 'FLUTTERWAVE' }),
-  }));
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
+  expect(decryptPayoutIdentifier).not.toHaveBeenCalled();
+  expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
 });
 
-test('does not execute USD withdrawal without its own encrypted account-number snapshot', async () => {
+test('does not execute USD withdrawal without a verified route, regardless of account-number snapshot', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const tx = setupTransaction({ withdrawal: usUsdWithdrawal({ encryptedAccountNumberSnapshot: null }) });
 
-  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 409 });
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
 
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
@@ -448,11 +420,11 @@ test('does not execute USD withdrawal without its own encrypted account-number s
   expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
-test('does not execute USD withdrawal without its own encrypted metadata snapshot', async () => {
+test('does not execute USD withdrawal without a verified route, regardless of metadata snapshot', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const tx = setupTransaction({ withdrawal: usUsdWithdrawal({ encryptedTransferMetadataSnapshot: null }) });
 
-  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 409 });
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
 
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
@@ -464,15 +436,13 @@ test('does not execute USD withdrawal without its own encrypted metadata snapsho
   expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
-test('a missing or incorrect encryption key fails before claiming the withdrawal', async () => {
+test('USD transfer execution fails closed before decryption while no route is approved', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const tx = setupTransaction({ withdrawal: usUsdWithdrawal() });
-  decryptPayoutIdentifier.mockImplementationOnce(() => {
-    throw new Error('PAYOUT_ENCRYPTION_KEY is not configured');
-  });
 
-  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 409 });
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
 
+  expect(decryptPayoutIdentifier).not.toHaveBeenCalled();
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
   expect(tx.payout.create).not.toHaveBeenCalled();
@@ -482,35 +452,27 @@ test('a missing or incorrect encryption key fails before claiming the withdrawal
   expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
-test('worker reports encryption preflight failures as pending review, not unknown provider outcomes', async () => {
+test('worker does not claim an unapproved USD withdrawal', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
-  const tx = setupTransaction({ withdrawal: usUsdWithdrawal() });
-  mockPrisma.withdrawal.findMany.mockResolvedValue([{ id: withdrawalId }]);
-  decryptPayoutIdentifier.mockImplementationOnce(() => {
-    throw new Error('PAYOUT_ENCRYPTION_KEY is not configured');
-  });
+  setupTransaction({ withdrawal: usUsdWithdrawal() });
+  mockPrisma.withdrawal.findMany.mockResolvedValue([]);
 
-  await expect(executePendingWithdrawals()).resolves.toEqual([expect.objectContaining({
-    status: 'PENDING',
-    unresolved: true,
-    manualReviewRequired: true,
-  })]);
+  await expect(executePendingWithdrawals()).resolves.toEqual([]);
 
-  expect(tx.payout.create).not.toHaveBeenCalled();
-  expect(tx.payoutAttempt.create).not.toHaveBeenCalled();
-  expect(tx.withdrawal.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.withdrawal.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { status: 'PENDING', currency: 'NGN' },
+  }));
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
 });
 
-test('invalid encrypted transfer metadata fails before claiming the withdrawal', async () => {
+test('USD metadata is not decrypted or submitted while no route is approved', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const tx = setupTransaction({ withdrawal: usUsdWithdrawal() });
-  decryptPayoutIdentifier
-    .mockImplementationOnce(() => '0123456789')
-    .mockImplementationOnce(() => { throw new Error('authentication failed'); });
 
-  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 409 });
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
 
+  expect(decryptPayoutIdentifier).not.toHaveBeenCalled();
   expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
   expect(tx.payout.create).not.toHaveBeenCalled();
   expect(tx.payoutAttempt.create).not.toHaveBeenCalled();
@@ -519,7 +481,7 @@ test('invalid encrypted transfer metadata fails before claiming the withdrawal',
   expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
-test('an accepted-but-timed-out USD transfer is not submitted a second time', async () => {
+test('a USD withdrawal is not submitted while its settlement route is unavailable', async () => {
   env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = true;
   const usWithdrawal = {
     ...baseWithdrawal,
@@ -543,21 +505,15 @@ test('an accepted-but-timed-out USD transfer is not submitted a second time', as
     },
   };
   setupTransaction({ withdrawal: usWithdrawal });
-  mockPrisma.withdrawal.findUnique
-    .mockResolvedValueOnce({ status: 'PENDING', provider: 'FLUTTERWAVE', currency: 'USD', payoutAccount: { provider: 'FLUTTERWAVE' } })
-    .mockResolvedValueOnce({ status: 'PROCESSING', provider: 'FLUTTERWAVE', currency: 'USD', payoutAccount: { provider: 'FLUTTERWAVE' } });
   flutterwave.createFlutterwaveTransfer.mockRejectedValue(Object.assign(new Error('timeout'), {
     name: 'FlutterwaveRequestError',
     outcomeUnknown: true,
     status: 502,
   }));
 
-  const firstResult = await executeWithdrawal(withdrawalId);
-  const retryResult = await executeWithdrawal(withdrawalId);
-
-  expect(firstResult).toMatchObject({ status: 'PROCESSING', unresolved: true, manualReviewRequired: true });
-  expect(retryResult).toEqual({ status: 'PROCESSING', alreadyHandled: true });
-  expect(flutterwave.createFlutterwaveTransfer).toHaveBeenCalledTimes(1);
+  await expect(executeWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 503 });
+  expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
 });
 
 test('Flutterwave transfer failures release the gross reservation', async () => {

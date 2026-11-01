@@ -4,6 +4,8 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'welcome-test-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.TERMS_DOCUMENT_VERSION = '1.0';
+process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 
 const user = { id: 'user-1', firstName: 'Ava', lastName: 'Stone', email: 'ava@example.com', role: 'EMPLOYER' };
 const transactionUserCreate = jest.fn().mockResolvedValue(user);
@@ -20,6 +22,9 @@ const mockPrisma = {
       findUnique: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       create: jest.fn().mockResolvedValue({ id: 'verification-1', userId: user.id }),
+    },
+    userLegalAcceptance: {
+      createMany: jest.fn().mockResolvedValue({ count: 2 }),
     },
   })),
 };
@@ -39,7 +44,17 @@ jest.unstable_mockModule('bcrypt', () => ({ default: { hash: jest.fn().mockResol
 const { registerUser } = await import('../src/services/auth.service.js');
 
 test('successful employer registration queues the employer welcome after account creation', async () => {
-  await expect(registerUser({ firstName: 'Ava', lastName: 'Stone', email: 'Ava@Example.com', password: 'ValidPassword1!', role: 'EMPLOYER' })).resolves.toEqual(user);
+  await expect(registerUser({
+    firstName: 'Ava',
+    lastName: 'Stone',
+    email: 'Ava@Example.com',
+    password: 'ValidPassword1!',
+    role: 'EMPLOYER',
+    termsAccepted: true,
+    privacyAccepted: true,
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
+  })).resolves.toEqual(user);
   expect(transactionUserCreate).toHaveBeenCalled();
   await new Promise((resolve) => setImmediate(resolve));
   expect(queueWelcomeEmail).toHaveBeenCalledWith(user);

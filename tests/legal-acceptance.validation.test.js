@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test';
 process.env.TERMS_DOCUMENT_VERSION = '1.0';
 process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 
-const { validateLegalAcceptance, validateRegistration } = await import('../src/validators/auth.validation.js');
+const { validateGoogleStart, validateLegalAcceptance, validateRegistration } = await import('../src/validators/auth.validation.js');
 
 const validRegistration = {
   firstName: 'Ada', lastName: 'Lovelace', email: 'ada@example.com',
@@ -39,10 +39,17 @@ test('password registration rejects missing and incomplete legal acceptance with
   expect(declined.response.body.errors.map(({ field }) => field)).toContain('termsAccepted');
 });
 
-test('password registration rejects document version mismatches', () => {
+test('password and Google signup reject document version mismatches', () => {
   const password = runValidator(validateRegistration, { body: { ...validRegistration, acceptedTermsVersion: 'old-version' } });
   expect(password.response.statusCode).toBe(400);
   expect(password.response.body.errors).toContainEqual(expect.objectContaining({ field: 'acceptedTermsVersion' }));
+
+  const google = runValidator(validateGoogleStart, { query: {
+    role: 'SEEKER', termsAccepted: 'true', privacyAccepted: 'true',
+    acceptedTermsVersion: '1.0', acceptedPrivacyVersion: 'old-version',
+  } });
+  expect(google.response.statusCode).toBe(400);
+  expect(google.response.body.errors).toContainEqual(expect.objectContaining({ field: 'acceptedPrivacyVersion' }));
 });
 
 test('password registration accepts matching explicit versions through the standard validator', () => {
@@ -68,4 +75,49 @@ test('authenticated legal acceptance rejects declined choices and client-selecte
     userId: 'another-user',
   } });
   expect(forgedUser.response.statusCode).toBe(400);
+});
+
+test('Google OAuth permits existing-user login but new signup must send explicit acceptance and versions', () => {
+  const result = runValidator(validateGoogleStart, { query: { role: 'SEEKER' } });
+  expect(result.nextCalled).toBe(true);
+
+  const invalidNewSignup = runValidator(validateGoogleStart, { query: {
+    role: 'SEEKER',
+    termsAccepted: 'true',
+    privacyAccepted: 'true',
+  } });
+  expect(invalidNewSignup.response.statusCode).toBe(400);
+
+  const validSignup = runValidator(validateGoogleStart, { query: {
+    role: 'EMPLOYER',
+    termsAccepted: 'true',
+    privacyAccepted: 'true',
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
+  } });
+  expect(validSignup.nextCalled).toBe(true);
+  expect(validSignup.response.statusCode).toBe(200);
+});
+
+test('Google OAuth rejects partial or invalid explicit acceptance', () => {
+  const result = runValidator(validateGoogleStart, { query: {
+    role: 'SEEKER',
+    termsAccepted: 'true',
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
+  } });
+  expect(result.response.statusCode).toBe(400);
+  expect(result.response.body.errors.map(({ field }) => field)).toEqual(expect.arrayContaining([
+    'privacyAccepted',
+  ]));
+
+  const declined = runValidator(validateGoogleStart, { query: {
+    role: 'SEEKER',
+    termsAccepted: 'false',
+    privacyAccepted: 'true',
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
+  } });
+  expect(declined.response.statusCode).toBe(400);
+  expect(declined.response.body.errors.map(({ field }) => field)).toContain('termsAccepted');
 });

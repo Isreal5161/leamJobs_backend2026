@@ -6,6 +6,8 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
+process.env.TERMS_DOCUMENT_VERSION = '1.0';
+process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 
 const validPasswordHash = '$2b$12$sNpkk72oSrd6qBz8m8PQp.kR0/4D8N.gWbZ13kVnTSS7e1S1sxZ3O';
 
@@ -17,6 +19,9 @@ const mockPrisma = {
   },
   wallet: {
     upsert: jest.fn(),
+  },
+  userLegalAcceptance: {
+    createMany: jest.fn().mockResolvedValue({ count: 2 }),
   },
   $transaction: jest.fn(),
 };
@@ -171,6 +176,10 @@ describe('Employer authentication and authorization', () => {
         password: 'Password1!',
         phone: '+2348000000000',
         role: 'EMPLOYER',
+        termsAccepted: true,
+        privacyAccepted: true,
+        acceptedTermsVersion: '1.0',
+        acceptedPrivacyVersion: '1.0',
       });
 
     expect(response.status).toBe(201);

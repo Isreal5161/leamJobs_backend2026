@@ -640,24 +640,17 @@ test('new contract funding defaults to Flutterwave even when legacy Paystack col
   expect(initializePaystackPayment).not.toHaveBeenCalled();
 });
 
-test('new USD contract funding provisions a matching wallet and uses Flutterwave', async () => {
+test('new USD contract funding fails closed until Flutterwave collection capability is verified', async () => {
   const usdContract = contractRecord();
   usdContract.freelanceDetails.currency = 'USD';
   usdContract.freelanceDetails.escrow.currency = 'USD';
   mockPrisma.contract.findUnique.mockResolvedValue(usdContract);
 
-  const result = await initializeContractPayment({ contractId, employerId, idempotencyKey: 'usd-contract-funding' });
-
-  expect(mockPrisma.wallet.upsert).toHaveBeenCalledWith({
-    where: { userId_currency: { userId: seekerId, currency: 'USD' } },
-    create: { userId: seekerId, currency: 'USD' },
-    update: {},
-  });
-  expect(mockPrisma.payment.create).toHaveBeenCalledWith(expect.objectContaining({
-    data: expect.objectContaining({ provider: 'FLUTTERWAVE', currency: 'USD' }),
-  }));
-  expect(initializeFlutterwavePayment).toHaveBeenCalledWith(expect.objectContaining({ currency: 'USD' }));
-  expect(result.payment.provider).toBe('FLUTTERWAVE');
+  await expect(initializeContractPayment({ contractId, employerId, idempotencyKey: 'usd-contract-funding' }))
+    .rejects.toMatchObject({ status: 503, code: 'FLUTTERWAVE_USD_COLLECTION_UNAVAILABLE' });
+  expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+  expect(mockPrisma.payment.create).not.toHaveBeenCalled();
+  expect(initializeFlutterwavePayment).not.toHaveBeenCalled();
 });
 
 test('Paystack verification validates the provider reference and kobo amount before funding', async () => {
