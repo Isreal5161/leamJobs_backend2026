@@ -15,7 +15,8 @@ export const contractSelect = {
   completedAt: true,
   endedAt: true,
   cancelledAt: true,
-  disputes: { select: { id: true } },
+  employerArchivedAt: true,
+  disputes: { select: { id: true, status: true } },
   ledgerEntries: { select: { id: true } },
   job: { select: { id: true, employerId: true, title: true, description: true, jobType: true, engagementType: true } },
   application: { select: { id: true, jobId: true, seekerId: true, status: true, createdAt: true } },
@@ -80,9 +81,10 @@ export const contractSelect = {
             },
             orderBy: { createdAt: 'desc' },
           },
-          refunds: { select: { id: true } },
-          disputes: { select: { id: true } },
+          refunds: { select: { id: true, status: true } },
+          disputes: { select: { id: true, status: true } },
           ledgerEntries: { select: { id: true } },
+          conversionOperation: { select: { id: true, status: true } },
         },
       },
     },
@@ -195,6 +197,17 @@ const contractTypeMatchesJob = (contract) => (
     && contract.job?.engagementType === 'CONTRACT')
 );
 
+const hasPendingContractWebhook = (client, contractId) => client.providerWebhookEvent.findFirst({
+  where: {
+    processedAt: null,
+    OR: [
+      { contractId },
+      { paymentReference: { startsWith: `leamjobs_${contractId}_` } },
+    ],
+  },
+  select: { id: true },
+});
+
 export const hasNoContractFinancialHistory = async (client, contractId, escrowId = null, employerId = null) => {
   const providerReferencePrefix = `leamjobs_${contractId}_`;
   const [payments, ledgerEntry, dispute, financialAuditLog] = await Promise.all([
@@ -273,7 +286,119 @@ export const isSafelyCancelledContract = async (client, contract) => {
     && await hasNoContractFinancialHistory(client, contract.id, escrow?.id, contract.employerId);
 };
 
-const contractActions = (contract, cancellationHistoryClear = false) => {
+class ContractDeletionError extends Error {
+  constructor(message = 'This contract has an unresolved financial or lifecycle state and cannot be deleted.') {
+    super(message);
+    this.name = 'ContractDeletionError';
+    this.status = 409;
+    this.publicMessage = message;
+  }
+}
+
+const isSafelyReleasedContract = async (client, contract) => {
+  const details = contract.freelanceDetails;
+  const escrow = details?.escrow;
+  const expectedEscrowFundingAmount = details ? fundingPaymentAmount(details) : null;
+  if (!escrow
+    || !expectedEscrowFundingAmount
+    || !['FREELANCE_PROJECT', 'CONTRACT_PROJECT'].includes(contract.type)
+    || !['ACTIVE', 'IN_PROGRESS'].includes(contract.status)
+    || details.workStatus !== 'RELEASED'
+    || !details.completionSubmittedAt
+    || !details.employerCompletionConfirmedAt
+    || !contractAssociationsMatch(contract)
+    || !contractTypeMatchesJob(contract)
+    || escrow.status !== 'RELEASED'
+    || !escrow.fundedAt
+    || !escrow.releaseEligibleAt
+    || !escrow.releasedAt
+    || Boolean(escrow.cancelledAt)
+    || escrow.currency !== details.currency
+    || !new Prisma.Decimal(expectedEscrowFundingAmount).eq(escrow.grossAmount)
+    || !new Prisma.Decimal(escrow.fundedAmount ?? 0).eq(escrow.grossAmount)
+    || !new Prisma.Decimal(escrow.releasedAmount ?? 0).eq(escrow.seekerNetAmount)
+    || !new Prisma.Decimal(escrow.refundedAmount ?? 0).isZero()
+    || (contract.disputes ?? []).length > 0
+    || (escrow.disputes ?? []).length > 0
+    || (escrow.refunds ?? []).some((refund) => !['FAILED', 'CANCELLED'].includes(refund.status))
+    || escrow.conversionOperation
+    || (escrow.payments ?? []).some((payment) => ['PENDING', 'PROCESSING'].includes(payment.status))) {
+    return false;
+  }
+
+  const successfulEscrowPayments = (escrow.payments ?? []).filter((payment) => payment.status === 'SUCCESSFUL');
+  if (successfulEscrowPayments.length !== 1) return false;
+
+  const expectedFundingAmount = new Prisma.Decimal(escrow.seekerNetAmount).eq(escrow.grossAmount)
+    ? new Prisma.Decimal(escrow.grossAmount).plus(escrow.platformFeeAmount)
+    : new Prisma.Decimal(escrow.grossAmount);
+  const verifiedFundingPayment = (escrow.payments ?? []).some((payment) => (
+    payment.paymentType === 'CONTRACT_FUNDING'
+    && payment.status === 'SUCCESSFUL'
+    && Boolean(payment.verifiedAt)
+    && typeof payment.transactionId === 'string'
+    && payment.transactionId.trim() !== ''
+    && payment.currency === escrow.currency
+    && new Prisma.Decimal(payment.amount).eq(expectedFundingAmount)
+  ));
+  if (!verifiedFundingPayment) return false;
+
+  const [relatedPayments, inProgressEscrowPayment, pendingWebhook, releaseLedgerEntry, releaseAudit] = await Promise.all([
+    findContractFundingPayments(client, contract.id),
+    client.payment.findFirst({
+      where: { escrowId: escrow.id, status: { in: ['PENDING', 'PROCESSING'] } },
+      select: { id: true },
+    }),
+    hasPendingContractWebhook(client, contract.id),
+    client.financialLedgerEntry.findFirst({
+      where: {
+        contractId: contract.id,
+        escrowId: escrow.id,
+        entryType: 'WALLET_CREDIT',
+        idempotencyKey: `escrow:${escrow.id}:release`,
+        amount: escrow.seekerNetAmount,
+        currency: escrow.currency,
+      },
+      select: { id: true },
+    }),
+    client.financialAuditLog.findFirst({
+      where: {
+        entityType: 'ESCROW',
+        entityId: escrow.id,
+        action: 'RELEASED',
+        fromStatus: 'RELEASE_ELIGIBLE',
+        toStatus: 'RELEASED',
+        amount: escrow.seekerNetAmount,
+        currency: escrow.currency,
+      },
+      select: { id: true },
+    }),
+  ]);
+  const successfulRelatedPayments = relatedPayments.filter((payment) => payment.status === 'SUCCESSFUL');
+  return successfulRelatedPayments.length === 1
+    && successfulRelatedPayments[0].id === successfulEscrowPayments[0].id
+    && !relatedPayments.some((payment) => ['PENDING', 'PROCESSING'].includes(payment.status))
+    && !inProgressEscrowPayment
+    && !pendingWebhook
+    && Boolean(releaseLedgerEntry)
+    && Boolean(releaseAudit);
+};
+
+const isEligibleForEmployerDeletion = async (client, contract, cancellationHistoryClear = false) => {
+  if (contract.employerArchivedAt) return false;
+  if (contract.freelanceDetails?.escrow?.conversionOperation) return false;
+  if (contract.status === 'CANCELLED' || canPossiblyCancelContract(contract)) {
+    const lifecycleIsSafe = contract.status === 'CANCELLED'
+      ? await isSafelyCancelledContract(client, contract)
+      : cancellationHistoryClear;
+    if (!lifecycleIsSafe) return false;
+    const pendingWebhook = await hasPendingContractWebhook(client, contract.id);
+    return !pendingWebhook;
+  }
+  return isSafelyReleasedContract(client, contract);
+};
+
+const contractActions = (contract, cancellationHistoryClear = false, deletionAvailable = false) => {
   const details = contract.freelanceDetails;
   const escrow = details?.escrow;
   const payments = escrow?.payments ?? [];
@@ -302,6 +427,7 @@ const contractActions = (contract, cancellationHistoryClear = false) => {
       && !details?.employerCompletionConfirmedAt
       && (escrow.payments ?? []).some((payment) => payment.status === 'SUCCESSFUL'),
     ),
+    delete: deletionAvailable,
   };
 };
 
@@ -309,7 +435,7 @@ export const isContractCancellationAvailable = (contract, cancellationHistoryCle
   contractActions(contract, cancellationHistoryClear).cancel
 );
 
-export const mapContract = (contract, { cancellationHistoryClear = false } = {}) => ({
+export const mapContract = (contract, { cancellationHistoryClear = false, deletionAvailable = false } = {}) => ({
   id: contract.id,
   contractId: contract.id,
   applicationId: contract.applicationId,
@@ -392,7 +518,7 @@ export const mapContract = (contract, { cancellationHistoryClear = false } = {})
     escrowStatus: contract.freelanceDetails.escrow?.status ?? null,
     paymentStatus: contract.freelanceDetails.escrow?.payments?.[0]?.status ?? null,
   } : null,
-  availableActions: contractActions(contract, cancellationHistoryClear),
+  availableActions: contractActions(contract, cancellationHistoryClear, deletionAvailable),
 });
 
 const lockContract = async (transaction, contractId) => {
@@ -409,11 +535,60 @@ const lockContract = async (transaction, contractId) => {
   });
 };
 
+export const archiveEmployerContract = async ({ contractId, employerId }) => prisma.$transaction(async (transaction) => {
+  await transaction.$queryRaw`
+    SELECT "id"
+    FROM "Contract"
+    WHERE "id" = ${contractId} AND "employerId" = ${employerId}
+    FOR UPDATE
+  `;
+  let contract = await transaction.contract.findFirst({
+    where: { id: contractId, employerId },
+    select: contractSelect,
+  });
+  if (!contract) throw new ContractNotFoundError();
+  if (contract.employerArchivedAt) return { deleted: true, alreadyDeleted: true };
+
+  const escrowId = contract.freelanceDetails?.escrow?.id;
+  if (escrowId) {
+    await transaction.$queryRaw`
+      SELECT "id"
+      FROM "Escrow"
+      WHERE "id" = ${escrowId}
+      FOR UPDATE
+    `;
+    contract = await transaction.contract.findFirst({
+      where: { id: contractId, employerId },
+      select: contractSelect,
+    });
+    if (!contract) throw new ContractNotFoundError();
+    if (contract.employerArchivedAt) return { deleted: true, alreadyDeleted: true };
+  }
+
+  const cancellationHistoryClear = canPossiblyCancelContract(contract)
+    && await hasNoContractFinancialHistory(
+      transaction,
+      contract.id,
+      contract.freelanceDetails?.escrow?.id,
+      employerId,
+    );
+  if (!await isEligibleForEmployerDeletion(transaction, contract, cancellationHistoryClear)) {
+    throw new ContractDeletionError();
+  }
+
+  await transaction.contract.update({
+    where: { id: contract.id },
+    data: { employerArchivedAt: new Date() },
+    select: { id: true },
+  });
+  return { deleted: true, alreadyDeleted: false };
+});
+
 export const getContractForParty = async ({ contractId, userId, role }) => {
   const contract = await prisma.contract.findUnique({ where: { id: contractId }, select: contractSelect });
   if (!contract) throw new ContractNotFoundError();
   const ownerId = role === 'EMPLOYER' ? contract.employerId : contract.seekerId;
-  if (ownerId !== userId) throw new ContractNotFoundError();
+  if (ownerId !== userId || (role === 'EMPLOYER' && contract.employerArchivedAt)) throw new ContractNotFoundError();
   const cancellationHistoryClear = role === 'EMPLOYER'
     && canPossiblyCancelContract(contract)
     && await hasNoContractFinancialHistory(prisma, contract.id, contract.freelanceDetails?.escrow?.id, contract.employerId);
@@ -619,6 +794,7 @@ export const cancelEmployerFreelanceContract = async ({ contractId, employerId, 
 export const listEmployerContracts = async ({ employerId, page, limit, status }) => {
   const where = {
     employerId,
+    employerArchivedAt: null,
     ...(status ? { status } : {}),
   };
   const [contracts, total] = await Promise.all([
@@ -634,7 +810,8 @@ export const listEmployerContracts = async ({ employerId, page, limit, status })
   const mappedContracts = await Promise.all(contracts.map(async (contract) => {
     const cancellationHistoryClear = canPossiblyCancelContract(contract)
       && await hasNoContractFinancialHistory(prisma, contract.id, contract.freelanceDetails?.escrow?.id, employerId);
-    return mapContract(contract, { cancellationHistoryClear });
+    const deletionAvailable = await isEligibleForEmployerDeletion(prisma, contract, cancellationHistoryClear);
+    return mapContract(contract, { cancellationHistoryClear, deletionAvailable });
   }));
   return {
     contracts: mappedContracts,

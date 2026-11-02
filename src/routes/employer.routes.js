@@ -31,6 +31,7 @@ import {
 	confirmCompletion,
 	cancelEmployerContract,
 	confirmEmployerContract,
+	deleteEmployerContract,
 	getEmployerContract,
 	getEmployerContracts,
 	initializeEmployerContractPayment,
@@ -96,6 +97,7 @@ employerRouter.post('/contracts/:contractId/submissions/:activityId/review', aut
 employerRouter.get('/contracts/:contractId/activities/:activityId/attachments/:attachmentId', authenticate, requireRole('EMPLOYER'), validateContractId, validateContractActivityId, downloadEmployerContractWorkAttachment);
 employerRouter.post('/contracts/:contractId/disputes', authenticate, requireRole('EMPLOYER'), validateDisputeSubmission, submitDispute);
 employerRouter.post('/contracts/:contractId/cancel', authenticate, requireRole('EMPLOYER'), validateContractId, cancelEmployerContract);
+employerRouter.delete('/contracts/:contractId', authenticate, requireRole('EMPLOYER'), validateContractId, deleteEmployerContract);
 employerRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('EMPLOYER'), confirmEmployerContract);
 employerRouter.get('/contracts/:contractId', authenticate, requireRole('EMPLOYER'), getEmployerContract);
 employerRouter.post('/contracts/:contractId/payment', authenticate, requireRole('EMPLOYER'), validateContractPayment, initializeEmployerContractPayment);

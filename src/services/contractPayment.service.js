@@ -77,6 +77,7 @@ const lockPaymentContract = async (transaction, contractId) => {
       type: true,
       status: true,
       employerId: true,
+      employerArchivedAt: true,
       employer: { select: { email: true } },
       freelanceDetails: {
         select: {
@@ -107,6 +108,7 @@ const lockPaymentContract = async (transaction, contractId) => {
 
 const assertPaymentContract = (contract, employerId) => {
   if (!contract || contract.employerId !== employerId) throw new ContractNotFoundError();
+  if (contract.employerArchivedAt) throw new ContractPaymentError('This contract is no longer available for funding', 409);
   if (contract.type === 'CONTRACT_PROJECT') {
     if (contract.status !== 'PENDING') throw new ContractPaymentError('This Contract Job is not awaiting payment');
   } else if (contract.type === 'FREELANCE_PROJECT') {

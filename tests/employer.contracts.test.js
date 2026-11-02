@@ -36,7 +36,7 @@ const contractRecord = ({ owner = employerId, status = 'PENDING', escrowStatus =
   cancelledAt: null,
   createdAt: new Date('2026-09-11T10:00:00.000Z'),
   updatedAt: new Date('2026-09-11T10:00:00.000Z'),
-  job: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', title: 'Build company website', description: 'Build a website', jobType: 'NORMAL_EMPLOYMENT', engagementType: 'CONTRACT' },
+  job: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', employerId: owner, title: 'Build company website', description: 'Build a website', jobType: 'NORMAL_EMPLOYMENT', engagementType: 'CONTRACT' },
   application: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', status: 'PAYMENT_PENDING', createdAt: new Date('2026-09-10T10:00:00.000Z') },
   employer: { id: owner, firstName: 'Employer', lastName: 'One' },
   seeker: { id: seekerId, firstName: 'Seeker', lastName: 'One', seekerProfile: { professionalTitle: 'Engineer', profilePictureUrl: 'https://images.example.test/seeker.png' } },
@@ -85,11 +85,29 @@ const contractRecord = ({ owner = employerId, status = 'PENDING', escrowStatus =
   },
 });
 
+const eligibleUnfundedContract = () => {
+  const contract = contractRecord();
+  contract.application.jobId = contract.jobId;
+  contract.application.seekerId = contract.seekerId;
+  contract.freelanceDetails.contractId = contract.id;
+  contract.freelanceDetails.escrow.freelanceContractId = contract.id;
+  contract.freelanceDetails.employerConfirmedAt = null;
+  contract.freelanceDetails.seekerConfirmedAt = null;
+  contract.freelanceDetails.workStatus = 'PENDING';
+  contract.freelanceDetails.escrow.payments = [];
+  return contract;
+};
+
 const mockPrisma = {
   user: { findUnique: jest.fn() },
-  contract: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+  contract: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
   escrow: { update: jest.fn() },
   freelanceContract: { update: jest.fn() },
+  payment: { findFirst: jest.fn(), findMany: jest.fn() },
+  financialLedgerEntry: { findFirst: jest.fn() },
+  financialAuditLog: { findFirst: jest.fn() },
+  dispute: { findFirst: jest.fn() },
+  providerWebhookEvent: { findFirst: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
 };
@@ -97,6 +115,7 @@ const mockPrisma = {
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 
 const { default: app } = await import('../src/app.js');
+const { canPossiblyCancelContract } = await import('../src/services/contract.service.js');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -104,6 +123,13 @@ beforeEach(() => {
   mockPrisma.contract.findMany.mockResolvedValue([contractRecord()]);
   mockPrisma.contract.count.mockResolvedValue(1);
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
+  mockPrisma.contract.findFirst.mockResolvedValue(contractRecord());
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  mockPrisma.payment.findMany.mockResolvedValue([]);
+  mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
+  mockPrisma.financialAuditLog.findFirst.mockResolvedValue(null);
+  mockPrisma.dispute.findFirst.mockResolvedValue(null);
+  mockPrisma.providerWebhookEvent.findFirst.mockResolvedValue(null);
   mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
   mockPrisma.$queryRaw.mockResolvedValue([{ id: contractId }]);
 });
@@ -115,12 +141,12 @@ test('employer contract list scopes ownership and returns authoritative additive
 
   expect(response.status).toBe(200);
   expect(mockPrisma.contract.findMany).toHaveBeenCalledWith(expect.objectContaining({
-    where: { employerId },
+    where: { employerId, employerArchivedAt: null },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     skip: 0,
     take: 20,
   }));
-  expect(mockPrisma.contract.count).toHaveBeenCalledWith({ where: { employerId } });
+  expect(mockPrisma.contract.count).toHaveBeenCalledWith({ where: { employerId, employerArchivedAt: null } });
   expect(response.body.data.contracts[0]).toEqual(expect.objectContaining({
     type: 'CONTRACT_PROJECT',
     status: 'PENDING',
@@ -137,7 +163,7 @@ test('employer contract list scopes ownership and returns authoritative additive
       escrowStatus: 'UNFUNDED',
       paymentStatus: 'SUCCESSFUL',
     },
-    availableActions: { fund: true, cancel: false, confirmCompletion: false },
+    availableActions: { fund: true, cancel: false, confirmCompletion: false, delete: false },
   }));
 });
 
@@ -148,11 +174,11 @@ test('employer contract list supports page, limit, and authoritative contract st
 
   expect(response.status).toBe(200);
   expect(mockPrisma.contract.findMany).toHaveBeenCalledWith(expect.objectContaining({
-    where: { employerId, status: 'ACTIVE' },
+    where: { employerId, employerArchivedAt: null, status: 'ACTIVE' },
     skip: 5,
     take: 5,
   }));
-  expect(mockPrisma.contract.count).toHaveBeenCalledWith({ where: { employerId, status: 'ACTIVE' } });
+  expect(mockPrisma.contract.count).toHaveBeenCalledWith({ where: { employerId, employerArchivedAt: null, status: 'ACTIVE' } });
   expect(response.body.data.pagination).toEqual({ page: 2, limit: 5, total: 1, totalPages: 1 });
 });
 
@@ -167,7 +193,7 @@ test('management actions reflect the existing funded completion workflow', async
     .set('Authorization', `Bearer ${token()}`);
 
   expect(response.status).toBe(200);
-  expect(response.body.data.contracts[0].availableActions).toEqual({ fund: false, cancel: false, confirmCompletion: true });
+  expect(response.body.data.contracts[0].availableActions).toEqual({ fund: false, cancel: false, confirmCompletion: true, delete: false });
   expect(response.body.data.contracts[0].funding.escrowStatus).toBe('FUNDED');
 });
 
@@ -220,4 +246,50 @@ test('employer completion confirmation remains ownership protected and employer 
   expect(confirmation.status).toBe(404);
   expect(release.status).toBe(404);
   expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+});
+
+test('employer can delete an eligible unfunded contract without deleting its financial records', async () => {
+  const contract = eligibleUnfundedContract();
+  expect(canPossiblyCancelContract(contract)).toBe(true);
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+
+  const response = await request(app)
+    .delete(`/api/employer/contracts/${contractId}`)
+    .set('Authorization', `Bearer ${token()}`);
+
+  expect(response.status).toBe(200);
+  expect(response.body.data).toEqual({ deleted: true, alreadyDeleted: false });
+  expect(mockPrisma.contract.update).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: contractId },
+    data: { employerArchivedAt: expect.any(Date) },
+  }));
+  expect(mockPrisma.payment.findFirst).toHaveBeenCalled();
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+});
+
+test('employer deletion is authenticated, ownership scoped, and UUID validated', async () => {
+  const unauthenticated = await request(app).delete(`/api/employer/contracts/${contractId}`);
+  const invalidId = await request(app)
+    .delete('/api/employer/contracts/not-a-uuid')
+    .set('Authorization', `Bearer ${token()}`);
+  mockPrisma.contract.findFirst.mockResolvedValueOnce(null);
+  const foreignContract = await request(app)
+    .delete(`/api/employer/contracts/${contractId}`)
+    .set('Authorization', `Bearer ${token()}`);
+
+  expect(unauthenticated.status).toBe(401);
+  expect(invalidId.status).toBe(400);
+  expect(foreignContract.status).toBe(404);
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
+
+test('employer cannot delete a funded contract whose escrow has not been released', async () => {
+  mockPrisma.contract.findFirst.mockResolvedValue(contractRecord({ status: 'ACTIVE', escrowStatus: 'FUNDED' }));
+
+  const response = await request(app)
+    .delete(`/api/employer/contracts/${contractId}`)
+    .set('Authorization', `Bearer ${token()}`);
+
+  expect(response.status).toBe(409);
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });

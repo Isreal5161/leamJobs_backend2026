@@ -1,4 +1,4 @@
-import { cancelEmployerFreelanceContract, confirmContract } from '../services/contract.service.js';
+import { archiveEmployerContract, cancelEmployerFreelanceContract, confirmContract } from '../services/contract.service.js';
 import {
   confirmContractCompletion,
   getContractForParty,
@@ -33,6 +33,16 @@ export const cancelEmployerContract = async (req, res, next) => {
       employerId: req.user.sub,
     });
     return res.status(200).json({ success: true, data: { contract } });
+  } catch (error) { return next(error); }
+};
+
+export const deleteEmployerContract = async (req, res, next) => {
+  try {
+    const result = await archiveEmployerContract({
+      contractId: req.params.contractId,
+      employerId: req.user.sub,
+    });
+    return res.status(200).json({ success: true, data: result });
   } catch (error) { return next(error); }
 };
 
