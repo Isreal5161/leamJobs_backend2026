@@ -99,7 +99,11 @@ jest.unstable_mockModule('../src/services/notification.service.js', () => ({
   createNotification: jest.fn().mockResolvedValue({ id: 'notification-1' }),
 }));
 
-const { cancelEmployerFreelanceContract, getContractForParty } = await import('../src/services/contract.service.js');
+const {
+  cancelEmployerFreelanceContract,
+  findContractFundingPayments,
+  getContractForParty,
+} = await import('../src/services/contract.service.js');
 const { createNotification } = await import('../src/services/notification.service.js');
 
 const prepareCancellation = (escrow = escrowRecord(), type = 'FREELANCE_PROJECT') => {
@@ -219,6 +223,29 @@ test.each([escrowRecord(), null])('cancels an eligible Contract Job with %s escr
     data: { status: 'REJECTED' },
   });
   expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(escrow ? 1 : 0);
+});
+
+test('locks funding-payment matches with an int4 LEFT length and preserves both match rules', async () => {
+  mockPrisma.$queryRaw.mockResolvedValue([]);
+  mockPrisma.payment.findMany.mockResolvedValue([]);
+
+  const result = await findContractFundingPayments(mockPrisma, contractId, { lock: true });
+
+  const [query, ...parameters] = mockPrisma.$queryRaw.mock.calls[0];
+  const providerReferencePrefix = `leamjobs_${contractId}_`;
+  expect(query.join('?')).toContain('LEFT("providerReference", ?::int4) = ?');
+  expect(parameters).toEqual([contractId, providerReferencePrefix.length, providerReferencePrefix]);
+  expect(mockPrisma.payment.findMany).toHaveBeenCalledWith({
+    where: {
+      OR: [
+        { metadata: { path: ['contractId'], equals: contractId } },
+        { providerReference: { startsWith: providerReferencePrefix } },
+      ],
+    },
+    select: { id: true, status: true, escrowId: true, providerReference: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  expect(result).toEqual([]);
 });
 
 test('exposes no-escrow cancellation only after payment and financial history checks are clear', async () => {

@@ -147,7 +147,7 @@ export const findContractFundingPayments = async (client, contractId, { lock = f
       SELECT "id"
       FROM "Payment"
       WHERE "metadata" ->> 'contractId' = ${contractId}
-        OR LEFT("providerReference", ${providerReferencePrefix.length}) = ${providerReferencePrefix}
+        OR LEFT("providerReference", ${providerReferencePrefix.length}::int4) = ${providerReferencePrefix}
       FOR UPDATE
     `;
   }
