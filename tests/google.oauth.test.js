@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 process.env.NODE_ENV = 'test';
@@ -20,6 +21,9 @@ const legalVersions = {
 };
 
 const mockPrisma = {
+  authSession: {
+    create: jest.fn().mockResolvedValue({ id: 'google-auth-session' }),
+  },
   pendingOAuthRegistration: {
     create: jest.fn(),
     findFirst: jest.fn(),
@@ -46,9 +50,14 @@ const mockPrisma = {
   userLegalAcceptance: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   $transaction: jest.fn(),
 };
+mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
 
+let lastAuthorizationParameters;
 const mockClient = {
-  authorizationUrl: jest.fn(() => 'https://accounts.google.com/o/oauth2/v2/auth?client_id=google-client-id'),
+  authorizationUrl: jest.fn((parameters) => {
+    lastAuthorizationParameters = parameters;
+    return 'https://accounts.google.com/o/oauth2/v2/auth?client_id=google-client-id';
+  }),
   callback: jest.fn(async () => ({
     claims: () => ({
       sub: 'google-subject-123',
@@ -76,7 +85,15 @@ jest.unstable_mockModule('openid-client', () => ({
   }),
 }));
 
-const { startGoogleOAuth, handleGoogleCallback, completeGoogleRegistration } = await import('../src/services/googleOAuth.service.js');
+const {
+  startGoogleOAuth,
+  handleGoogleCallback: handleGoogleCallbackImplementation,
+  completeGoogleRegistration,
+} = await import('../src/services/googleOAuth.service.js');
+const handleGoogleCallback = (options) => handleGoogleCallbackImplementation({
+  ...options,
+  browserBinding: options.browserBinding ?? 'test-browser-binding',
+});
 
 const createContinuationToken = ({ pendingId, userId, email, role }) => jwt.sign(
   {
@@ -117,6 +134,13 @@ test('seeker starts Google signup and binds the intended role to the pending OAu
   const result = await startGoogleOAuth('SEEKER', legalVersions);
 
   expect(result.redirectUrl).toContain('https://accounts.google.com');
+  expect(result.stateCookieValue).toEqual(expect.any(String));
+  expect(result.stateCookieName).toMatch(/^leamjobs_google_state_/);
+  expect(mockPrisma.pendingOAuthRegistration.create.mock.calls[0][0].data.stateHash).toBe(
+    crypto.createHash('sha256')
+      .update(`${lastAuthorizationParameters.state}:${result.stateCookieValue}`)
+      .digest('hex'),
+  );
   expect(mockPrisma.pendingOAuthRegistration.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({
       provider: 'GOOGLE',
@@ -199,6 +223,33 @@ test('handleGoogleCallback rejects invalid state', async () => {
 
   await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'bad-state', nonce: 'nonce-123' })).rejects.toMatchObject({
     status: 400,
+  });
+});
+
+test('handleGoogleCallback rejects a missing browser binding without querying state', async () => {
+  await expect(handleGoogleCallbackImplementation({
+    code: 'auth-code-123',
+    state: 'state-123',
+  })).rejects.toMatchObject({ status: 400 });
+
+  expect(mockPrisma.pendingOAuthRegistration.findFirst).not.toHaveBeenCalled();
+});
+
+test('handleGoogleCallback binds OAuth state to the initiating browser secret', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue(null);
+
+  await expect(handleGoogleCallbackImplementation({
+    code: 'auth-code-123',
+    state: 'state-123',
+    browserBinding: 'different-browser-secret',
+  })).rejects.toMatchObject({ status: 400 });
+
+  expect(mockPrisma.pendingOAuthRegistration.findFirst).toHaveBeenCalledWith({
+    where: {
+      stateHash: crypto.createHash('sha256').update('state-123:different-browser-secret').digest('hex'),
+      status: 'PENDING',
+      expiresAt: { gt: expect.any(Date) },
+    },
   });
 });
 
@@ -718,6 +769,10 @@ test('completeGoogleRegistration issues a session once for a verified seeker', a
 
   expect(result.token).toBeTruthy();
   expect(result.user.id).toBe(pending.userId);
+  expect(jwt.decode(result.token)).toMatchObject({ sub: pending.userId, role: 'SEEKER', sid: expect.any(String) });
+  expect(mockPrisma.authSession.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ userId: pending.userId, id: jwt.decode(result.token).sid, expiresAt: expect.any(Date) }),
+  }));
   expect(mockPrisma.pendingOAuthRegistration.updateMany).toHaveBeenCalledWith(expect.objectContaining({
     where: expect.objectContaining({ id: pending.id, userId: pending.userId }),
     data: expect.objectContaining({ status: 'COMPLETED', userId: pending.userId }),

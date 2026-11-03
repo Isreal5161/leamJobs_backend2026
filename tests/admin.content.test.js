@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   siteContent: { findMany: jest.fn(), upsert: jest.fn() },
 };
@@ -24,7 +33,7 @@ const { ensureDefaultSiteContent } = await import('../src/services/siteContent.s
 
 const adminId = '99999999-9999-4999-8999-999999999999';
 const seekerId = '33333333-3333-4333-8333-333333333333';
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 
 beforeEach(() => {
   jest.clearAllMocks();

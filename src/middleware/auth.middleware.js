@@ -36,12 +36,26 @@ export const authenticate = async (req, res, next) => {
   }
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: claims.sub },
-      select: { isActive: true, role: true },
+    if (typeof claims.sid !== 'string' || claims.sid.trim() === '') {
+      return res.status(401).json({ message: 'Invalid authentication token' });
+    }
+
+    const session = await prisma.authSession.findFirst({
+      where: { id: claims.sid, userId: claims.sub },
+      select: {
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+        user: { select: { isActive: true, role: true } },
+      },
     });
 
-    if (!user?.isActive || user.role !== claims.role) {
+    if (!session
+      || session.userId !== claims.sub
+      || session.revokedAt
+      || session.expiresAt <= new Date()
+      || !session.user?.isActive
+      || session.user.role !== claims.role) {
       return res.status(401).json({ message: 'Invalid authentication token' });
     }
 

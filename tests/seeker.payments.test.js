@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   wallet: { findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn() },
   escrow: { aggregate: jest.fn() },
@@ -28,7 +37,7 @@ const ledgerId = '44444444-4444-4444-8444-444444444444';
 const withdrawalId = '55555555-5555-4555-8555-555555555555';
 const createdAt = new Date('2026-09-05T12:00:00.000Z');
 
-const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role }, process.env.JWT_SECRET, {
+const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

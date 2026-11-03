@@ -12,6 +12,15 @@ const seekerId = '11111111-1111-4111-8111-111111111111';
 const jobId = '22222222-2222-4222-8222-222222222222';
 let aiUsageAmount = 0;
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   subscription: { findFirst: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
@@ -32,7 +41,7 @@ const { generateCoverLetter } = await import('../src/services/aiFeatures.service
 const { evaluateInterview, prepareInterview, startInterview } = await import('../src/services/premiumSeeker.service.js');
 const { validateProfileAssistant } = await import('../src/validators/ai.validation.js');
 
-const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
+const token = (role = 'SEEKER', subject = seekerId) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const activePlan = (key) => ({ status: 'ACTIVE', startDate: new Date(Date.now() - 60_000), endDate: new Date(Date.now() + 60_000), plan: { entitlements: [{ entitlement: { key } }] } });
 const activeSubscription = (planKey, entitlementKeys = [], aiAllowance) => ({
   status: 'ACTIVE',

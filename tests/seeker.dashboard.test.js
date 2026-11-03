@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   application: { count: jest.fn(), findMany: jest.fn() },
   job: { findMany: jest.fn() },
@@ -24,7 +33,7 @@ const seekerId = 'seeker-a';
 const createdAt = new Date('2026-09-04T12:00:00.000Z');
 
 const createToken = (role, subject = seekerId) =>
-  jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+  jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
     algorithm: 'HS256',
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
@@ -134,8 +143,8 @@ describe('GET /api/seeker/dashboard', () => {
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ message: 'Forbidden' });
-    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: seekerId },
+    expect(mockPrisma.authSession.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: role, userId: seekerId },
     }));
   });
 

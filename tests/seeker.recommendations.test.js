@@ -9,6 +9,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
   job: { findMany: jest.fn() },
@@ -20,7 +29,7 @@ jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrism
 const { default: app } = await import('../src/app.js');
 
 const seekerId = '11111111-1111-4111-8111-111111111111';
-const token = (role = 'SEEKER') => jwt.sign({ sub: seekerId, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
+const token = (role = 'SEEKER') => jwt.sign({ sub: seekerId, role, sid: role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const createdAt = new Date('2026-09-05T12:00:00.000Z');
 const company = { employerProfile: { companyName: 'Example Ltd', companyDescription: null, website: null, industry: 'Technology', companySize: null, location: 'Lagos', companyLogoUrl: null } };
 const job = (id, skills, overrides = {}) => ({ id, title: `Job ${id}`, description: 'Description', location: 'Lagos', jobType: 'NORMAL_EMPLOYMENT', skills, requirements: null, createdAt, applicationDeadline: null, employer: company, employmentCompensation: null, freelanceCompensation: null, ...overrides });

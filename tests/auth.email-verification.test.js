@@ -15,6 +15,9 @@ process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 const validPasswordHash = '$2b$12$nhfTVb9Q68D9Ba7lekU84OktU/FXE2WcEd5//HUWj.mi0SN8Fk11K';
 
 const mockPrisma = {
+  authSession: {
+    create: jest.fn().mockResolvedValue({}),
+  },
   user: {
     create: jest.fn(),
     findUnique: jest.fn(),
@@ -31,6 +34,7 @@ const mockPrisma = {
     updateMany: jest.fn(),
     upsert: jest.fn(),
   },
+  $queryRaw: jest.fn().mockResolvedValue([]),
   $transaction: jest.fn(),
 };
 
@@ -204,8 +208,9 @@ test('newly registered users cannot log in before verification', async () => {
   mockPrisma.emailVerificationCode.findUnique.mockResolvedValue({ id: 'verification-pending', userId: 'user-2' });
 
   await expect(loginUser({ email: 'pending@example.com', password: 'ValidPassword1!' })).rejects.toMatchObject({
-    status: 403,
-    name: 'InactiveAccountError',
+    status: 401,
+    name: 'AuthenticationError',
+    message: 'Invalid email or password',
   });
 });
 
@@ -254,6 +259,7 @@ test('a correct verification code verifies the user and activates the account', 
     attempts: 0,
     maxAttempts: 5,
   });
+  mockPrisma.emailVerificationCode.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback({
     emailVerificationCode: {
       findUnique: jest.fn().mockResolvedValue({
@@ -310,8 +316,58 @@ test('resend enforces the cooldown before sending a new code', async () => {
 
   const result = await resendEmailVerification({ email: 'resend@example.com' });
 
-  expect(result.message).toContain('Please wait');
+  expect(result).toEqual({
+    success: true,
+    message: 'If this email needs verification, a code has been sent.',
+  });
   expect(mockQueueEmail).not.toHaveBeenCalled();
+});
+
+test('verification resend response is the same for unknown and already verified email addresses', async () => {
+  mockPrisma.user.findUnique
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce({
+      id: 'verified-user',
+      email: 'verified@example.com',
+      isVerified: true,
+    });
+
+  const unknownResult = await resendEmailVerification({ email: 'unknown@example.com' });
+  const verifiedResult = await resendEmailVerification({ email: 'verified@example.com' });
+
+  expect(unknownResult).toEqual(verifiedResult);
+});
+
+test('verification failures use the same response for unknown users and incorrect codes', async () => {
+  const user = {
+    id: 'existing-user',
+    email: 'existing@example.com',
+    isVerified: false,
+  };
+  mockPrisma.user.findUnique
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce(user);
+  mockPrisma.emailVerificationCode.findUnique.mockResolvedValue({
+    id: 'challenge-1',
+    userId: user.id,
+    codeHash: hashCode('654321'),
+    expiresAt: new Date(Date.now() + 60_000),
+    usedAt: null,
+    attempts: 0,
+    maxAttempts: 5,
+  });
+
+  const missingUserError = await verifyEmailWithCode({ email: 'missing@example.com', code: '123456' }).catch((error) => error);
+  const incorrectCodeError = await verifyEmailWithCode({ email: user.email, code: '123456' }).catch((error) => error);
+
+  expect(missingUserError).toMatchObject({
+    status: 400,
+    publicMessage: 'The verification request could not be completed. Check the code or request a new one.',
+  });
+  expect(incorrectCodeError).toMatchObject({
+    status: 400,
+    publicMessage: missingUserError.publicMessage,
+  });
 });
 
 // This test is intentionally aligned to the backend-only requirement: no plaintext code should be exposed.

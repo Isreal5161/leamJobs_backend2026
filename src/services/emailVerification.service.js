@@ -7,6 +7,11 @@ const CODE_LENGTH = 6;
 const DEFAULT_CODE_EXPIRY_MINUTES = 15;
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_RESEND_COOLDOWN_SECONDS = 60;
+const GENERIC_RESEND_RESPONSE = {
+  success: true,
+  message: 'If this email needs verification, a code has been sent.',
+};
+const GENERIC_VERIFICATION_ERROR = 'The verification request could not be completed. Check the code or request a new one.';
 
 const hashCode = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const verifyHash = (value, digest) => crypto.timingSafeEqual(Buffer.from(digest, 'hex'), Buffer.from(hashCode(value), 'hex'));
@@ -152,20 +157,13 @@ export const createEmailVerificationChallenge = async (userIdOrEmail, maybeEmail
 
 export const resendEmailVerification = async ({ email }) => {
   const normalizedEmail = String(email ?? '').trim().toLowerCase();
-  if (!normalizedEmail) {
-    return { success: false, message: 'If an account exists for this email, a verification code has been sent.' };
-  }
+  if (!normalizedEmail) return GENERIC_RESEND_RESPONSE;
 
   const user = await getUserForVerification(normalizedEmail);
-  if (!user) {
-    return { success: false, message: 'If an account exists for this email, a verification code has been sent.' };
-  }
+  if (!user || user.isVerified) return GENERIC_RESEND_RESPONSE;
 
-  if (user.isVerified) {
-    return { success: false, message: 'This email address is already verified.' };
-  }
-
-  return createEmailVerificationChallenge(user.id, user.email);
+  await createEmailVerificationChallenge(user.id, user.email);
+  return GENERIC_RESEND_RESPONSE;
 };
 
 export const verifyEmailWithCode = async ({ email, code }) => {
@@ -174,11 +172,11 @@ export const verifyEmailWithCode = async ({ email, code }) => {
   const user = await getUserForVerification(normalizedEmail);
 
   if (!user) {
-    throw Object.assign(new Error('Please verify your email address before continuing.'), { status: 400, publicMessage: 'Please verify your email address before continuing.' });
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   if (user.isVerified) {
-    return { success: true, message: 'This email address has already been verified.' };
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   const challenge = await prisma.emailVerificationCode.findUnique({
@@ -195,15 +193,15 @@ export const verifyEmailWithCode = async ({ email, code }) => {
   });
 
   if (!challenge) {
-    throw Object.assign(new Error('Please verify your email address before continuing.'), { status: 400, publicMessage: 'Please verify your email address before continuing.' });
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   if (challenge.usedAt) {
-    throw Object.assign(new Error('This verification code has already been used.'), { status: 400, publicMessage: 'This verification code has already been used.' });
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   if (new Date(challenge.expiresAt).getTime() < Date.now()) {
-    throw Object.assign(new Error('This verification code has expired.'), { status: 400, publicMessage: 'This verification code has expired. Please request a new one.' });
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   const isMatch = verifyHash(normalizedCode, challenge.codeHash);
@@ -216,14 +214,14 @@ export const verifyEmailWithCode = async ({ email, code }) => {
     });
 
     if (updated.count !== 1) {
-      throw Object.assign(new Error('This verification code has expired.'), { status: 400, publicMessage: 'This verification code has expired. Please request a new one.' });
+      throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
     }
 
     if (nextAttempts >= maxAttempts) {
-      throw Object.assign(new Error('This verification code has expired.'), { status: 400, publicMessage: 'This verification code has expired. Please request a new one.' });
+      throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
     }
 
-    throw Object.assign(new Error('The verification code is incorrect.'), { status: 400, publicMessage: 'The verification code is incorrect.' });
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
   const result = await prisma.$transaction(async (transaction) => {
@@ -237,7 +235,7 @@ export const verifyEmailWithCode = async ({ email, code }) => {
     });
 
     if (claimed.count !== 1) {
-      throw Object.assign(new Error('This verification code has expired.'), { status: 400, publicMessage: 'This verification code has expired. Please request a new one.' });
+      throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
     }
 
     return transaction.user.update({

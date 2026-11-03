@@ -87,6 +87,15 @@ const fullContract = ({ escrowStatus = 'UNFUNDED' } = {}) => ({
 });
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   contract: { findFirst: jest.fn(), findUnique: jest.fn() },
   freelanceContract: { update: jest.fn() },
@@ -187,7 +196,7 @@ beforeEach(() => {
 });
 
 test('direct contract-payment API is blocked before creating a payment or calling a provider', async () => {
-  const employerToken = jwt.sign({ sub: employerId, role: 'EMPLOYER' }, process.env.JWT_SECRET, {
+  const employerToken = jwt.sign({ sub: employerId, role: 'EMPLOYER', sid: 'EMPLOYER' }, process.env.JWT_SECRET, {
     algorithm: 'HS256',
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,

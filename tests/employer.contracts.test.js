@@ -14,7 +14,7 @@ const seekerId = '33333333-3333-4333-8333-333333333333';
 const contractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const escrowId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
-const token = (subject = employerId) => jwt.sign({ sub: subject, role: 'EMPLOYER' }, process.env.JWT_SECRET, {
+const token = (subject = employerId) => jwt.sign({ sub: subject, role: 'EMPLOYER', sid: 'EMPLOYER' }, process.env.JWT_SECRET, {
   algorithm: 'HS256',
   issuer: process.env.JWT_ISSUER,
   audience: process.env.JWT_AUDIENCE,
@@ -99,6 +99,15 @@ const eligibleUnfundedContract = () => {
 };
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   contract: { findMany: jest.fn(), count: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
   escrow: { update: jest.fn() },

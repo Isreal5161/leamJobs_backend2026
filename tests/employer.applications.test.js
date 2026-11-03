@@ -12,6 +12,15 @@ process.env.R2_ACCESS_KEY_ID = 'test-key-id';
 process.env.R2_SECRET_ACCESS_KEY = 'test-secret-key';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   $queryRaw: jest.fn(),
   application: {
@@ -71,7 +80,7 @@ const applicationA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab';
 const seekerA = '33333333-3333-4333-8333-333333333333';
 const conversationA = '44444444-4444-4444-8444-444444444444';
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

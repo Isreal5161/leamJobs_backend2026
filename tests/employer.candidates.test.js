@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   $queryRaw: jest.fn(),
   user: { findFirst: jest.fn(), findUnique: jest.fn() },
 };
@@ -15,7 +24,7 @@ jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrism
 
 const { default: app } = await import('../src/app.js');
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

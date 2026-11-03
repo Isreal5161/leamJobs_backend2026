@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   job: {
     findMany: jest.fn(),
@@ -38,7 +47,7 @@ const employerB = '22222222-2222-4222-8222-222222222222';
 const jobA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const jobB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

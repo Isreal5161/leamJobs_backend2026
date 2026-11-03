@@ -20,7 +20,7 @@ const escrowId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const disputeId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const walletId = 'wwwwwwww-wwww-4www-8www-wwwwwwwwwwww';
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 
@@ -67,6 +67,15 @@ const fundedEscrow = (status = 'FUNDED') => ({
 });
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   escrow: { findUnique: jest.fn(), update: jest.fn() },
   payment: { findMany: jest.fn() },

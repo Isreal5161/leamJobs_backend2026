@@ -86,7 +86,6 @@ const googleStartSchema = z.object({
 
 const googleCompleteSchema = z.object({
   pendingId: z.string().trim().min(1, 'Pending registration is required'),
-  continuationToken: z.string().trim().min(1, 'Google registration session is required'),
   email: z.string().trim().email('A valid email is required'),
   companyName: z.string().trim().optional(),
   phone: z.string().trim().optional(),

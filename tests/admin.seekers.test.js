@@ -7,7 +7,16 @@ process.env.JWT_SECRET = 'test-jwt-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
-const mockPrisma = { user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn() } };
+const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+   user: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn() } };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
 const { default: app } = await import('../src/app.js');
@@ -16,7 +25,7 @@ const adminId = '99999999-9999-4999-8999-999999999999';
 const seekerId = '33333333-3333-4333-8333-333333333333';
 const employerId = '11111111-1111-4111-8111-111111111111';
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

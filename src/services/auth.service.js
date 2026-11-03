@@ -1,11 +1,11 @@
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { queueWelcomeEmail } from './adminCommunications.service.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
 import { initializeSeekerWallet } from './wallet.service.js';
 import { assertCurrentLegalAcceptance, recordLegalAcceptance } from './legalAcceptance.service.js';
+import { createAuthenticatedSession } from './authSession.service.js';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -153,59 +153,51 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
 
 export const loginUser = async ({ email, password, role }) => {
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await prisma.user.findUnique({
+  const candidate = await prisma.user.findUnique({
     where: { email: normalizedEmail },
+    select: { id: true },
   });
 
-  if (!user) {
+  if (!candidate) {
+    await bcrypt.hash(password, BCRYPT_ROUNDS);
     throw new AuthenticationError();
   }
 
-  const passwordMatches = await bcrypt.compare(password, user.passwordHash);
+  const result = await prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${candidate.id} FOR UPDATE`;
 
-  if (!passwordMatches) {
-    throw new AuthenticationError();
-  }
+    const user = await transaction.user.findUnique({
+      where: { id: candidate.id },
+    });
 
-  const legacyUserWithoutVerificationRecord = user.isActive && user.isVerified === false
-    && !(await prisma.emailVerificationCode.findUnique({
-      where: { userId: user.id },
-      select: { id: true },
-    }));
+    if (!user || user.email !== normalizedEmail || !(await bcrypt.compare(password, user.passwordHash))) {
+      throw new AuthenticationError();
+    }
 
-  if (user.isVerified === false && !legacyUserWithoutVerificationRecord) {
-    const error = new InactiveAccountError();
-    error.publicMessage = 'Please verify your email address before signing in.';
-    throw error;
-  }
+    const legacyUserWithoutVerificationRecord = user.isActive && user.isVerified === false
+      && !(await transaction.emailVerificationCode.findUnique({
+        where: { userId: user.id },
+        select: { id: true },
+      }));
 
-  if (user.isActive === false) {
-    const error = new InactiveAccountError();
-    error.publicMessage = 'Please verify your email address before signing in.';
-    throw error;
-  }
+    if ((user.isVerified === false && !legacyUserWithoutVerificationRecord) || user.isActive === false) {
+      throw new AuthenticationError();
+    }
 
-  if (role && user.role !== role) {
-    throw new RoleMismatchError(role, user.role);
-  }
+    if (role && user.role !== role) {
+      throw new AuthenticationError();
+    }
 
-  const updatedUser = await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLogin: new Date() },
+    const updatedUser = await transaction.user.update({
+      where: { id: user.id },
+      data: { lastLogin: new Date() },
+    });
+    const token = await createAuthenticatedSession(updatedUser, transaction);
+
+    return { token, user: updatedUser };
   });
 
-  const token = jwt.sign(
-    { sub: updatedUser.id, role: updatedUser.role },
-    env.JWT_SECRET,
-    {
-      algorithm: 'HS256',
-      expiresIn: env.JWT_EXPIRE,
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    },
-  );
-
-  return { token, user: updatedUser };
+  return result;
 };
 
 export const getCurrentUser = async (userId) => {

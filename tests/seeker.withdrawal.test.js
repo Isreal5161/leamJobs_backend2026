@@ -13,6 +13,15 @@ process.env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = 'true';
 process.env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = 'false';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   $transaction: jest.fn(),
   withdrawal: { findUnique: jest.fn() },
@@ -38,7 +47,7 @@ const createdAt = new Date('2026-09-05T12:00:00.000Z');
 let configurationUpdatedAt = new Date('2026-10-01T00:00:00.000Z');
 let configuredWithdrawalPercentage = '0.00';
 
-const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role }, process.env.JWT_SECRET, {
+const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

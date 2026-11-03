@@ -14,6 +14,15 @@ const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const applicationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   employerProfile: { findUnique: jest.fn() },
   application: { findFirst: jest.fn() },
   job: { findUnique: jest.fn() },
@@ -31,7 +40,7 @@ jest.unstable_mockModule('../src/services/storage/storage.service.js', () => ({
 
 const { default: app } = await import('../src/app.js');
 
-const token = (role, sub) => jwt.sign({ sub, role }, process.env.JWT_SECRET, {
+const token = (role, sub) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

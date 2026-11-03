@@ -13,19 +13,30 @@ import seekerRouter from './routes/seeker.routes.js';
 import { flutterwaveWebhook, paystackContractReturn } from './controllers/contract.controller.js';
 import { paystackWithdrawalWebhook } from './controllers/withdrawal.controller.js';
 import { readAboutTeamImageController, readSiteContent } from './controllers/siteContent.controller.js';
+import { authBodyIpLimiter } from './middleware/authRateLimit.middleware.js';
 
 const app = express();
+
+app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
 // Security middleware
 app.use(helmet());
 
 // CORS configuration
+const normalizeOrigin = (configuredOrigin) => {
+  try {
+    return new URL(configuredOrigin).origin;
+  } catch {
+    return configuredOrigin;
+  }
+};
+
 const corsOptions = {
   origin: [
     env.FRONTEND_URL,
     env.FRONTEND_URL_PROD,
     ...(env.NODE_ENV === 'development' || env.NODE_ENV === 'test' ? ['http://localhost:5173'] : []),
-  ].filter(Boolean),
+  ].filter(Boolean).map(normalizeOrigin),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -36,6 +47,8 @@ app.use(cors(corsOptions));
 app.post('/api/payments/paystack/webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 app.post('/api/payments/paystack/withdrawal-webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 
+app.use('/api/auth', authBodyIpLimiter, express.json({ limit: '32kb' }), express.urlencoded({ limit: '32kb', extended: true }));
+
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -44,6 +57,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
+  skip: (req) => req.path.startsWith('/api/auth/'),
   message: 'Too many requests from this IP, please try again later.',
 });
 
@@ -98,7 +112,10 @@ app.use((req, res) => {
 const technicalErrorPattern = /(prisma|sql|database|stack|internal server|econn|enotfound|socket|syntaxerror|typeerror|referenceerror| at \w+\s*\()/i;
 
 const safeErrorMessage = (error, status) => {
-  if (status === 401) return 'Your session has expired. Please sign in again.';
+  if (status === 401) {
+    if (error?.name === 'AuthenticationError') return 'Invalid email or password.';
+    return 'Your session has expired. Please sign in again.';
+  }
   if (status === 403 && [
     'ROLE_MISMATCH',
     'EMPLOYER_NOT_VERIFIED',
@@ -123,10 +140,18 @@ const safeErrorMessage = (error, status) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
-
   const status = err.status || err.statusCode || 500;
   const message = safeErrorMessage(err, status);
+  const errorCode = typeof err.code === 'string' && /^[A-Z0-9_]+$/.test(err.code)
+    ? err.code
+    : undefined;
+  console.error('Request failed', {
+    method: req.method,
+    path: req.path,
+    status,
+    errorName: typeof err.name === 'string' ? err.name : 'Error',
+    ...(errorCode ? { errorCode } : {}),
+  });
 
   res.status(status).json({
     ...(err.publicCode

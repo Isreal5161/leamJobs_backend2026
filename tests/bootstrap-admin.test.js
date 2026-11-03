@@ -9,11 +9,16 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    create: jest.fn().mockResolvedValue({ id: 'auth-session-1' }),
+  },
   user: {
     findUnique: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
   },
+  $queryRaw: jest.fn().mockResolvedValue([]),
+  $transaction: jest.fn(async (callback) => callback(mockPrisma)),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -194,7 +199,7 @@ describe('Admin bootstrap script', () => {
 
   test('created ADMIN can log in through the shared auth endpoint and receives ADMIN role in JWT', async () => {
     mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
-      if (where.email === 'admin-login@example.com') {
+      if (where.email === 'admin-login@example.com' || where.id === 'admin-login-1') {
         return {
           id: 'admin-login-1',
           email: 'admin-login@example.com',
@@ -223,7 +228,10 @@ describe('Admin bootstrap script', () => {
     expect(result.token).toBeTruthy();
 
     const tokenPayload = jwt.decode(result.token);
-    expect(tokenPayload).toMatchObject({ role: 'ADMIN', sub: 'admin-login-1' });
+    expect(tokenPayload).toMatchObject({ role: 'ADMIN', sub: 'admin-login-1', sid: expect.any(String) });
+    expect(mockPrisma.authSession.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ id: tokenPayload.sid, userId: 'admin-login-1', expiresAt: expect.any(Date) }),
+    }));
   });
 
 });

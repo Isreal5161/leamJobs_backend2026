@@ -11,7 +11,7 @@ process.env.JWT_AUDIENCE = 'test-audience';
 const adminId = '99999999-9999-4999-8999-999999999999';
 const employerId = '11111111-1111-4111-8111-111111111111';
 
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256',
   issuer: process.env.JWT_ISSUER,
   audience: process.env.JWT_AUDIENCE,
@@ -20,6 +20,15 @@ const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JW
 const authorization = (role, subject) => ['Bearer', token(role, subject)].join(' ');
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   platformFeeConfiguration: { findUnique: jest.fn(), upsert: jest.fn() },
 };

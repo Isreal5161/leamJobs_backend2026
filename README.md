@@ -164,10 +164,16 @@ npm run prisma:studio
 
 1. Set `NODE_ENV=production`
 2. Configure `DATABASE_URL` for production PostgreSQL
-3. Update `FRONTEND_URL_PROD` with production domain
-4. Generate strong `JWT_SECRET`
-5. Configure SMTP for production email service
-6. Deploy using appropriate Node.js hosting configuration
+3. Set `FRONTEND_URL` to the HTTPS frontend origin used by recovery and OAuth redirects; set `FRONTEND_URL_PROD` for any additional permitted frontend origin
+4. Generate a cryptographically random `JWT_SECRET` of at least 32 bytes
+5. Set `TRUST_PROXY_HOPS` only after confirming the deployed reverse-proxy topology. It defaults to `0`; do not trust forwarded client addresses unless every configured hop is controlled by the deployment
+6. Configure SMTP for production email service
+7. Deploy using appropriate Node.js hosting configuration
+
+Authentication endpoints have additional IP and IP-plus-account rate limits. They use the process-local memory store, so the limits are shared only within one Node.js process. Use a single application process or configure a shared store before scaling across multiple workers or hosts. The general API limiter is also process-local.
+
+The authentication limits count both successful and failed requests. Account buckets are paired with the source IP rather than shared globally, while a separate endpoint/IP bucket prevents bypass by rotating submitted emails.
+Authentication requests are also IP-limited before body parsing and use a 32 KB JSON/form body limit; confirm the trusted proxy hop count before relying on IP-specific limits behind a reverse proxy.
 
 ## Testing
 

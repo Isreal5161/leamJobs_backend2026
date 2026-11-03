@@ -7,12 +7,15 @@ import { env } from '../config/env.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
 import { initializeSeekerWallet } from './wallet.service.js';
 import { assertCurrentLegalAcceptance, recordLegalAcceptance } from './legalAcceptance.service.js';
+import { createAuthenticatedSession } from './authSession.service.js';
 
 const GOOGLE_PROVIDER = 'GOOGLE';
 const PENDING_LINK_TTL_MINUTES = 15;
 const GOOGLE_OAUTH_SCOPE = 'openid email profile';
 
 const hashValue = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+export const googleStateCookieName = (state) => `leamjobs_google_state_${hashValue(state).slice(0, 24)}`;
+export const googleContinuationCookieName = (pendingId) => `leamjobs_google_completion_${hashValue(pendingId).slice(0, 24)}`;
 
 const ensureGoogleConfig = () => {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
@@ -127,6 +130,7 @@ export const startGoogleOAuth = async (requestedRole, legalVersions) => {
   ensureGoogleConfig();
   const role = normalizeRole(requestedRole);
   const state = crypto.randomBytes(24).toString('hex');
+  const browserBinding = crypto.randomBytes(32).toString('hex');
   const nonce = crypto.randomBytes(24).toString('hex');
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
   const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
@@ -138,7 +142,7 @@ export const startGoogleOAuth = async (requestedRole, legalVersions) => {
       acceptedTermsVersion: legalVersions?.acceptedTermsVersion?.trim() || null,
       acceptedPrivacyVersion: legalVersions?.acceptedPrivacyVersion?.trim() || null,
       nonce,
-      stateHash: hashValue(state),
+      stateHash: hashValue(`${state}:${browserBinding}`),
       codeVerifier,
       email: '',
       status: 'PENDING',
@@ -161,10 +165,12 @@ export const startGoogleOAuth = async (requestedRole, legalVersions) => {
   return {
     redirectUrl,
     pendingId: pending.id,
+    stateCookieName: googleStateCookieName(state),
+    stateCookieValue: browserBinding,
   };
 };
 
-export const handleGoogleCallback = async ({ code, state, nonce, error, errorDescription }) => {
+export const handleGoogleCallback = async ({ code, state, nonce, browserBinding, error, errorDescription }) => {
   if (error) {
     const googleError = new Error(errorDescription || 'Google authentication failed.');
     googleError.status = 400;
@@ -172,7 +178,7 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
     throw googleError;
   }
 
-  if (!code || !state) {
+  if (!code || !state || !browserBinding) {
     const invalidState = new Error('Missing Google OAuth state or authorization code.');
     invalidState.status = 400;
     invalidState.publicMessage = 'Google sign-in could not be completed. Please try again.';
@@ -181,7 +187,7 @@ export const handleGoogleCallback = async ({ code, state, nonce, error, errorDes
 
   const pending = await prisma.pendingOAuthRegistration.findFirst({
     where: {
-      stateHash: hashValue(state),
+      stateHash: hashValue(`${state}:${browserBinding}`),
       status: 'PENDING',
       expiresAt: { gt: new Date() },
     },
@@ -567,53 +573,46 @@ export const completeGoogleRegistration = async ({ pendingId, continuationToken,
     }
   }
 
-  const consumed = await prisma.pendingOAuthRegistration.updateMany({
-    where: {
-      id: pendingId,
-      consumedAt: null,
-      expiresAt: { gt: new Date() },
-      userId: user.id,
-      intendedRole: pending.intendedRole,
-    },
-    data: {
-      consumedAt: new Date(),
-      status: 'COMPLETED',
-      userId: user.id,
-    },
+  const { finalizedUser, token } = await prisma.$transaction(async (transaction) => {
+    const consumed = await transaction.pendingOAuthRegistration.updateMany({
+      where: {
+        id: pendingId,
+        consumedAt: null,
+        expiresAt: { gt: new Date() },
+        userId: user.id,
+        intendedRole: pending.intendedRole,
+      },
+      data: {
+        consumedAt: new Date(),
+        status: 'COMPLETED',
+        userId: user.id,
+      },
+    });
+
+    if (consumed.count !== 1) {
+      const error = new Error('This Google registration has already been completed.');
+      error.status = 409;
+      error.publicMessage = 'This Google sign-up session has already been completed.';
+      throw error;
+    }
+
+    const completedUser = await transaction.user.findUnique({
+      where: { id: user.id },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        role: true,
+        isActive: true,
+        isVerified: true,
+        createdAt: true,
+      },
+    });
+    const sessionToken = await createAuthenticatedSession(completedUser, transaction);
+    return { finalizedUser: completedUser, token: sessionToken };
   });
-
-  if (consumed.count !== 1) {
-    const error = new Error('This Google registration has already been completed.');
-    error.status = 409;
-    error.publicMessage = 'This Google sign-up session has already been completed.';
-    throw error;
-  }
-
-  const finalizedUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      phone: true,
-      role: true,
-      isActive: true,
-      isVerified: true,
-      createdAt: true,
-    },
-  });
-
-  const token = jwt.sign(
-    { sub: finalizedUser.id, role: finalizedUser.role },
-    env.JWT_SECRET,
-    {
-      algorithm: 'HS256',
-      expiresIn: env.JWT_EXPIRE,
-      issuer: env.JWT_ISSUER,
-      audience: env.JWT_AUDIENCE,
-    },
-  );
 
   return {
     token,

@@ -10,6 +10,15 @@ process.env.PAYOUT_ENCRYPTION_KEY = 'test-payout-encryption-key';
 process.env.FLW_SECRET_KEY = 'test-flutterwave-secret';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   payoutAccount: { findMany: jest.fn(), findFirst: jest.fn() },
   $transaction: jest.fn(),
@@ -33,7 +42,7 @@ const defaultAccountId = '33333333-3333-4333-8333-333333333333';
 const secondAccountId = '44444444-4444-4444-8444-444444444444';
 const createdAt = new Date('2026-09-05T12:00:00.000Z');
 
-const token = (role = 'SEEKER', subject = role === 'EMPLOYER' ? employerId : role === 'ADMIN' ? adminId : seekerId) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+const token = (role = 'SEEKER', subject = role === 'EMPLOYER' ? employerId : role === 'ADMIN' ? adminId : seekerId) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256',
   issuer: process.env.JWT_ISSUER,
   audience: process.env.JWT_AUDIENCE,

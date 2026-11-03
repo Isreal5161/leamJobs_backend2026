@@ -9,6 +9,15 @@ process.env.JWT_AUDIENCE = 'test-audience';
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   interview: {
     findMany: jest.fn().mockResolvedValue([]),
@@ -32,7 +41,7 @@ const otherSeekerId = '66666666-6666-4666-8666-666666666666';
 const jobId = '33333333-3333-4333-8333-333333333333';
 const applicationId = '44444444-4444-4444-8444-444444444444';
 const interviewId = '77777777-7777-4777-8777-777777777777';
-const token = (role, sub) => jwt.sign({ sub, role }, process.env.JWT_SECRET, {
+const token = (role, sub) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256',
   issuer: process.env.JWT_ISSUER,
   audience: process.env.JWT_AUDIENCE,

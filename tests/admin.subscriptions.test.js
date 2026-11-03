@@ -9,6 +9,15 @@ process.env.JWT_AUDIENCE = 'test-audience';
 
 const model = () => ({ findMany: jest.fn(), findUnique: jest.fn(), count: jest.fn(), groupBy: jest.fn(), create: jest.fn(), update: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() });
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: model(),
   subscriptionPlan: model(), entitlement: model(), planEntitlement: model(), subscription: model(), payment: model(),
   subscriptionEvent: model(),
@@ -25,7 +34,7 @@ const seekerId = '11111111-1111-4111-8111-111111111111';
 const employerId = '22222222-2222-4222-8222-222222222222';
 const planId = '33333333-3333-4333-8333-333333333333';
 const subscriptionId = '44444444-4444-4444-8444-444444444444';
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 const plan = (key = 'PROFESSIONAL') => ({ id: planId, key, displayName: key, description: 'Plan', price: '10.00', currency: 'NGN', billingInterval: 'MONTHLY', isActive: true, isPublic: true, displayOrder: 0, benefits: ['Benefit'], createdAt: new Date(), updatedAt: new Date(), entitlements: [{ entitlement: { key: 'PROFILE_ANALYTICS', displayName: 'Profile analytics', description: null, isActive: true } }] });
 
 beforeEach(() => {

@@ -8,6 +8,15 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: { findUnique: jest.fn() },
   conversation: {
     findMany: jest.fn(),
@@ -42,7 +51,7 @@ const jobId = '66666666-6666-4666-8666-666666666666';
 const messageId = '77777777-7777-4777-8777-777777777777';
 const createdAt = new Date('2026-09-05T12:00:00.000Z');
 
-const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role }, process.env.JWT_SECRET, {
+const token = (role = 'SEEKER', sub = seekerId) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
 });
 

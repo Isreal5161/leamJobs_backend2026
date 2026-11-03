@@ -1,4 +1,5 @@
 import { jest } from '@jest/globals';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import request from 'supertest';
 
@@ -12,6 +13,16 @@ process.env.PRIVACY_DOCUMENT_VERSION = '1.0';
 const validPasswordHash = '$2b$12$sNpkk72oSrd6qBz8m8PQp.kR0/4D8N.gWbZ13kVnTSS7e1S1sxZ3O';
 
 const mockPrisma = {
+  authSession: {
+    create: jest.fn().mockResolvedValue({}),
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   user: {
     findUnique: jest.fn(),
     update: jest.fn(),
@@ -24,6 +35,7 @@ const mockPrisma = {
     createMany: jest.fn().mockResolvedValue({ count: 2 }),
   },
   $transaction: jest.fn(),
+  $queryRaw: jest.fn().mockResolvedValue([]),
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -35,7 +47,7 @@ const { default: app } = await import('../src/app.js');
 const { loginUser } = await import('../src/services/auth.service.js');
 
 const createToken = (role = 'SEEKER', subject = 'user-123') =>
-  jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, {
+  jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, {
     algorithm: 'HS256',
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
@@ -92,10 +104,34 @@ describe('Employer authentication and authorization', () => {
     expect(result.token).toBeTruthy();
   });
 
+  test('login rejects an old password if a reset commits before session creation', async () => {
+    const user = {
+      id: 'reset-race-user',
+      email: 'reset-race@example.com',
+      passwordHash: validPasswordHash,
+      role: 'SEEKER',
+      isActive: true,
+      isVerified: true,
+    };
+    const resetPasswordHash = await bcrypt.hash('NewPassword1!', 12);
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce(user)
+      .mockResolvedValueOnce({ ...user, passwordHash: resetPasswordHash });
+
+    await expect(loginUser({
+      email: user.email,
+      password: 'Password1!',
+    })).rejects.toMatchObject({ status: 401, name: 'AuthenticationError' });
+
+    expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+  });
+
   test.each([
-    ['SEEKER', 'EMPLOYER', 'You are not registered as an employer.'],
-    ['EMPLOYER', 'SEEKER', 'You are not registered as a seeker.'],
-  ])('%s account is rejected by the %s login flow with a useful message', async (actualRole, expectedRole, message) => {
+    ['SEEKER', 'EMPLOYER'],
+    ['EMPLOYER', 'SEEKER'],
+  ])('%s account is rejected by the %s login flow without exposing its role', async (actualRole, expectedRole) => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'role-user-123',
       email: 'role@example.com',
@@ -104,10 +140,10 @@ describe('Employer authentication and authorization', () => {
       isActive: true,
     });
 
-    await expect(loginUser({ email: 'role@example.com', password: 'Password1!', role: expectedRole })).rejects.toThrow(message);
     await expect(loginUser({ email: 'role@example.com', password: 'Password1!', role: expectedRole })).rejects.toMatchObject({
-      status: 403,
-      publicCode: 'ROLE_MISMATCH',
+      status: 401,
+      name: 'AuthenticationError',
+      message: 'Invalid email or password',
     });
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
   });
@@ -119,6 +155,32 @@ describe('Employer authentication and authorization', () => {
       status: 401,
       name: 'AuthenticationError',
     });
+  });
+
+  test('login HTTP responses do not distinguish a missing account from a wrong password', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    const missingAccount = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'missing@example.com', password: 'Password1!' });
+
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'existing-user' })
+      .mockResolvedValueOnce({
+        id: 'existing-user',
+        email: 'existing@example.com',
+        passwordHash: validPasswordHash,
+        role: 'SEEKER',
+        isActive: true,
+        isVerified: true,
+      });
+    const wrongPassword = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'existing@example.com', password: 'WrongPassword1!' });
+
+    expect(missingAccount.status).toBe(401);
+    expect(wrongPassword.status).toBe(401);
+    expect(missingAccount.body).toEqual(wrongPassword.body);
+    expect(missingAccount.body.message).toBe('Invalid email or password.');
   });
 
   test('public registration requires an explicit role and rejects missing role', async () => {
@@ -182,7 +244,11 @@ describe('Employer authentication and authorization', () => {
         acceptedPrivacyVersion: '1.0',
       });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      success: true,
+      message: 'If registration can be completed for this email, we will send the next steps.',
+    });
     expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         role: 'EMPLOYER',

@@ -23,6 +23,7 @@ model User {
   updatedAt    DateTime  @updatedAt
 
   emailVerificationCodes        EmailVerificationCode[]
+  authSessions                  AuthSession[]
   legalAcceptances              UserLegalAcceptance[]
   oauthAccounts                 OAuthAccount[]
   pendingOAuthRegistrations     PendingOAuthRegistration[]
@@ -75,6 +76,18 @@ model User {
   supportRequests        SupportRequest[]
 
   @@index([role])
+}
+
+model AuthSession {
+  id        String    @id @default(uuid())
+  userId    String
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
 }
 
 model EmailVerificationCode {

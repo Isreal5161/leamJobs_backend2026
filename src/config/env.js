@@ -15,6 +15,18 @@ const requiredEnvVars = [
 
 export const parseEnabledFlag = (value) => value === 'true';
 
+const parseTrustProxyHops = (value) => {
+  if (value === undefined || value === '') return 0;
+  if (!/^\d+$/.test(value)) {
+    throw new Error('TRUST_PROXY_HOPS must be a non-negative integer.');
+  }
+  const hops = Number(value);
+  if (!Number.isSafeInteger(hops) || hops > 5) {
+    throw new Error('TRUST_PROXY_HOPS must be between 0 and 5.');
+  }
+  return hops;
+};
+
 // Check for missing required variables
 const missing = requiredEnvVars.filter((varName) => !process.env[varName]);
 
@@ -30,6 +42,7 @@ export const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: parseInt(process.env.PORT || '5000', 10),
   HOST: process.env.HOST || 'localhost',
+  TRUST_PROXY_HOPS: parseTrustProxyHops(process.env.TRUST_PROXY_HOPS),
 
   // Database
   DATABASE_URL: process.env.DATABASE_URL || '',
@@ -108,4 +121,51 @@ export const env = {
 // Validate environment
 if (env.NODE_ENV !== 'development' && env.NODE_ENV !== 'production' && env.NODE_ENV !== 'test') {
   throw new Error(`Invalid NODE_ENV: ${env.NODE_ENV}`);
+}
+
+if (env.NODE_ENV === 'production') {
+  if (Buffer.byteLength(env.JWT_SECRET || '', 'utf8') < 32) {
+    throw new Error('JWT_SECRET must be at least 32 bytes in production.');
+  }
+
+  if (!env.FRONTEND_URL) {
+    throw new Error('FRONTEND_URL is required in production for account verification and recovery links.');
+  }
+
+  for (const [name, configuredUrl] of [
+    ['FRONTEND_URL', env.FRONTEND_URL],
+    ['FRONTEND_URL_PROD', env.FRONTEND_URL_PROD],
+  ]) {
+    if (!configuredUrl) continue;
+
+    let frontendUrl;
+    try {
+      frontendUrl = new URL(configuredUrl);
+    } catch {
+      throw new Error(`${name} must be a valid HTTPS origin in production.`);
+    }
+    if (frontendUrl.protocol !== 'https:' || frontendUrl.origin !== configuredUrl.replace(/\/$/, '')) {
+      throw new Error(`${name} must be a valid HTTPS origin in production.`);
+    }
+  }
+
+  const googleOAuthConfigured = Boolean(
+    process.env.GOOGLE_CLIENT_ID
+    || process.env.GOOGLE_CLIENT_SECRET
+    || process.env.GOOGLE_REDIRECT_URI,
+  );
+  if (googleOAuthConfigured) {
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
+      throw new Error('Google OAuth production configuration must include its client ID, secret, and redirect URI.');
+    }
+    let googleRedirectUrl;
+    try {
+      googleRedirectUrl = new URL(env.GOOGLE_REDIRECT_URI);
+    } catch {
+      throw new Error('GOOGLE_REDIRECT_URI must be a valid HTTPS URL in production.');
+    }
+    if (googleRedirectUrl.protocol !== 'https:') {
+      throw new Error('GOOGLE_REDIRECT_URI must use HTTPS in production.');
+    }
+  }
 }

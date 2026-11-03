@@ -14,6 +14,15 @@ process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 process.env.LEAMJOBS_FREELANCE_WITHDRAWALS_ENABLED = 'true';
 
 const mockPrisma = {
+  authSession: {
+    findFirst: jest.fn().mockImplementation(async ({ where }) => ({
+      userId: where.userId,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: where.id },
+    })),
+  },
+
   withdrawal: { findUnique: jest.fn().mockResolvedValue(null) },
   subscriptionPlan: { findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn() },
   subscription: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
@@ -59,7 +68,7 @@ const otherSeekerId = '22222222-2222-4222-8222-222222222222';
 const adminId = '99999999-9999-4999-8999-999999999999';
 const planId = '33333333-3333-4333-8333-333333333333';
 const paymentProviderRef = 'leamjobs_sub_123';
-const token = (role, subject) => jwt.sign({ sub: subject, role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
+const token = (role, subject) => jwt.sign({ sub: subject, role, sid: role }, process.env.JWT_SECRET, { algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h' });
 
 const subscriptionPlan = {
   id: planId,

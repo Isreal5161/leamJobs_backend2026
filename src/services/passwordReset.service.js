@@ -54,11 +54,21 @@ export const resetPassword = async ({ token: rawToken, password }) => {
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   const result = await prisma.$transaction(async (transaction) => {
+    await transaction.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${token.userId} FOR UPDATE`;
+    const claimedAt = new Date();
     const claimed = await transaction.passwordResetToken.updateMany({
       where: { id: token.id, usedAt: null, expiresAt: { gt: new Date() } },
-      data: { usedAt: new Date() },
+      data: { usedAt: claimedAt },
     });
     if (claimed.count !== 1) throw new InvalidPasswordResetTokenError();
+    await transaction.passwordResetToken.updateMany({
+      where: { userId: token.userId, usedAt: null },
+      data: { usedAt: claimedAt },
+    });
+    await transaction.authSession.updateMany({
+      where: { userId: token.userId, revokedAt: null },
+      data: { revokedAt: claimedAt },
+    });
     const user = await transaction.user.update({ where: { id: token.userId }, data: { passwordHash }, select: { id: true, email: true, firstName: true } });
     return user;
   });

@@ -6,7 +6,14 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
-  user: { findUnique: jest.fn().mockResolvedValue({ isActive: true, role: 'SEEKER' }) },
+  authSession: {
+    findFirst: jest.fn().mockResolvedValue({
+      userId: 'user-123',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: 'SEEKER' },
+    }),
+  },
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({
@@ -26,7 +33,7 @@ const createRequest = (token) => ({
 });
 
 const signToken = (payload, options = {}) =>
-  jwt.sign(payload, process.env.JWT_SECRET, {
+  jwt.sign({ sid: 'session-123', ...payload }, process.env.JWT_SECRET, {
     algorithm: 'HS256',
     issuer: process.env.JWT_ISSUER,
     audience: process.env.JWT_AUDIENCE,
@@ -41,6 +48,10 @@ describe('authenticate', () => {
     ({ authenticate } = await import('../src/middleware/auth.middleware.js'));
   });
 
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   test('accepts a valid token and constructs req.user from its claims', async () => {
     const token = signToken({ sub: 'user-123', role: 'SEEKER' });
     const req = createRequest(token);
@@ -52,6 +63,10 @@ describe('authenticate', () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(req.user).toMatchObject({ sub: 'user-123', role: 'SEEKER' });
     expect(req.user.email).toBeUndefined();
+    expect(mockPrisma.authSession.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'session-123', userId: 'user-123' },
+      select: expect.objectContaining({ userId: true, expiresAt: true, revokedAt: true }),
+    }));
   });
 
   test('rejects an expired token', async () => {
@@ -127,5 +142,84 @@ describe('authenticate', () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  test('rejects a token without a session ID', async () => {
+    const token = signToken({ sub: 'user-123', role: 'SEEKER', sid: undefined });
+    const req = createRequest(token);
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockPrisma.authSession.findFirst).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('rejects revoked or expired sessions', async () => {
+    for (const session of [
+      { userId: 'user-123', expiresAt: new Date(Date.now() + 60_000), revokedAt: new Date(), user: { isActive: true, role: 'SEEKER' } },
+      { userId: 'user-123', expiresAt: new Date(Date.now() - 1), revokedAt: null, user: { isActive: true, role: 'SEEKER' } },
+    ]) {
+      mockPrisma.authSession.findFirst.mockResolvedValueOnce(session);
+      const req = createRequest(signToken({ sub: 'user-123', role: 'SEEKER' }));
+      const res = createResponse();
+      const next = jest.fn();
+
+      await authenticate(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
+
+  test('rejects a session belonging to a different user', async () => {
+    mockPrisma.authSession.findFirst.mockResolvedValueOnce({
+      userId: 'another-user',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, role: 'SEEKER' },
+    });
+    const req = createRequest(signToken({ sub: 'user-123', role: 'SEEKER' }));
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('retains account-active and role-mismatch protections', async () => {
+    for (const user of [{ isActive: false, role: 'SEEKER' }, { isActive: true, role: 'EMPLOYER' }]) {
+      mockPrisma.authSession.findFirst.mockResolvedValueOnce({
+        userId: 'user-123',
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: null,
+        user,
+      });
+      const req = createRequest(signToken({ sub: 'user-123', role: 'SEEKER' }));
+      const res = createResponse();
+      const next = jest.fn();
+
+      await authenticate(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
+
+  test('fails closed when the session lookup fails', async () => {
+    const lookupError = new Error('database unavailable');
+    mockPrisma.authSession.findFirst.mockRejectedValueOnce(lookupError);
+    const req = createRequest(signToken({ sub: 'user-123', role: 'SEEKER' }));
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(lookupError);
   });
 });
