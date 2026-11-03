@@ -4,6 +4,10 @@ import { subscriptionPlanFeatureDefaults } from './subscriptionFoundation.servic
 import { isAdvancedCvTemplate } from '../utils/cvTemplates.js';
 import { createNotification } from './notification.service.js';
 import { getLeamJobsEmployerEmail } from './leamjobsEmployer.service.js';
+import {
+  canReapplyAfterCancelledContracts,
+  cancelledContractAuditSelect,
+} from './contract.service.js';
 
 export class ApplicationDuplicateError extends Error {
   constructor() {
@@ -35,7 +39,7 @@ const applicationSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
-  contract: { select: { id: true } },
+  contract: { select: { id: true, status: true } },
   job: {
     select: {
       id: true,
@@ -77,6 +81,7 @@ const mapApplication = (application) => ({
   appliedAt: application.createdAt,
   updatedAt: application.updatedAt,
   contractId: application.contract?.id ?? null,
+  contractStatus: application.contract?.status ?? null,
 });
 
 const buildLeamJobsCvSnapshot = (user, profile) => {
@@ -221,15 +226,6 @@ export const getSeekerApplications = async (seekerId, { page = 1, limit = 50 } =
 export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cvSource, resumeUrl, resumeObjectKey } = {}) => {
   const job = await findApplicationJob(jobId);
 
-  const existingApplication = await prisma.application.findUnique({
-    where: { seekerId_jobId: { seekerId, jobId } },
-    select: { id: true },
-  });
-
-  if (existingApplication) {
-    throw new ApplicationDuplicateError();
-  }
-
   const [user, seekerProfile] = await Promise.all([
     prisma.user.findUnique({
       where: { id: seekerId },
@@ -301,6 +297,25 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
   try {
     const application = await prisma.$transaction(async (transaction) => {
       if (typeof transaction.$queryRaw === 'function') await transaction.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${seekerId} FOR UPDATE`;
+      if (typeof transaction.$queryRaw === 'function') await transaction.$queryRaw`SELECT "id" FROM "Job" WHERE "id" = ${jobId} FOR UPDATE`;
+      const currentJob = await transaction.job.findFirst({
+        where: { id: jobId, status: 'APPROVED' },
+        select: { id: true, applicationDeadline: true },
+      });
+      if (!currentJob) throw new ApplicationJobNotFoundError();
+      if (currentJob.applicationDeadline && currentJob.applicationDeadline < new Date()) {
+        throw new ApplicationJobClosedError();
+      }
+
+      const previousApplications = await transaction.application.findMany({
+        where: { seekerId, jobId },
+        select: { contract: { select: cancelledContractAuditSelect } },
+      });
+      if (previousApplications.length > 0
+        && !await canReapplyAfterCancelledContracts(transaction, previousApplications)) {
+        throw new ApplicationDuplicateError();
+      }
+
       if (Number.isFinite(applicationLimit)) {
         const periodStart = new Date();
         periodStart.setUTCDate(1);

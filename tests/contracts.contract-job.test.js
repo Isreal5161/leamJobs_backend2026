@@ -365,6 +365,21 @@ test('a cancelled contract is historical in the employer list and does not block
     applicationId: replacementApplicationId,
     status: 'PAYMENT_PENDING',
   });
+  expect(mockPrisma.contract.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    select: expect.objectContaining({
+      completedAt: true,
+      endedAt: true,
+      job: { select: { id: true, employerId: true, jobType: true, engagementType: true } },
+      freelanceDetails: {
+        select: expect.objectContaining({
+          completionSubmittedAt: true,
+          employerConfirmedAt: true,
+          seekerConfirmedAt: true,
+          employerCompletionConfirmedAt: true,
+        }),
+      },
+    }),
+  }));
   expect(mockPrisma.contract.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({
       applicationId: replacementApplicationId,

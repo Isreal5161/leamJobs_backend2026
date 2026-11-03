@@ -340,9 +340,15 @@ describe('Phase 1 freelance contract acceptance', () => {
   });
 
   test('a cancelled no-escrow contract permits replacement after all history checks pass', async () => {
+    const replacementApplication = {
+      ...acceptanceApplication,
+      id: secondApplicationId,
+      seekerId: otherSeekerId,
+      seeker: { id: otherSeekerId },
+    };
     mockPrisma.application.findFirst
-      .mockResolvedValueOnce({ id: applicationId, contract: null })
-      .mockResolvedValueOnce(acceptanceApplication)
+      .mockResolvedValueOnce({ id: secondApplicationId, contract: null })
+      .mockResolvedValueOnce(replacementApplication)
       .mockResolvedValueOnce(null);
     mockPrisma.contract.findMany.mockResolvedValueOnce([{
       id: contractId,
@@ -361,11 +367,27 @@ describe('Phase 1 freelance contract acceptance', () => {
     }]);
 
     const response = await request(app)
-      .patch(`/api/employer/jobs/${jobId}/applications/${applicationId}/status`)
+      .patch(`/api/employer/jobs/${jobId}/applications/${secondApplicationId}/status`)
       .set('Authorization', `Bearer ${token('EMPLOYER', employerId)}`)
       .send({ status: 'ACCEPTED' });
 
     expect(response.status).toBe(200);
+    expect(mockPrisma.contract.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        completedAt: true,
+        endedAt: true,
+        job: { select: { id: true, employerId: true, jobType: true, engagementType: true } },
+        freelanceDetails: {
+          select: expect.objectContaining({
+            completionSubmittedAt: true,
+            employerConfirmedAt: true,
+            seekerConfirmedAt: true,
+            employerCompletionConfirmedAt: true,
+            escrow: { select: expect.objectContaining({ releaseEligibleAt: true }) },
+          }),
+        },
+      }),
+    }));
     expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         OR: [
@@ -375,6 +397,13 @@ describe('Phase 1 freelance contract acceptance', () => {
       },
     }));
     expect(mockPrisma.contract.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.contract.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        applicationId: secondApplicationId,
+        seekerId: otherSeekerId,
+      }),
+    }));
+    expect(mockPrisma.contract.update).not.toHaveBeenCalled();
     expect(mockPrisma.escrow.create).toHaveBeenCalledTimes(1);
   });
 

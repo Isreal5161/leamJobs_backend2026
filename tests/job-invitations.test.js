@@ -4,7 +4,7 @@ const mockPrisma = {
   job: { findFirst: jest.fn() },
   user: { findFirst: jest.fn() },
   jobInvitation: { findFirst: jest.fn() },
-  application: { findUnique: jest.fn() },
+  application: { findMany: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -95,9 +95,10 @@ describe('job invitations', () => {
         update: jest.fn().mockResolvedValue(invitation({ status: 'ACCEPTED', applicationId, application: { id: applicationId, status: 'APPLIED', jobId } })),
       },
       application: {
-        findUnique: jest.fn().mockResolvedValueOnce(null),
+        findMany: jest.fn().mockResolvedValueOnce([]),
         create: jest.fn().mockResolvedValue({ id: applicationId, status: 'APPLIED', jobId }),
       },
+      job: { findFirst: jest.fn().mockResolvedValue({ id: jobId, applicationDeadline: null }) },
     };
     mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
 
@@ -118,7 +119,7 @@ describe('job invitations', () => {
         findFirst: jest.fn().mockResolvedValue(invitation()),
         update: jest.fn().mockResolvedValue(invitation({ status: 'DECLINED', respondedAt: new Date() })),
       },
-      application: { findUnique: jest.fn(), create: jest.fn() },
+      application: { findMany: jest.fn(), create: jest.fn() },
     };
     mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
 

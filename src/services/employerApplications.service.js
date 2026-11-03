@@ -6,6 +6,7 @@ import { createNotification } from './notification.service.js';
 import { calculateSkillMatch } from '../utils/skillNormalization.js';
 import { getEmployerCandidateSubscriptionTiers } from './employerCandidates.service.js';
 import {
+  cancelledContractAuditSelect,
   canPossiblyCancelContract,
   cancelEmployerFreelanceContract,
   findContractFundingPayments,
@@ -542,15 +543,21 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
         employerId: true,
         status: true,
         cancelledAt: true,
+        completedAt: true,
+        endedAt: true,
         applicationId: true,
         application: { select: { id: true, jobId: true, seekerId: true, status: true } },
-        job: { select: { id: true, employerId: true } },
+        job: { select: { id: true, employerId: true, jobType: true, engagementType: true } },
         disputes: { select: { id: true } },
         ledgerEntries: { select: { id: true } },
         freelanceDetails: {
           select: {
             contractId: true,
             workStatus: true,
+            completionSubmittedAt: true,
+            employerConfirmedAt: true,
+            seekerConfirmedAt: true,
+            employerCompletionConfirmedAt: true,
             escrow: {
               select: {
                 freelanceContractId: true,
@@ -561,6 +568,7 @@ export const updateEmployerApplicationStatus = async (employerId, jobId, applica
                 refundedAmount: true,
                 fundedAt: true,
                 releasedAt: true,
+                releaseEligibleAt: true,
                 payments: {
                   where: { paymentType: 'CONTRACT_FUNDING' },
                   select: { status: true },
@@ -741,43 +749,7 @@ export const selectContractJobApplication = async (employerId, jobId, applicatio
         type: 'CONTRACT_PROJECT',
         applicationId: { not: application.id },
       },
-      select: {
-        id: true,
-        jobId: true,
-        seekerId: true,
-        applicationId: true,
-        employerId: true,
-        status: true,
-        cancelledAt: true,
-        application: { select: { id: true, jobId: true, seekerId: true, status: true } },
-        job: { select: { id: true, employerId: true } },
-        disputes: { select: { id: true } },
-        ledgerEntries: { select: { id: true } },
-        freelanceDetails: {
-          select: {
-            contractId: true,
-            workStatus: true,
-            escrow: {
-              select: {
-                id: true,
-                freelanceContractId: true,
-                status: true,
-                fundedAmount: true,
-                releasedAmount: true,
-                refundedAmount: true,
-                fundedAt: true,
-                releasedAt: true,
-                cancelledAt: true,
-                releaseEligibleAt: true,
-                refunds: { select: { id: true } },
-                disputes: { select: { id: true } },
-                ledgerEntries: { select: { id: true } },
-                payments: { select: { id: true, status: true } },
-              },
-            },
-          },
-        },
-      },
+      select: cancelledContractAuditSelect,
     });
     const safelyCancelledContracts = await Promise.all(
       existingContracts.map((contract) => isSafelyCancelledContract(transaction, contract)),

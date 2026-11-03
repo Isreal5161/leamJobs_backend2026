@@ -609,7 +609,7 @@ model Application {
   cvSnapshot   ApplicationCvSnapshot?
   interviews   Interview[]
 
-  @@unique([seekerId, jobId])
+  @@index([seekerId, jobId])
   @@index([seekerId, createdAt])
   @@index([jobId, createdAt])
 }

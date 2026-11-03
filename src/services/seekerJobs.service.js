@@ -1,5 +1,9 @@
 import { prisma } from '../config/database.js';
 import { publicCompanyLogoUrl } from '../utils/publicImageUrls.js';
+import {
+  canReapplyAfterCancelledContracts,
+  cancelledContractAuditSelect,
+} from './contract.service.js';
 
 export class SeekerJobNotFoundError extends Error {
   constructor() {
@@ -188,15 +192,17 @@ export const findApprovedJob = async (jobId, seekerId) => {
     throw new SeekerJobNotFoundError();
   }
 
-  const existingApplication = seekerId
-    ? await prisma.application.findUnique({
-      where: { seekerId_jobId: { seekerId, jobId } },
-      select: { id: true },
+  const existingApplications = seekerId
+    ? await prisma.application.findMany({
+      where: { seekerId, jobId },
+      select: { contract: { select: cancelledContractAuditSelect } },
     })
-    : null;
+    : [];
+  const alreadyApplied = existingApplications.length > 0
+    && !await canReapplyAfterCancelledContracts(prisma, existingApplications);
 
   return {
     job: mapSeekerJob(job),
-    alreadyApplied: Boolean(existingApplication),
+    alreadyApplied,
   };
 };

@@ -91,6 +91,48 @@ export const contractSelect = {
   },
 };
 
+export const cancelledContractAuditSelect = {
+  id: true,
+  applicationId: true,
+  jobId: true,
+  employerId: true,
+  seekerId: true,
+  type: true,
+  status: true,
+  cancelledAt: true,
+  completedAt: true,
+  endedAt: true,
+  job: { select: { id: true, employerId: true, jobType: true, engagementType: true } },
+  application: { select: { id: true, jobId: true, seekerId: true, status: true } },
+  freelanceDetails: {
+    select: {
+      contractId: true,
+      workStatus: true,
+      completionSubmittedAt: true,
+      employerConfirmedAt: true,
+      seekerConfirmedAt: true,
+      employerCompletionConfirmedAt: true,
+      escrow: {
+        select: {
+          id: true,
+          freelanceContractId: true,
+          status: true,
+          cancelledAt: true,
+          fundedAmount: true,
+          releasedAmount: true,
+          refundedAmount: true,
+          fundedAt: true,
+          releasedAt: true,
+          releaseEligibleAt: true,
+          refunds: { select: { id: true } },
+          disputes: { select: { id: true } },
+          ledgerEntries: { select: { id: true } },
+        },
+      },
+    },
+  },
+};
+
 export class ContractNotFoundError extends Error {
   constructor() {
     super('Contract not found');
@@ -284,6 +326,16 @@ export const isSafelyCancelledContract = async (client, contract) => {
     && !escrowHasFinancialActivity(escrow);
   return validLifecycle
     && await hasNoContractFinancialHistory(client, contract.id, escrow?.id, contract.employerId);
+};
+
+export const canReapplyAfterCancelledContracts = async (client, applications) => {
+  if (applications.length === 0) return false;
+  const cancelledSafely = await Promise.all(applications.map((application) => (
+    application.contract
+      ? isSafelyCancelledContract(client, application.contract)
+      : false
+  )));
+  return cancelledSafely.every(Boolean);
 };
 
 class ContractDeletionError extends Error {

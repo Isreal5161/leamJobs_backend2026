@@ -1,5 +1,9 @@
 import { prisma } from '../config/database.js';
 import { createNotification } from './notification.service.js';
+import {
+  canReapplyAfterCancelledContracts,
+  cancelledContractAuditSelect,
+} from './contract.service.js';
 
 const invitationInclude = {
   job: { select: { id: true, title: true, location: true, status: true, applicationDeadline: true } },
@@ -125,8 +129,24 @@ export const respondToJobInvitation = async (seekerId, invitationId, response) =
       throw new InvitationError('Job is no longer accepting candidates', 409);
     }
 
-    let application = await transaction.application.findUnique({ where: { seekerId_jobId: { seekerId, jobId: invitation.jobId } }, select: { id: true, status: true, jobId: true } });
-    if (!application) {
+    await transaction.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${seekerId} FOR UPDATE`;
+    await transaction.$queryRaw`SELECT "id" FROM "Job" WHERE "id" = ${invitation.jobId} FOR UPDATE`;
+    const currentJob = await transaction.job.findFirst({
+      where: { id: invitation.jobId, status: 'APPROVED' },
+      select: { id: true, applicationDeadline: true },
+    });
+    if (!currentJob || (currentJob.applicationDeadline && currentJob.applicationDeadline < new Date())) {
+      throw new InvitationError('Job is no longer accepting candidates', 409);
+    }
+
+    const previousApplications = await transaction.application.findMany({
+      where: { seekerId, jobId: invitation.jobId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, status: true, jobId: true, contract: { select: cancelledContractAuditSelect } },
+    });
+    const canReapply = await canReapplyAfterCancelledContracts(transaction, previousApplications);
+    let application = previousApplications[0] ?? null;
+    if (previousApplications.length === 0 || canReapply) {
       application = await transaction.application.create({ data: { seekerId, jobId: invitation.jobId }, select: { id: true, status: true, jobId: true } });
     }
     const updated = await transaction.jobInvitation.update({ where: { id: invitationId }, data: { status: 'ACCEPTED', respondedAt: new Date(), applicationId: application.id }, include: invitationInclude });

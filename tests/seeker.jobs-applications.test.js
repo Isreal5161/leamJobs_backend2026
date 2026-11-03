@@ -19,12 +19,18 @@ const mockPrisma = {
 
   user: { findUnique: jest.fn(), findMany: jest.fn() },
   seekerProfile: { findUnique: jest.fn() },
-  application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn() },
+  application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn(), update: jest.fn() },
   applicationCvSnapshot: { create: jest.fn() },
   notification: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
+  payment: { findFirst: jest.fn() },
+  financialLedgerEntry: { findFirst: jest.fn() },
+  dispute: { findFirst: jest.fn() },
+  financialAuditLog: { findFirst: jest.fn() },
   subscription: { findFirst: jest.fn() },
   job: { findFirst: jest.fn() },
+  $queryRaw: jest.fn(),
   $transaction: jest.fn(async (callback) => callback({
+    ...mockPrisma,
     application: mockPrisma.application,
     applicationCvSnapshot: mockPrisma.applicationCvSnapshot,
     notification: mockPrisma.notification,
@@ -101,6 +107,11 @@ const createApplication = (overrides = {}) => ({
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.notification.findFirst.mockResolvedValue(null);
+  mockPrisma.application.findMany.mockResolvedValue([]);
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
+  mockPrisma.dispute.findFirst.mockResolvedValue(null);
+  mockPrisma.financialAuditLog.findFirst.mockResolvedValue(null);
   mockPrisma.notification.create.mockImplementation(async ({ data }) => ({
     id: `notification-${mockPrisma.notification.create.mock.calls.length}`,
     ...data,
@@ -159,7 +170,7 @@ beforeEach(() => {
 describe('seeker job and application endpoints', () => {
   test('allows an authenticated seeker to retrieve an approved job with application state', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
-    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.findMany.mockResolvedValue([]);
 
     const response = await request(app)
       .get(`/api/seeker/jobs/${jobId}`)
@@ -178,15 +189,15 @@ describe('seeker job and application endpoints', () => {
         },
       },
     });
-    expect(mockPrisma.application.findUnique).toHaveBeenCalledWith({
-      where: { seekerId_jobId: { seekerId, jobId } },
-      select: { id: true },
+    expect(mockPrisma.application.findMany).toHaveBeenCalledWith({
+      where: { seekerId, jobId },
+      select: { contract: { select: expect.objectContaining({ status: true }) } },
     });
   });
 
   test('returns alreadyApplied true for the authenticated seeker only', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
-    mockPrisma.application.findUnique.mockResolvedValue({ id: 'application-id' });
+    mockPrisma.application.findMany.mockResolvedValue([{ contract: null }]);
 
     const response = await request(app)
       .get(`/api/seeker/jobs/${jobId}`)
@@ -194,9 +205,130 @@ describe('seeker job and application endpoints', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.alreadyApplied).toBe(true);
-    expect(mockPrisma.application.findUnique).toHaveBeenCalledWith(expect.objectContaining({
-      where: { seekerId_jobId: { seekerId: otherSeekerId, jobId } },
+    expect(mockPrisma.application.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { seekerId: otherSeekerId, jobId },
     }));
+  });
+
+  test('a safely cancelled contract makes the seeker eligible to apply again', async () => {
+    const oldApplicationId = '44444444-4444-4444-8444-444444444444';
+    const oldContractId = '77777777-7777-4777-8777-777777777777';
+    const employerId = '88888888-8888-4888-8888-888888888888';
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findMany.mockResolvedValue([{
+      contract: {
+        id: oldContractId,
+        applicationId: oldApplicationId,
+        jobId,
+        employerId,
+        seekerId,
+        type: 'FREELANCE_PROJECT',
+        status: 'CANCELLED',
+        cancelledAt: createdAt,
+        completedAt: null,
+        endedAt: null,
+        application: { id: oldApplicationId, jobId, seekerId, status: 'REJECTED' },
+        job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+        freelanceDetails: {
+          contractId: oldContractId,
+          workStatus: 'CANCELLED',
+          completionSubmittedAt: null,
+          employerConfirmedAt: null,
+          seekerConfirmedAt: null,
+          employerCompletionConfirmedAt: null,
+          escrow: {
+            id: '66666666-6666-4666-8666-666666666666',
+            freelanceContractId: oldContractId,
+            status: 'CANCELLED',
+            cancelledAt: createdAt,
+            fundedAmount: '0.00',
+            releasedAmount: '0.00',
+            refundedAmount: '0.00',
+            fundedAt: null,
+            releasedAt: null,
+            releaseEligibleAt: null,
+            refunds: [],
+            disputes: [],
+            ledgerEntries: [],
+          },
+        },
+      },
+    }]);
+
+    const response = await request(app)
+      .get(`/api/seeker/jobs/${jobId}`)
+      .set('Authorization', `Bearer ${createToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.alreadyApplied).toBe(false);
+    expect(mockPrisma.payment.findFirst).toHaveBeenCalled();
+  });
+
+  test('a safely cancelled candidate can apply again without changing the historical application', async () => {
+    const oldApplicationId = '44444444-4444-4444-8444-444444444444';
+    const oldContractId = '77777777-7777-4777-8777-777777777777';
+    const employerId = '88888888-8888-4888-8888-888888888888';
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findMany.mockResolvedValue([{
+      contract: {
+        id: oldContractId,
+        applicationId: oldApplicationId,
+        jobId,
+        employerId,
+        seekerId,
+        type: 'FREELANCE_PROJECT',
+        status: 'CANCELLED',
+        cancelledAt: createdAt,
+        completedAt: null,
+        endedAt: null,
+        application: { id: oldApplicationId, jobId, seekerId, status: 'REJECTED' },
+        job: { id: jobId, employerId, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+        freelanceDetails: {
+          contractId: oldContractId,
+          workStatus: 'CANCELLED',
+          completionSubmittedAt: null,
+          employerConfirmedAt: null,
+          seekerConfirmedAt: null,
+          employerCompletionConfirmedAt: null,
+          escrow: {
+            id: '66666666-6666-4666-8666-666666666666',
+            freelanceContractId: oldContractId,
+            status: 'CANCELLED',
+            cancelledAt: createdAt,
+            fundedAmount: '0.00',
+            releasedAmount: '0.00',
+            refundedAmount: '0.00',
+            fundedAt: null,
+            releasedAt: null,
+            releaseEligibleAt: null,
+            refunds: [],
+            disputes: [],
+            ledgerEntries: [],
+          },
+        },
+      },
+    }]);
+    mockPrisma.application.create.mockResolvedValue(createApplication({
+      id: '99999999-9999-4999-8999-999999999999',
+    }));
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', `Bearer ${createToken()}`)
+      .send({ jobId, coverLetter: 'I would love to contribute.' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.application.id).not.toBe(oldApplicationId);
+    expect(mockPrisma.application.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.application.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ seekerId, jobId }),
+    }));
+    expect(mockPrisma.payment.findFirst).toHaveBeenCalled();
+    expect(mockPrisma.financialLedgerEntry.findFirst).toHaveBeenCalled();
+    expect(mockPrisma.dispute.findFirst).toHaveBeenCalled();
+    expect(mockPrisma.financialAuditLog.findFirst).toHaveBeenCalled();
+    expect(mockPrisma.application.update).not.toHaveBeenCalled();
+    expect(mockPrisma.$queryRaw).toHaveBeenCalled();
   });
 
   test('returns 404 when the approved job is unavailable', async () => {
@@ -256,7 +388,7 @@ describe('seeker job and application endpoints', () => {
 
   test('creates an application using the JWT seeker and safe request fields', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
-    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.findMany.mockResolvedValue([]);
     mockPrisma.application.create.mockResolvedValue(createApplication({ status: 'APPLIED' }));
 
     const response = await request(app)
@@ -270,7 +402,7 @@ describe('seeker job and application endpoints', () => {
 
   test('creates a valid application using the authenticated seeker profile CV snapshot and ignores client-controlled ownership fields', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
-    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.findMany.mockResolvedValue([]);
     mockPrisma.application.create.mockResolvedValue(createApplication());
 
     const response = await request(app)
@@ -556,7 +688,7 @@ describe('seeker job and application endpoints', () => {
 
   test('returns 409 for an existing or concurrent duplicate application', async () => {
     mockPrisma.job.findFirst.mockResolvedValue(createJob());
-    mockPrisma.application.findUnique.mockResolvedValue({ id: 'existing-application' });
+    mockPrisma.application.findMany.mockResolvedValue([{ contract: null }]);
 
     const existingResponse = await request(app)
       .post('/api/seeker/applications')
@@ -566,7 +698,7 @@ describe('seeker job and application endpoints', () => {
     expect(existingResponse.status).toBe(409);
     expect(existingResponse.body).toEqual({ message: 'You have already applied to this job', status: 409 });
 
-    mockPrisma.application.findUnique.mockResolvedValue(null);
+    mockPrisma.application.findMany.mockResolvedValue([]);
     mockPrisma.application.create.mockRejectedValue({ code: 'P2002' });
 
     const concurrentResponse = await request(app)
