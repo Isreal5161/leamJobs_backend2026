@@ -63,6 +63,7 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED', amountV
   seeker: { id: seekerId, firstName: 'Seeker', lastName: 'One' },
   freelanceDetails: {
     id: freelanceContractId,
+    contractId,
     agreedAmount: amount,
     currency: 'NGN',
     platformFeePercentage: feePercentage,
@@ -92,6 +93,49 @@ const contractRecord = ({ status = 'PENDING', escrowStatus = 'UNFUNDED', amountV
   });
 };
 
+const cancelledContractRecord = (application = {
+  id: applicationId,
+  jobId,
+  seekerId,
+  status: 'REJECTED',
+}) => {
+  const cancelledAt = new Date('2026-10-10T12:00:00.000Z');
+  const contract = contractRecord({ status: 'CANCELLED', escrowStatus: 'CANCELLED' });
+  return {
+    ...contract,
+    cancelledAt,
+    applicationId: application.id,
+    application,
+    job: {
+      id: jobId,
+      employerId,
+      title: 'Build company website',
+      jobType: 'NORMAL_EMPLOYMENT',
+      engagementType: 'CONTRACT',
+    },
+    disputes: [],
+    ledgerEntries: [],
+    freelanceDetails: {
+      ...contract.freelanceDetails,
+      workStatus: 'CANCELLED',
+      completionSubmittedAt: null,
+      employerConfirmedAt: null,
+      seekerConfirmedAt: null,
+      employerCompletionConfirmedAt: null,
+      escrow: {
+        ...contract.freelanceDetails.escrow,
+        freelanceContractId: contract.id,
+        status: 'CANCELLED',
+        cancelledAt,
+        refunds: [],
+        disputes: [],
+        ledgerEntries: [],
+        payments: [],
+      },
+    },
+  };
+};
+
 const payment = ({ status = 'PENDING', provider = 'FLUTTERWAVE' } = {}) => ({
   id: paymentId,
   userId: employerId,
@@ -119,12 +163,14 @@ const paymentContractLookup = ({ provider = 'FLUTTERWAVE' } = {}) => ({
 });
 
 const mockPrisma = {
-  application: { findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+  application: { findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   contract: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
   escrow: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-  payment: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-  financialLedgerEntry: { createMany: jest.fn() },
+  payment: { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
+  financialLedgerEntry: { createMany: jest.fn(), findFirst: jest.fn() },
+  financialAuditLog: { findFirst: jest.fn() },
+  dispute: { findFirst: jest.fn() },
   wallet: { update: jest.fn(), upsert: jest.fn().mockResolvedValue({ id: 'usd-wallet', currency: 'USD' }) },
   platformFeeConfiguration: { findUnique: jest.fn() },
   $transaction: jest.fn(),
@@ -133,6 +179,12 @@ const mockPrisma = {
 let storedPayment;
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma, checkDatabaseHealth: jest.fn() }));
+jest.unstable_mockModule('../src/services/employerCandidates.service.js', () => ({
+  getEmployerCandidateSubscriptionTiers: jest.fn(async () => new Map()),
+}));
+jest.unstable_mockModule('../src/services/notification.service.js', () => ({
+  createNotification: jest.fn().mockResolvedValue({ id: 'notification-1' }),
+}));
 jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   initializeFlutterwavePayment: jest.fn(),
   verifyFlutterwaveTransaction: jest.fn(),
@@ -143,14 +195,22 @@ jest.unstable_mockModule('../src/services/paystack.service.js', () => ({
   verifyPaystackTransaction: jest.fn(),
 }));
 
-const { selectContractJobApplication, updateEmployerApplicationStatus } = await import('../src/services/employerApplications.service.js');
+const {
+  listEmployerApplications,
+  selectContractJobApplication,
+  updateEmployerApplicationStatus,
+} = await import('../src/services/employerApplications.service.js');
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
 const { initializePaystackPayment, isPaystackConfigured, verifyPaystackTransaction } = await import('../src/services/paystack.service.js');
+const { getEmployerCandidateSubscriptionTiers } = await import('../src/services/employerCandidates.service.js');
+const { createNotification } = await import('../src/services/notification.service.js');
 const { env } = await import('../src/config/env.js');
 const { getPaystackContractReturnUrl, initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
 
 beforeEach(() => {
   jest.resetAllMocks();
+  getEmployerCandidateSubscriptionTiers.mockImplementation(async () => new Map());
+  createNotification.mockResolvedValue({ id: 'notification-1' });
   env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = true;
   env.LEAMJOBS_FREELANCE_CONTRACT_FUNDING_ENABLED = true;
   env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = true;
@@ -168,6 +228,10 @@ beforeEach(() => {
   mockPrisma.contract.findUnique.mockResolvedValue(contractRecord());
   mockPrisma.contract.findFirst.mockResolvedValue(null);
   mockPrisma.contract.findMany.mockResolvedValue([]);
+  mockPrisma.payment.findFirst.mockResolvedValue(null);
+  mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
+  mockPrisma.financialAuditLog.findFirst.mockResolvedValue(null);
+  mockPrisma.dispute.findFirst.mockResolvedValue(null);
   mockPrisma.payment.create.mockImplementation(async ({ data }) => {
     storedPayment = { ...payment(), ...data };
     return storedPayment;
@@ -250,6 +314,128 @@ test('contract selection rejects a non-owned application', async () => {
   mockPrisma.application.findFirst.mockResolvedValue(null);
   await expect(selectContractJobApplication(employerId, jobId, applicationId)).rejects.toMatchObject({ status: 404 });
   expect(mockPrisma.contract.create).not.toHaveBeenCalled();
+});
+
+test('a cancelled contract is historical in the employer list and does not block a replacement applicant', async () => {
+  const cancelled = cancelledContractRecord();
+  mockPrisma.application.findMany.mockResolvedValue([{
+    id: applicationId,
+    jobId,
+    status: 'REJECTED',
+    createdAt: new Date('2026-10-10T11:00:00.000Z'),
+    updatedAt: new Date('2026-10-10T12:00:00.000Z'),
+    contract: cancelled,
+    seeker: {
+      id: seekerId,
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      email: 'ada@example.com',
+      phone: null,
+      seekerProfile: { skills: [], availability: 'NOT_AVAILABLE' },
+    },
+    job: { id: jobId, title: 'Build company website', employerId, skills: [] },
+  }]);
+  mockPrisma.application.count.mockResolvedValue(1);
+
+  const list = await listEmployerApplications(employerId, jobId);
+
+  expect(list.applications).toHaveLength(1);
+  expect(list.applications[0]).toMatchObject({
+    id: applicationId,
+    contractId,
+    contractStatus: 'CANCELLED',
+    blocksSelection: false,
+    availableActions: { cancel: false },
+  });
+
+  const replacementApplicationId = secondApplicationId;
+  const replacementSeekerId = '33333333-3333-4333-8333-333333333334';
+  const newContractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccd';
+  mockPrisma.application.findFirst.mockResolvedValueOnce(contractJobApplication({
+    id: replacementApplicationId,
+    selectedSeekerId: replacementSeekerId,
+  }));
+  mockPrisma.contract.findMany.mockResolvedValueOnce([cancelled]);
+  mockPrisma.contract.create.mockResolvedValueOnce({ id: newContractId });
+
+  const selection = await selectContractJobApplication(employerId, jobId, replacementApplicationId);
+
+  expect(selection).toEqual({
+    contractId: newContractId,
+    applicationId: replacementApplicationId,
+    status: 'PAYMENT_PENDING',
+  });
+  expect(mockPrisma.contract.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      applicationId: replacementApplicationId,
+      jobId,
+      employerId,
+      seekerId: replacementSeekerId,
+      type: 'CONTRACT_PROJECT',
+    }),
+  }));
+  expect(newContractId).not.toBe(cancelled.id);
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
+
+test('a cancelled freelance selection permits a separate replacement contract', async () => {
+  const cancelled = cancelledContractRecord();
+  cancelled.type = 'FREELANCE_PROJECT';
+  cancelled.job = { ...cancelled.job, jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' };
+  const replacementSeekerId = '33333333-3333-4333-8333-333333333334';
+  const newContractId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccce';
+  mockPrisma.application.findFirst
+    .mockResolvedValueOnce({
+      id: secondApplicationId,
+      contract: null,
+      job: { jobType: 'FREELANCE_PROJECT', engagementType: 'FREELANCE' },
+    })
+    .mockResolvedValueOnce({
+      id: secondApplicationId,
+      jobId,
+      seekerId: replacementSeekerId,
+      status: 'APPLIED',
+      contract: null,
+      seeker: { id: replacementSeekerId },
+      job: {
+        id: jobId,
+        employerId,
+        jobType: 'FREELANCE_PROJECT',
+        engagementType: 'FREELANCE',
+        status: 'APPROVED',
+        freelanceCompensation: { projectAmount: new Prisma.Decimal('500000.00'), currency: 'NGN' },
+      },
+    })
+    .mockResolvedValueOnce(null);
+  mockPrisma.contract.findMany.mockResolvedValueOnce([cancelled]);
+  mockPrisma.contract.create.mockResolvedValueOnce({ id: newContractId });
+  mockPrisma.application.update.mockResolvedValueOnce({
+    id: secondApplicationId,
+    jobId,
+    status: 'ACCEPTED',
+    contract: { id: newContractId },
+    seeker: {
+      id: replacementSeekerId,
+      firstName: 'Grace',
+      lastName: 'Hopper',
+      seekerProfile: { skills: [] },
+    },
+    job: { id: jobId, title: 'Freelance Engineer', skills: [] },
+  });
+
+  await updateEmployerApplicationStatus(employerId, jobId, secondApplicationId, 'ACCEPTED');
+
+  expect(mockPrisma.contract.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      applicationId: secondApplicationId,
+      jobId,
+      employerId,
+      seekerId: replacementSeekerId,
+      type: 'FREELANCE_PROJECT',
+    }),
+  }));
+  expect(newContractId).not.toBe(cancelled.id);
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });
 
 test('second Contract Job candidate selection fails before creating another engagement', async () => {

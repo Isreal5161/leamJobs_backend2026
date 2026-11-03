@@ -179,6 +179,31 @@ test('cancels an owned, unfunded freelance contract and preserves its records', 
   expect(mockPrisma.job.update).not.toHaveBeenCalled();
 });
 
+test('repeating an eligible cancellation returns the cancelled contract without rewriting history', async () => {
+  const contract = prepareCancellation();
+  await cancelEmployerFreelanceContract({ contractId, employerId });
+
+  const cancelledAt = new Date('2026-09-11T11:00:00.000Z');
+  contract.status = 'CANCELLED';
+  contract.cancelledAt = cancelledAt;
+  contract.application.status = 'REJECTED';
+  contract.freelanceDetails.workStatus = 'CANCELLED';
+  contract.freelanceDetails.escrow.status = 'CANCELLED';
+  contract.freelanceDetails.escrow.cancelledAt = cancelledAt;
+  mockPrisma.contract.findFirst
+    .mockResolvedValueOnce({ id: contractId, jobId, applicationId: contract.applicationId })
+    .mockResolvedValueOnce(contract);
+
+  const result = await cancelEmployerFreelanceContract({ contractId, employerId });
+
+  expect(result.status).toBe('CANCELLED');
+  expect(mockPrisma.contract.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.freelanceContract.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.escrow.update).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.application.update).toHaveBeenCalledTimes(1);
+  expect(createNotification).toHaveBeenCalledTimes(1);
+});
+
 test('cancels an eligible contract with no escrow without creating one', async () => {
   const contract = prepareCancellation(null);
 

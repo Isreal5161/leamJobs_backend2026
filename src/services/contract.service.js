@@ -661,6 +661,7 @@ export const cancelEmployerFreelanceContract = async ({ contractId, employerId, 
       },
     });
     if (!contract) throw new ContractNotFoundError();
+    if (contract.status === 'CANCELLED' && await isSafelyCancelledContract(transaction, contract)) return;
     if (!canPossiblyCancelContract(contract)) {
       throw new FreelanceContractCancellationError('This contract is no longer eligible for cancellation.');
     }

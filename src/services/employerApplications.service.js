@@ -347,7 +347,7 @@ export const listEmployerApplications = async (employerId, jobId, { page = 1, li
 
     const contract = {
       ...application.contract,
-      application: { status: application.status },
+      application: { ...application.contract.application, status: application.status },
       job: { ...application.contract.job, title: application.job.title },
     };
     const cancellationHistoryClear = canPossiblyCancelContract(contract)
