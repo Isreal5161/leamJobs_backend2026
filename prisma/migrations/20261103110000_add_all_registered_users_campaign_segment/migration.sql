@@ -1,0 +1,1 @@
+ALTER TYPE "EmailCampaignSegment" ADD VALUE 'ALL_REGISTERED_USERS';

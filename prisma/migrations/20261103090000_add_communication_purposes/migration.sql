@@ -3,12 +3,6 @@ CREATE TYPE "CommunicationPurpose" AS ENUM (
   'PROMOTIONAL_MARKETING'
 );
 
-ALTER TYPE "EmailCampaignSegment"
-  ADD VALUE 'ALL_REGISTERED_USERS';
-
-ALTER TYPE "EmailDeliveryStatus"
-  ADD VALUE 'SUPPRESSED';
-
 ALTER TABLE "EmailCampaign"
   ADD COLUMN "purpose" "CommunicationPurpose" NOT NULL DEFAULT 'PROMOTIONAL_MARKETING',
   ADD COLUMN "operationalContentConfirmed" BOOLEAN NOT NULL DEFAULT false;
