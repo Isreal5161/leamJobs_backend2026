@@ -38,10 +38,11 @@ export const EMAIL_TYPES = Object.freeze({
   WELCOME_SEEKER: 'WELCOME_SEEKER',
   WELCOME_EMPLOYER: 'WELCOME_EMPLOYER',
   PROMOTIONAL_CAMPAIGN: 'PROMOTIONAL_CAMPAIGN',
+  ESSENTIAL_ANNOUNCEMENT: 'ESSENTIAL_ANNOUNCEMENT',
 });
 
-const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase();
-const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+export const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase();
+export const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const safeHeader = (value) => String(value ?? '').replace(/[\r\n]/g, ' ').trim();
 const retryDelay = (attempts) => Math.min(24 * 60 * 60 * 1000, 5 * 60 * 1000 * (2 ** Math.max(0, attempts - 1)));
 
@@ -59,10 +60,11 @@ const getTransport = () => {
   return transport;
 };
 
-const deliveryData = ({ recipientUserId, notificationId, emailType, eventKey, recipientEmail, subject, html, text }) => ({
+const deliveryData = ({ recipientUserId, notificationId, emailType, communicationPurpose, eventKey, recipientEmail, subject, html, text }) => ({
   recipientUserId,
   notificationId: notificationId ?? null,
   emailType,
+  communicationPurpose: communicationPurpose ?? null,
   eventKey,
   recipientEmail,
   subject,
@@ -72,11 +74,11 @@ const deliveryData = ({ recipientUserId, notificationId, emailType, eventKey, re
 
 export const isEmailEnabled = () => Boolean(getTransport());
 
-export const queueEmail = async ({ recipientUserId = null, publicSubscriberId = null, notificationId, emailType, eventKey, recipientEmail, context, client = prisma }) => {
+export const queueEmail = async ({ recipientUserId = null, publicSubscriberId = null, notificationId, emailType, communicationPurpose, eventKey, recipientEmail, context, client = prisma }) => {
   const email = normalizeEmail(recipientEmail);
   if ((!recipientUserId && !publicSubscriberId) || (recipientUserId && publicSubscriberId) || !email || !isValidEmail(email)) throw new Error('A valid email recipient is required');
   const template = renderEmailTemplate(emailType, context);
-  const data = { ...deliveryData({ recipientUserId, notificationId, emailType, eventKey, recipientEmail: email, ...template }), publicSubscriberId };
+  const data = { ...deliveryData({ recipientUserId, notificationId, emailType, communicationPurpose, eventKey, recipientEmail: email, ...template }), publicSubscriberId };
 
   try {
     return await client.emailDelivery.create({
@@ -121,6 +123,47 @@ export const sendEmailDelivery = async (delivery, client = prisma) => {
   }
 };
 
+const suppressDelivery = (delivery, reason, client) => client.emailDelivery.update({
+  where: { id: delivery.id },
+  data: { status: 'SUPPRESSED', suppressionReason: reason, lastError: null },
+});
+
+const recheckCampaignDelivery = async (delivery, client) => {
+  const isEssential = delivery.emailType === EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT
+    && delivery.communicationPurpose === 'ESSENTIAL_ANNOUNCEMENT';
+  const isPromotional = delivery.emailType === EMAIL_TYPES.PROMOTIONAL_CAMPAIGN
+    && [null, undefined, 'PROMOTIONAL_MARKETING'].includes(delivery.communicationPurpose);
+  if (!isEssential && !isPromotional) {
+    return 'Communication purpose does not match the queued message type';
+  }
+
+  if (delivery.publicSubscriberId) {
+    if (!isPromotional) return 'Public subscribers are only eligible for promotional updates';
+    const subscriber = await client.publicJobSubscriber.findUnique({
+      where: { id: delivery.publicSubscriberId },
+      select: { email: true, isSubscribed: true },
+    });
+    if (!subscriber?.isSubscribed) return 'Public subscriber is no longer subscribed';
+    if (!isValidEmail(normalizeEmail(subscriber.email))) return 'Subscriber email address is no longer valid';
+    if (normalizeEmail(subscriber.email) !== normalizeEmail(delivery.recipientEmail)) return 'Subscriber email address changed after queueing';
+    return null;
+  }
+
+  if (!delivery.recipientUserId) return 'Registered recipient is unavailable';
+  const user = await client.user.findUnique({
+    where: { id: delivery.recipientUserId },
+    select: { email: true, role: true, isActive: true, anonymizedAt: true, marketingEmailsEnabled: true },
+  });
+  if (!user || !user.isActive || user.anonymizedAt || !['SEEKER', 'EMPLOYER'].includes(user.role)) {
+    return 'Recipient account is no longer eligible';
+  }
+  const currentEmail = normalizeEmail(user.email);
+  if (!isValidEmail(currentEmail)) return 'Recipient email address is no longer valid';
+  if (currentEmail !== normalizeEmail(delivery.recipientEmail)) return 'Recipient email address changed after queueing';
+  if (isPromotional && !user.marketingEmailsEnabled) return 'Recipient opted out of marketing emails';
+  return null;
+};
+
 export const processPendingEmails = async ({ batchSize = 50, client = prisma } = {}) => {
   if (!isEmailEnabled()) return 0;
   const now = new Date();
@@ -138,15 +181,21 @@ export const processPendingEmails = async ({ batchSize = 50, client = prisma } =
   });
   let sent = 0;
   for (const delivery of deliveries) {
-    if (delivery.publicSubscriberId && delivery.publicSubscriber && !delivery.publicSubscriber.isSubscribed) {
-      await client.emailDelivery.update({ where: { id: delivery.id }, data: { status: 'FAILED', lastError: 'Marketing subscriber unsubscribed', nextAttemptAt: new Date('2099-01-01T00:00:00.000Z') } });
-      continue;
-    }
     const claimed = await client.emailDelivery.updateMany({
       where: { id: delivery.id, status: delivery.status },
       data: { status: 'PROCESSING' },
     });
     if (claimed.count !== 1) continue;
+    if ([EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT].includes(delivery.emailType)) {
+      const suppressionReason = await recheckCampaignDelivery(delivery, client);
+      if (suppressionReason) {
+        await suppressDelivery(delivery, suppressionReason, client);
+        continue;
+      }
+    } else if (delivery.publicSubscriberId && delivery.publicSubscriber && !delivery.publicSubscriber.isSubscribed) {
+      await suppressDelivery(delivery, 'Public subscriber is no longer subscribed', client);
+      continue;
+    }
     const result = await sendEmailDelivery({ ...delivery, attempts: delivery.attempts }, client);
     if (result.status === 'SENT') sent += 1;
   }

@@ -17,10 +17,11 @@ export class InvalidJobUpdateUnsubscribeError extends Error {
 
 export const subscribeToJobUpdates = async (email) => {
   const normalized = normalizeEmail(email);
-  const existing = await prisma.publicJobSubscriber.findUnique({ where: { email: normalized } });
-  const subscriber = existing
-    ? await prisma.publicJobSubscriber.update({ where: { id: existing.id }, data: { isSubscribed: true, unsubscribedAt: null } })
-    : await prisma.publicJobSubscriber.create({ data: { email: normalized, unsubscribeHash: unsubscribeHash(normalized) } });
+  const subscriber = await prisma.publicJobSubscriber.upsert({
+    where: { email: normalized },
+    create: { email: normalized, unsubscribeHash: unsubscribeHash(normalized) },
+    update: { isSubscribed: true, unsubscribedAt: null },
+  });
   const unsubscribeUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/unsubscribe-job-updates?token=${encodeURIComponent(tokenFor(subscriber))}`;
   void queueEmail({
     publicSubscriberId: subscriber.id,
@@ -29,7 +30,7 @@ export const subscribeToJobUpdates = async (email) => {
     recipientEmail: subscriber.email,
     context: { title: 'You are subscribed to LeamJobs job updates', message: 'We will keep your inbox informed about relevant LeamJobs updates. You can unsubscribe at any time.', unsubscribeUrl, isMarketing: true },
   }).catch((error) => console.error('Job updates email queue failed:', { message: error.message }));
-  return { message: existing?.isSubscribed ? 'This email is already subscribed to job updates.' : 'You are subscribed to LeamJobs job updates.' };
+  return { message: 'You are subscribed to LeamJobs job updates.' };
 };
 
 export const unsubscribeFromJobUpdates = async (token) => {

@@ -73,6 +73,17 @@ export const renderEmailTemplate = (emailType, context = {}) => {
   const title = context.title || 'LeamJobs notification';
   const message = context.message || 'There is new activity on your LeamJobs account.';
 
+  if (emailType === 'ESSENTIAL_ANNOUNCEMENT') {
+    return generic({
+      title,
+      heading: context.heading,
+      message,
+      link: context.link,
+      linkLabel: context.linkLabel,
+      isMarketing: false,
+    });
+  }
+
   if (['INTERVIEW_SCHEDULED', 'INTERVIEW_RESCHEDULED', 'INTERVIEW_UPDATED', 'INTERVIEW_CANCELLED'].includes(emailType)) {
     const details = context.metadata && typeof context.metadata === 'object' ? context.metadata : {};
     const date = details.scheduledAt ? new Date(details.scheduledAt) : null;

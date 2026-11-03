@@ -1,18 +1,19 @@
 import crypto from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
-import { createMarketingUnsubscribeToken, EMAIL_TYPES, queueEmail } from './email.service.js';
+import { createMarketingUnsubscribeToken, EMAIL_TYPES, isValidEmail, normalizeEmail, queueEmail } from './email.service.js';
 import { renderEmailTemplate } from './email.templates.js';
 
 const defaults = {
   WELCOME_SEEKER: { name: 'Welcome - Seeker', subject: 'Welcome to LeamJobs', heading: 'Your next opportunity starts here', body: 'Your LeamJobs account is ready. Complete your profile to discover roles that fit your skills.', ctaLabel: 'Complete your profile', ctaUrl: '/seeker/profile' },
   WELCOME_EMPLOYER: { name: 'Welcome - Employer', subject: 'Welcome to LeamJobs for employers', heading: 'Build your next great team', body: 'Your employer account is ready. Create your company profile and publish your first role.', ctaLabel: 'Open hiring workspace', ctaUrl: '/employer/jobs' },
 };
-const campaignSegments = ['ALL_MARKETING_USERS', 'SEEKERS', 'EMPLOYERS', 'PUBLIC_JOB_SUBSCRIBERS'];
+const campaignPurposes = ['ESSENTIAL_ANNOUNCEMENT', 'PROMOTIONAL_MARKETING'];
+const registeredRoles = ['SEEKER', 'EMPLOYER'];
 
 const templateSelect = { id: true, key: true, name: true, kind: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, isActive: true, updatedAt: true };
-const campaignSelect = { id: true, eventKey: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, segment: true, status: true, recipientCount: true, createdById: true, sentAt: true, createdAt: true, updatedAt: true };
-const deliveryReportSelect = { id: true, recipientEmail: true, status: true, attempts: true, createdAt: true, sentAt: true, lastError: true };
+const campaignSelect = { id: true, eventKey: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, segment: true, purpose: true, operationalContentConfirmed: true, status: true, recipientCount: true, createdById: true, sentAt: true, createdAt: true, updatedAt: true };
+const deliveryReportSelect = { id: true, recipientEmail: true, status: true, attempts: true, createdAt: true, sentAt: true, lastError: true, suppressionReason: true };
 const normalizeFields = (input) => ({
   subject: String(input.subject ?? '').trim(),
   heading: String(input.heading ?? '').trim(),
@@ -76,23 +77,71 @@ export const queueWelcomeEmail = async (user) => {
   });
 };
 
-const recipientQuery = (segment) => {
-  if (segment === 'PUBLIC_JOB_SUBSCRIBERS') return { type: 'public' };
-  const role = segment === 'SEEKERS' ? 'SEEKER' : segment === 'EMPLOYERS' ? 'EMPLOYER' : undefined;
-  return { type: 'users', where: { isActive: true, marketingEmailsEnabled: true, ...(role ? { role } : {}) } };
+const assertPurposeSegment = (purpose, segment) => {
+  const compatible = purpose === 'ESSENTIAL_ANNOUNCEMENT'
+    ? ['ALL_REGISTERED_USERS', 'SEEKERS', 'EMPLOYERS']
+    : purpose === 'PROMOTIONAL_MARKETING'
+      ? ['ALL_MARKETING_USERS', 'SEEKERS', 'EMPLOYERS', 'PUBLIC_JOB_SUBSCRIBERS']
+      : [];
+  if (!campaignPurposes.includes(purpose) || !compatible.includes(segment)) {
+    throw Object.assign(new Error('Recipient segment is not valid for this communication purpose'), { status: 400 });
+  }
 };
 
-export const getEligibleCampaignRecipients = async (segment, client = prisma) => {
-  const query = recipientQuery(segment);
-  if (query.type === 'public') return client.publicJobSubscriber.findMany({ where: { isSubscribed: true }, select: { id: true, email: true, unsubscribeHash: true } });
-  return client.user.findMany({ where: query.where, select: { id: true, email: true } });
+const uniqueValidRecipients = (recipients) => {
+  const seen = new Set();
+  return recipients.filter((recipient) => {
+    const email = normalizeEmail(recipient.email);
+    if (!isValidEmail(email) || seen.has(email)) return false;
+    seen.add(email);
+    return true;
+  }).map((recipient) => ({ ...recipient, email: normalizeEmail(recipient.email) }));
+};
+
+export const getEligibleCampaignRecipients = async (purpose, segment, client = prisma) => {
+  assertPurposeSegment(purpose, segment);
+  if (segment === 'PUBLIC_JOB_SUBSCRIBERS') {
+    const recipients = await client.publicJobSubscriber.findMany({
+      where: { isSubscribed: true, email: { not: '' } },
+      select: { id: true, email: true, unsubscribeHash: true },
+    });
+    return uniqueValidRecipients(recipients);
+  }
+
+  const role = segment === 'SEEKERS' ? 'SEEKER' : segment === 'EMPLOYERS' ? 'EMPLOYER' : undefined;
+  const where = {
+    isActive: true,
+    anonymizedAt: null,
+    role: role ?? { in: registeredRoles },
+    email: { not: '' },
+    ...(purpose === 'PROMOTIONAL_MARKETING' ? { marketingEmailsEnabled: true } : {}),
+  };
+  const recipients = await client.user.findMany({ where, select: { id: true, email: true } });
+  return uniqueValidRecipients(recipients);
 };
 
 export const createPromotionalCampaign = async (adminId, input) => {
   const fields = normalizeFields(input);
   assertFields(fields);
-  if (!['ALL_MARKETING_USERS', 'SEEKERS', 'EMPLOYERS', 'PUBLIC_JOB_SUBSCRIBERS'].includes(input.segment)) throw Object.assign(new Error('Invalid recipient segment'), { status: 400 });
-  const campaign = await prisma.emailCampaign.create({ data: { ...fields, segment: input.segment, eventKey: `campaign:${crypto.randomUUID()}`, createdById: adminId }, select: campaignSelect });
+  assertPurposeSegment(input.purpose, input.segment);
+  const operationalContentConfirmed = input.operationalContentConfirmed === true;
+  if (input.purpose === 'ESSENTIAL_ANNOUNCEMENT' && !operationalContentConfirmed) {
+    throw Object.assign(new Error('Confirm that this announcement contains only essential operational information'), { status: 400 });
+  }
+  if (input.purpose === 'PROMOTIONAL_MARKETING' && operationalContentConfirmed) {
+    throw Object.assign(new Error('Operational-content confirmation is only valid for essential announcements'), { status: 400 });
+  }
+  const campaign = await prisma.emailCampaign.create({
+    data: {
+      ...fields,
+      segment: input.segment,
+      purpose: input.purpose,
+      operationalContentConfirmed,
+      eventKey: `campaign:${crypto.randomUUID()}`,
+      createdById: adminId,
+    },
+    select: campaignSelect,
+  });
   return campaign;
 };
 
@@ -100,39 +149,85 @@ export const updatePromotionalCampaign = async (campaignId, input) => {
   const current = await prisma.emailCampaign.findUnique({ where: { id: campaignId }, select: campaignSelect });
   if (!current) throw Object.assign(new Error('Campaign not found'), { status: 404 });
   if (current.status !== 'DRAFT') throw Object.assign(new Error('This campaign is no longer editable'), { status: 409 });
-  const merged = { ...current, ...normalizeFields(input) };
-  const fields = { subject: merged.subject, heading: merged.heading, body: merged.body, ctaLabel: merged.ctaLabel, ctaUrl: merged.ctaUrl };
+  const fields = normalizeFields({ ...current, ...input });
   assertFields(fields);
   const segment = input.segment ?? current.segment;
-  if (!campaignSegments.includes(segment)) throw Object.assign(new Error('Invalid recipient segment'), { status: 400 });
-  return prisma.emailCampaign.update({ where: { id: campaignId }, data: { ...fields, segment }, select: campaignSelect });
+  const purpose = current.purpose ?? 'PROMOTIONAL_MARKETING';
+  if (input.purpose !== undefined && input.purpose !== purpose) {
+    throw Object.assign(new Error('Communication purpose cannot be changed after a draft is created'), { status: 409 });
+  }
+  assertPurposeSegment(purpose, segment);
+  const operationalContentConfirmed = input.operationalContentConfirmed ?? current.operationalContentConfirmed ?? false;
+  const operationalContentChanged = ['subject', 'heading', 'body', 'ctaLabel', 'ctaUrl'].some((field) => (
+    input[field] !== undefined
+    && String(input[field] ?? '').trim() !== String(current[field] ?? '').trim()
+  ));
+  if (purpose === 'ESSENTIAL_ANNOUNCEMENT'
+    && (operationalContentConfirmed !== true || (operationalContentChanged && input.operationalContentConfirmed !== true))) {
+    throw Object.assign(new Error('Confirm that this announcement contains only essential operational information'), { status: 400 });
+  }
+  if (purpose === 'PROMOTIONAL_MARKETING' && operationalContentConfirmed) {
+    throw Object.assign(new Error('Operational-content confirmation is only valid for essential announcements'), { status: 400 });
+  }
+  return prisma.emailCampaign.update({
+    where: { id: campaignId },
+    data: { ...fields, segment, operationalContentConfirmed },
+    select: campaignSelect,
+  });
 };
 
 export const previewPromotionalCampaign = async (campaignId) => {
   const campaign = await prisma.emailCampaign.findUnique({ where: { id: campaignId }, select: campaignSelect });
   if (!campaign) throw Object.assign(new Error('Campaign not found'), { status: 404 });
-  const recipients = await getEligibleCampaignRecipients(campaign.segment);
-  const unsubscribeUrl = publicUrl('/unsubscribe-marketing?token=example');
-  return { campaign, recipientCount: recipients.length, ...renderEmailTemplate(EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, { title: campaign.subject, heading: campaign.heading, message: campaign.body, link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null, linkLabel: campaign.ctaLabel, isMarketing: true, unsubscribeUrl }) };
+  const purpose = campaign.purpose ?? 'PROMOTIONAL_MARKETING';
+  assertPurposeSegment(purpose, campaign.segment);
+  if (purpose === 'ESSENTIAL_ANNOUNCEMENT' && campaign.operationalContentConfirmed !== true) {
+    throw Object.assign(new Error('Essential announcement confirmation is required'), { status: 409 });
+  }
+  const recipients = await getEligibleCampaignRecipients(purpose, campaign.segment);
+  const isMarketing = purpose === 'PROMOTIONAL_MARKETING';
+  const unsubscribeUrl = isMarketing ? publicUrl('/unsubscribe-marketing?token=example') : null;
+  const emailType = isMarketing ? EMAIL_TYPES.PROMOTIONAL_CAMPAIGN : EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT;
+  return { campaign, recipientCount: recipients.length, ...renderEmailTemplate(emailType, { title: campaign.subject, heading: campaign.heading, message: campaign.body, link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null, linkLabel: campaign.ctaLabel, isMarketing, unsubscribeUrl }) };
 };
 
-export const sendPromotionalCampaign = async (campaignId) => {
+export const sendCommunicationCampaign = async (campaignId) => {
   const campaign = await prisma.emailCampaign.findUnique({ where: { id: campaignId }, select: campaignSelect });
   if (!campaign) throw Object.assign(new Error('Campaign not found'), { status: 404 });
   if (campaign.status !== 'DRAFT') throw Object.assign(new Error('This campaign has already been sent or is being processed'), { status: 409 });
-  const recipients = await getEligibleCampaignRecipients(campaign.segment);
+  const purpose = campaign.purpose ?? 'PROMOTIONAL_MARKETING';
+  assertPurposeSegment(purpose, campaign.segment);
+  if (purpose === 'ESSENTIAL_ANNOUNCEMENT' && campaign.operationalContentConfirmed !== true) {
+    throw Object.assign(new Error('Essential announcement confirmation is required'), { status: 409 });
+  }
+  const recipients = await getEligibleCampaignRecipients(purpose, campaign.segment);
   if (!recipients.length) throw Object.assign(new Error('This campaign has no eligible recipients'), { status: 409 });
   const claimed = await prisma.emailCampaign.updateMany({ where: { id: campaign.id, status: 'DRAFT' }, data: { status: 'SENDING', recipientCount: recipients.length } });
   if (claimed.count !== 1) throw Object.assign(new Error('This campaign has already been sent or is being processed'), { status: 409 });
+  const isMarketing = purpose === 'PROMOTIONAL_MARKETING';
+  const emailType = isMarketing ? EMAIL_TYPES.PROMOTIONAL_CAMPAIGN : EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT;
   const unsubscribeUrl = (userId) => publicUrl(`/unsubscribe-marketing?token=${encodeURIComponent(createMarketingUnsubscribeToken(userId))}`);
   try {
     await Promise.all(recipients.map((recipient) => queueEmail({
     ...(campaign.segment !== 'PUBLIC_JOB_SUBSCRIBERS' ? { recipientUserId: recipient.id } : {}),
     ...(campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? { publicSubscriberId: recipient.id } : {}),
-    emailType: EMAIL_TYPES.PROMOTIONAL_CAMPAIGN,
+    emailType,
+    communicationPurpose: purpose,
     eventKey: `${campaign.eventKey}:${recipient.id}`,
     recipientEmail: recipient.email,
-    context: { title: campaign.subject, heading: campaign.heading, message: campaign.body, link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null, linkLabel: campaign.ctaLabel, isMarketing: true, unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${recipient.unsubscribeHash}`)}`) : unsubscribeUrl(recipient.id) },
+    context: {
+      title: campaign.subject,
+      heading: campaign.heading,
+      message: campaign.body,
+      link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null,
+      linkLabel: campaign.ctaLabel,
+      isMarketing,
+      ...(isMarketing ? {
+        unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
+          ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${recipient.unsubscribeHash}`)}`)
+          : unsubscribeUrl(recipient.id),
+      } : {}),
+    },
     })));
     return prisma.emailCampaign.update({ where: { id: campaign.id }, data: { status: 'SENT', sentAt: new Date() }, select: campaignSelect });
   } catch (error) {
@@ -142,7 +237,7 @@ export const sendPromotionalCampaign = async (campaignId) => {
 };
 
 const campaignDeliveryWhere = (eventKey) => ({
-  emailType: EMAIL_TYPES.PROMOTIONAL_CAMPAIGN,
+  emailType: { in: [EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT] },
   eventKey: { startsWith: `${eventKey}:` },
 });
 
@@ -153,6 +248,8 @@ const deriveReportingStatus = (campaign, counts) => {
   if (counts.total < expected) return 'IN_PROGRESS';
   if (counts.failed > 0 && counts.sent > 0) return 'PARTIALLY_FAILED';
   if (counts.failed > 0 && counts.sent === 0) return 'FAILED';
+  if (counts.suppressed > 0 && counts.sent === 0) return 'SUPPRESSED';
+  if (counts.suppressed > 0) return 'PARTIALLY_FAILED';
   if (counts.sent > 0 && counts.sent === expected) return 'SENT';
   return 'IN_PROGRESS';
 };
@@ -163,7 +260,7 @@ const countsFromGroupedDeliveries = (deliveries) => {
     summary.total += count;
     summary[delivery.status.toLowerCase()] += count;
     return summary;
-  }, { total: 0, sent: 0, pending: 0, processing: 0, failed: 0 });
+  }, { total: 0, sent: 0, pending: 0, processing: 0, failed: 0, suppressed: 0 });
   return counts;
 };
 
@@ -185,7 +282,7 @@ export const listCampaignRecords = async ({ page = 1, limit = 20 } = {}) => {
   const deliveries = campaigns.length === 0 ? [] : await prisma.emailDelivery.groupBy({
     by: ['eventKey', 'status'],
     where: {
-      emailType: EMAIL_TYPES.PROMOTIONAL_CAMPAIGN,
+      emailType: { in: [EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT] },
       OR: campaigns.map((campaign) => ({ eventKey: { startsWith: `${campaign.eventKey}:` } })),
     },
     _count: { _all: true },

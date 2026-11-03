@@ -38,9 +38,21 @@ test('campaign records reject unauthenticated requests', async () => {
   expect(response.status).toBe(401);
 });
 
+test('recipient counts reject unauthenticated requests', async () => {
+  const response = await request(app).get('/api/admin/communications/recipients/count?purpose=ESSENTIAL_ANNOUNCEMENT&segment=SEEKERS');
+  expect(response.status).toBe(401);
+});
+
 test.each(['SEEKER', 'EMPLOYER'])('%s users cannot access campaign records', async (role) => {
   const response = await request(app)
     .get('/api/admin/communications/campaigns')
+    .set('Authorization', `Bearer ${token(role)}`);
+  expect(response.status).toBe(403);
+});
+
+test.each(['SEEKER', 'EMPLOYER'])('%s users cannot access recipient counts', async (role) => {
+  const response = await request(app)
+    .get('/api/admin/communications/recipients/count?purpose=ESSENTIAL_ANNOUNCEMENT&segment=SEEKERS')
     .set('Authorization', `Bearer ${token(role)}`);
   expect(response.status).toBe(403);
 });

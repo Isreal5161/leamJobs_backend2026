@@ -311,6 +311,7 @@ model EmailDelivery {
   publicSubscriberId String?
   notificationId     String?
   emailType          String
+  communicationPurpose CommunicationPurpose?
   eventKey           String
   recipientEmail     String
   subject            String
@@ -321,6 +322,7 @@ model EmailDelivery {
   nextAttemptAt      DateTime            @default(now())
   sentAt             DateTime?
   lastError          String?
+  suppressionReason  String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -391,6 +393,8 @@ model EmailCampaign {
   ctaLabel       String?
   ctaUrl         String?
   segment        EmailCampaignSegment
+  purpose         CommunicationPurpose @default(PROMOTIONAL_MARKETING)
+  operationalContentConfirmed Boolean @default(false)
   status         EmailCampaignStatus  @default(DRAFT)
   recipientCount Int?
   createdById    String
@@ -1389,6 +1393,12 @@ enum EmailDeliveryStatus {
   PROCESSING
   SENT
   FAILED
+  SUPPRESSED
+}
+
+enum CommunicationPurpose {
+  ESSENTIAL_ANNOUNCEMENT
+  PROMOTIONAL_MARKETING
 }
 
 enum EmailTemplateKind {
@@ -1397,6 +1407,7 @@ enum EmailTemplateKind {
 }
 
 enum EmailCampaignSegment {
+  ALL_REGISTERED_USERS
   ALL_MARKETING_USERS
   SEEKERS
   EMPLOYERS

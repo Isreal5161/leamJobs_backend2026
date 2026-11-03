@@ -15,7 +15,7 @@ const mockPrisma = {
 };
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
 const { env } = await import('../src/config/env.js');
-const { publicUrl, getOrCreateSystemTemplate, queueWelcomeEmail, getEligibleCampaignRecipients, sendPromotionalCampaign, listCampaignRecords, getCampaignReport, getCampaignDeliveries } = await import('../src/services/adminCommunications.service.js');
+const { publicUrl, getOrCreateSystemTemplate, queueWelcomeEmail, getEligibleCampaignRecipients, sendCommunicationCampaign, listCampaignRecords, getCampaignReport, getCampaignDeliveries } = await import('../src/services/adminCommunications.service.js');
 
 afterEach(() => {
   jest.clearAllMocks();
@@ -47,23 +47,210 @@ test('creates and uses the role-specific seeker welcome template with determinis
   expect(mockPrisma.emailDelivery.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ recipientUserId: 'user-1', emailType: 'WELCOME_SEEKER', eventKey: 'welcome:WELCOME_SEEKER:user-1', subject: 'Welcome' }) }));
 });
 
-test('campaign recipient counts only include consented registered users or active public subscribers', async () => {
+test('essential announcement recipients do not require marketing consent', async () => {
   mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'a@example.com' }]);
-  await expect(getEligibleCampaignRecipients('SEEKERS')).resolves.toEqual([{ id: 'user-1', email: 'a@example.com' }]);
-  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isActive: true, marketingEmailsEnabled: true, role: 'SEEKER' } }));
-  mockPrisma.publicJobSubscriber.findMany.mockResolvedValue([{ id: 'public-1', email: 'p@example.com', unsubscribeHash: 'hash' }]);
-  await expect(getEligibleCampaignRecipients('PUBLIC_JOB_SUBSCRIBERS')).resolves.toHaveLength(1);
-  expect(mockPrisma.publicJobSubscriber.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isSubscribed: true } }));
+  await expect(getEligibleCampaignRecipients('ESSENTIAL_ANNOUNCEMENT', 'SEEKERS')).resolves.toEqual([{ id: 'user-1', email: 'a@example.com' }]);
+  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { isActive: true, anonymizedAt: null, role: 'SEEKER', email: { not: '' } },
+  }));
+  expect(mockPrisma.user.findMany.mock.calls[0][0].where).not.toHaveProperty('marketingEmailsEnabled');
 });
 
-test('campaign send claims a draft once and queues through EmailDelivery', async () => {
-  const campaign = { id: 'campaign-1', eventKey: 'campaign:1', subject: 'Update', heading: 'News', body: 'Hello', ctaLabel: null, ctaUrl: null, segment: 'SEEKERS', status: 'DRAFT' };
+test.each([
+  ['ALL_REGISTERED_USERS', { in: ['SEEKER', 'EMPLOYER'] }],
+  ['SEEKERS', 'SEEKER'],
+  ['EMPLOYERS', 'EMPLOYER'],
+])('essential segment %s excludes administrators and inactive/anonymized accounts in its query', async (segment, role) => {
+  mockPrisma.user.findMany.mockResolvedValue([]);
+  await getEligibleCampaignRecipients('ESSENTIAL_ANNOUNCEMENT', segment);
+  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { isActive: true, anonymizedAt: null, role, email: { not: '' } },
+  }));
+});
+
+test.each([
+  ['ALL_MARKETING_USERS', { in: ['SEEKER', 'EMPLOYER'] }],
+  ['SEEKERS', 'SEEKER'],
+  ['EMPLOYERS', 'EMPLOYER'],
+])('promotional segment %s requires explicit consent and excludes administrators', async (segment, role) => {
+  mockPrisma.user.findMany.mockResolvedValue([
+    { id: 'user-1', email: 'a@example.com' },
+    { id: 'user-2', email: ' A@example.com ' },
+    { id: 'user-3', email: 'invalid' },
+  ]);
+  const recipients = await getEligibleCampaignRecipients('PROMOTIONAL_MARKETING', segment);
+  expect(recipients).toEqual([{ id: 'user-1', email: 'a@example.com' }]);
+  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { isActive: true, anonymizedAt: null, role, email: { not: '' }, marketingEmailsEnabled: true },
+  }));
+});
+
+test('public promotional recipients remain subscribed-only and invalid or duplicate emails are excluded', async () => {
+  mockPrisma.publicJobSubscriber.findMany.mockResolvedValue([
+    { id: 'public-1', email: 'p@example.com', unsubscribeHash: 'hash-1' },
+    { id: 'public-2', email: ' P@example.com ', unsubscribeHash: 'hash-2' },
+    { id: 'public-3', email: 'invalid', unsubscribeHash: 'hash-3' },
+  ]);
+  await expect(getEligibleCampaignRecipients('PROMOTIONAL_MARKETING', 'PUBLIC_JOB_SUBSCRIBERS')).resolves.toEqual([
+    { id: 'public-1', email: 'p@example.com', unsubscribeHash: 'hash-1' },
+  ]);
+  expect(mockPrisma.publicJobSubscriber.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isSubscribed: true, email: { not: '' } } }));
+});
+
+test('public newsletter subscribers are counted, previewed, and queued only once with their own unsubscribe link', async () => {
+  const campaign = {
+    id: 'campaign-public', eventKey: 'campaign:public', subject: 'New jobs', heading: 'New jobs',
+    body: 'See the latest job opportunities.', ctaLabel: null, ctaUrl: null,
+    segment: 'PUBLIC_JOB_SUBSCRIBERS', purpose: 'PROMOTIONAL_MARKETING',
+    operationalContentConfirmed: false, status: 'DRAFT',
+  };
+  mockPrisma.publicJobSubscriber.findMany.mockResolvedValue([
+    { id: 'subscriber-1', email: ' Public@Example.com ', unsubscribeHash: 'unsubscribe-hash' },
+    { id: 'subscriber-2', email: 'public@example.com', unsubscribeHash: 'duplicate-hash' },
+    { id: 'subscriber-3', email: 'invalid', unsubscribeHash: 'invalid-hash' },
+  ]);
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-public' });
+  const {
+    getEligibleCampaignRecipients,
+    previewPromotionalCampaign,
+  } = await import('../src/services/adminCommunications.service.js');
+
+  const recipients = await getEligibleCampaignRecipients('PROMOTIONAL_MARKETING', 'PUBLIC_JOB_SUBSCRIBERS');
+  expect(recipients).toEqual([
+    { id: 'subscriber-1', email: 'public@example.com', unsubscribeHash: 'unsubscribe-hash' },
+  ]);
+  expect((await previewPromotionalCampaign(campaign.id)).recipientCount).toBe(recipients.length);
+  await sendCommunicationCampaign(campaign.id);
+
+  expect(mockPrisma.emailDelivery.create).toHaveBeenCalledTimes(1);
+  expect(mockPrisma.emailDelivery.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      publicSubscriberId: 'subscriber-1',
+      recipientEmail: 'public@example.com',
+      communicationPurpose: 'PROMOTIONAL_MARKETING',
+      html: expect.stringContaining('/unsubscribe-job-updates?token='),
+    }),
+  }));
+  expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data.recipientUserId).toBeNull();
+});
+
+test('incompatible communication purposes and segments are rejected', async () => {
+  await expect(getEligibleCampaignRecipients('ESSENTIAL_ANNOUNCEMENT', 'PUBLIC_JOB_SUBSCRIBERS')).rejects.toMatchObject({ status: 400 });
+  await expect(getEligibleCampaignRecipients('PROMOTIONAL_MARKETING', 'ALL_REGISTERED_USERS')).rejects.toMatchObject({ status: 400 });
+  expect(mockPrisma.user.findMany).not.toHaveBeenCalled();
+});
+
+test('campaign creation requires purpose and explicit essential-content confirmation', async () => {
+  const { createPromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
+  await expect(createPromotionalCampaign('admin-1', {
+    subject: 'Maintenance', heading: 'Maintenance', body: 'Scheduled service window.',
+    purpose: 'ESSENTIAL_ANNOUNCEMENT', segment: 'ALL_REGISTERED_USERS', operationalContentConfirmed: false,
+  })).rejects.toMatchObject({ status: 400 });
+  mockPrisma.emailCampaign.create.mockResolvedValue({ id: 'campaign-essential', purpose: 'ESSENTIAL_ANNOUNCEMENT' });
+  await createPromotionalCampaign('admin-1', {
+    subject: 'Maintenance', heading: 'Maintenance', body: 'Scheduled service window.',
+    purpose: 'ESSENTIAL_ANNOUNCEMENT', segment: 'ALL_REGISTERED_USERS', operationalContentConfirmed: true,
+  });
+  expect(mockPrisma.emailCampaign.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ purpose: 'ESSENTIAL_ANNOUNCEMENT', operationalContentConfirmed: true }),
+  }));
+});
+
+test('campaign draft purpose cannot be changed after creation', async () => {
+  const { updatePromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue({
+    id: 'campaign-1', purpose: 'PROMOTIONAL_MARKETING', segment: 'SEEKERS', status: 'DRAFT',
+    subject: 'News', heading: 'News', body: 'Message', operationalContentConfirmed: false,
+  });
+  await expect(updatePromotionalCampaign('campaign-1', { purpose: 'ESSENTIAL_ANNOUNCEMENT' })).rejects.toMatchObject({ status: 409 });
+  expect(mockPrisma.emailCampaign.update).not.toHaveBeenCalled();
+});
+
+test('essential announcement content changes require a fresh operational confirmation', async () => {
+  const { updatePromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue({
+    id: 'campaign-essential', purpose: 'ESSENTIAL_ANNOUNCEMENT', segment: 'SEEKERS', status: 'DRAFT',
+    subject: 'Maintenance', heading: 'Maintenance', body: 'Scheduled service window.',
+    operationalContentConfirmed: true,
+  });
+  await expect(updatePromotionalCampaign('campaign-essential', { body: 'Maintenance and new paid features.' }))
+    .rejects.toMatchObject({ status: 400 });
+  expect(mockPrisma.emailCampaign.update).not.toHaveBeenCalled();
+});
+
+test('opted-out user is still selected for an essential announcement send', async () => {
+  const campaign = {
+    id: 'campaign-1', eventKey: 'campaign:essential', subject: 'Maintenance', heading: 'Maintenance', body: 'Scheduled service window.',
+    ctaLabel: null, ctaUrl: null, segment: 'SEEKERS', purpose: 'ESSENTIAL_ANNOUNCEMENT',
+    operationalContentConfirmed: true, status: 'DRAFT',
+  };
   mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
   mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'a@example.com' }]);
   mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-1' });
   mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
-  await expect(sendPromotionalCampaign('campaign-1')).resolves.toMatchObject({ status: 'SENT' });
+  await sendCommunicationCampaign(campaign.id);
+  expect(mockPrisma.emailDelivery.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      recipientUserId: 'user-1',
+      emailType: 'ESSENTIAL_ANNOUNCEMENT',
+      communicationPurpose: 'ESSENTIAL_ANNOUNCEMENT',
+    }),
+  }));
+  expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data.html).not.toContain('Unsubscribe from marketing emails');
+});
+
+test('promotional campaign uses shared opt-in recipient selection and preserves unsubscribe', async () => {
+  const campaign = {
+    id: 'campaign-1', eventKey: 'campaign:promo', subject: 'News', heading: 'News', body: 'Message',
+    ctaLabel: null, ctaUrl: null, segment: 'EMPLOYERS', purpose: 'PROMOTIONAL_MARKETING',
+    operationalContentConfirmed: false, status: 'DRAFT',
+  };
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'a@example.com' }]);
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-1' });
+  mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
+  await sendCommunicationCampaign(campaign.id);
+  expect(mockPrisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ role: 'EMPLOYER', marketingEmailsEnabled: true }),
+  }));
+  expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data).toMatchObject({
+    emailType: 'PROMOTIONAL_CAMPAIGN',
+    communicationPurpose: 'PROMOTIONAL_MARKETING',
+  });
+  expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data.html).toContain('Unsubscribe from marketing emails');
+});
+
+test('campaign count and send share purpose-aware recipient selection', async () => {
+  const campaign = {
+    id: 'campaign-1', eventKey: 'campaign:essential-count', subject: 'Update', heading: 'Update', body: 'Message',
+    ctaLabel: null, ctaUrl: null, segment: 'ALL_REGISTERED_USERS', purpose: 'ESSENTIAL_ANNOUNCEMENT',
+    operationalContentConfirmed: true, status: 'DRAFT',
+  };
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'a@example.com' }, { id: 'user-2', email: 'b@example.com' }]);
+  const { getEligibleCampaignRecipients, previewPromotionalCampaign } = await import('../src/services/adminCommunications.service.js');
+  const count = (await getEligibleCampaignRecipients(campaign.purpose, campaign.segment)).length;
+  expect((await previewPromotionalCampaign(campaign.id)).recipientCount).toBe(count);
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-1' });
+  mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
+  await sendCommunicationCampaign(campaign.id);
+  expect(mockPrisma.emailDelivery.create).toHaveBeenCalledTimes(count);
+});
+
+test('campaign send claims a draft once and queues through EmailDelivery', async () => {
+  const campaign = { id: 'campaign-1', eventKey: 'campaign:1', subject: 'Update', heading: 'News', body: 'Hello', ctaLabel: null, ctaUrl: null, segment: 'SEEKERS', purpose: 'PROMOTIONAL_MARKETING', operationalContentConfirmed: false, status: 'DRAFT' };
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-1', email: 'a@example.com' }]);
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-1' });
+  mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
+  await expect(sendCommunicationCampaign('campaign-1')).resolves.toMatchObject({ status: 'SENT' });
   expect(mockPrisma.emailDelivery.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ recipientUserId: 'user-1', eventKey: 'campaign:1:user-1', emailType: 'PROMOTIONAL_CAMPAIGN' }) }));
   expect(mockPrisma.emailCampaign.updateMany).toHaveBeenCalledWith({ where: { id: 'campaign-1', status: 'DRAFT' }, data: { status: 'SENDING', recipientCount: 1 } });
 });
@@ -77,6 +264,8 @@ const campaignRecord = (overrides = {}) => ({
   ctaLabel: 'Open',
   ctaUrl: '/jobs',
   segment: 'SEEKERS',
+  purpose: 'PROMOTIONAL_MARKETING',
+  operationalContentConfirmed: false,
   status: 'SENT',
   recipientCount: 3,
   createdById: 'admin-1',
@@ -126,7 +315,9 @@ test('returns only deliveries belonging to the campaign event-key prefix', async
   const result = await getCampaignDeliveries(campaign.id);
   expect(result.deliveries).toHaveLength(1);
   expect(result.pagination).toEqual({ page: 1, limit: 50, total: 3, totalPages: 1, hasNextPage: false, hasPreviousPage: false });
-  expect(mockPrisma.emailDelivery.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { emailType: 'PROMOTIONAL_CAMPAIGN', eventKey: { startsWith: 'campaign:event-1:' } } }));
+  expect(mockPrisma.emailDelivery.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { emailType: { in: ['PROMOTIONAL_CAMPAIGN', 'ESSENTIAL_ANNOUNCEMENT'] }, eventKey: { startsWith: 'campaign:event-1:' } },
+  }));
 });
 
 test('bounds campaign delivery listings at the database query', async () => {
