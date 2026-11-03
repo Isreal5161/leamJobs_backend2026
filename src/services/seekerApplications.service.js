@@ -64,6 +64,8 @@ const applicationJobSelect = {
   employer: { select: { email: true, employerProfile: { select: { companyName: true } } } },
 };
 
+const leamJobsCvTemplateVersion = '1';
+
 const mapApplication = (application) => ({
   id: application.id,
   jobId: application.jobId,
@@ -173,6 +175,14 @@ const resolveAuthorizedUploadedCv = (seekerProfile, requestedResumeUrl, requeste
   if (!profileResumeUrl && !profileResumeObjectKey) {
     const error = new Error('No uploaded CV is available for this profile.');
     error.status = 400;
+    throw error;
+  }
+
+  if (!profileResumeObjectKey) {
+    const error = new Error('The saved CV cannot be retrieved securely. Upload it again before applying with it.');
+    error.status = 400;
+    error.publicCode = 'CV_REFERENCE_UNAVAILABLE';
+    error.publicMessage = error.message;
     throw error;
   }
 
@@ -324,6 +334,7 @@ export const createSeekerApplication = async (seekerId, { jobId, coverLetter, cv
             source: 'LEAMJOBS_TEMPLATE',
             templateId: seekerProfile?.cvTemplate ?? 'modern',
             templateName: seekerProfile?.cvTemplate ?? 'modern',
+            templateVersion: leamJobsCvTemplateVersion,
             snapshot: snapshotPayload,
           },
         });

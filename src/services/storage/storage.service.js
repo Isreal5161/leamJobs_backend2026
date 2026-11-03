@@ -15,6 +15,14 @@ const s3Client = new S3Client({
 
 const bucketName = process.env.R2_BUCKET_NAME || 'leamjobs-private-files';
 
+const isMissingStorageObject = (error) => {
+  const errorCode = error?.Code ?? error?.code;
+  const errorName = error?.name;
+  return errorCode !== 'NoSuchBucket'
+    && errorName !== 'NoSuchBucket'
+    && ['NoSuchKey', 'NotFound'].includes(errorCode ?? errorName);
+};
+
 /**
  * Validate object key for path traversal attacks and invalid patterns.
  * Object keys must follow the format: {namespace}/{userId}/{category}/{uuid}.{ext}
@@ -93,16 +101,15 @@ export const readObject = async (objectKey) => {
     }
     return Buffer.concat(chunks);
   } catch (error) {
-    // Return 404-friendly error for missing objects
-    if (error?.name === 'NoSuchKey') {
-      const notFoundError = new Error('File not found');
+    if (isMissingStorageObject(error)) {
+      const notFoundError = new Error('This file is no longer available in storage.');
       notFoundError.statusCode = 404;
+      notFoundError.publicCode = 'STORAGE_OBJECT_MISSING';
+      notFoundError.publicMessage = 'This file is no longer available in storage.';
       throw notFoundError;
     }
 
-    // Do not expose credentials or internal details
-    const message = error?.message || 'Failed to read file from storage';
-    const wrappedError = new Error(message.includes('credentials') || message.includes('Bucket') ? 'Storage read failed' : message);
+    const wrappedError = new Error('Storage read failed');
     wrappedError.statusCode = 500;
     throw wrappedError;
   }

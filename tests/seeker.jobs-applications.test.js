@@ -392,6 +392,27 @@ describe('seeker job and application endpoints', () => {
     expect(mockPrisma.applicationCvSnapshot.create).not.toHaveBeenCalled();
   });
 
+  test('does not create an uploaded-CV application from a URL-only legacy profile reference', async () => {
+    mockPrisma.seekerProfile.findUnique.mockResolvedValue({
+      resumeUrl: 'https://files.example/legacy-resume.pdf',
+      resumeObjectKey: null,
+    });
+    mockPrisma.job.findFirst.mockResolvedValue(createJob());
+    mockPrisma.application.findUnique.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post('/api/seeker/applications')
+      .set('Authorization', 'Bearer ' + createToken('SEEKER', seekerId))
+      .send({ jobId, cvSource: 'upload' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatchObject({
+      code: 'CV_REFERENCE_UNAVAILABLE',
+      message: 'The saved CV cannot be retrieved securely. Upload it again before applying with it.',
+    });
+    expect(mockPrisma.application.create).not.toHaveBeenCalled();
+  });
+
   test('allows application creation without a saved CV when using the LeamJobs CV flow', async () => {
     mockPrisma.seekerProfile.findUnique.mockResolvedValue({
       resumeUrl: null,
@@ -468,6 +489,7 @@ describe('seeker job and application endpoints', () => {
         source: 'LEAMJOBS_TEMPLATE',
         templateId: 'modern',
         templateName: 'modern',
+        templateVersion: '1',
         snapshot: expect.objectContaining({
           personalInfo: expect.objectContaining({
             fullName: 'Ada Lovelace',

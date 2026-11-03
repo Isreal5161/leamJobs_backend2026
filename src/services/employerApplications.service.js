@@ -32,6 +32,41 @@ export class EmployerApplicationResumeUnavailableError extends Error {
   }
 }
 
+class EmployerApplicationResumeReferenceError extends Error {
+  constructor() {
+    super('The CV cannot be retrieved securely because its storage reference is unavailable.');
+    this.name = 'EmployerApplicationResumeReferenceError';
+    this.status = 404;
+    this.publicCode = 'CV_REFERENCE_UNAVAILABLE';
+    this.publicMessage = 'The CV cannot be retrieved securely because its storage reference is unavailable.';
+  }
+}
+
+const resolveApplicationCv = (application) => {
+  const profile = application?.seeker?.seekerProfile;
+
+  if (application?.cvSnapshot) {
+    return { source: 'template', historical: true, objectKey: null, unavailableReason: null };
+  }
+  if (application?.resumeObjectKey) {
+    return { source: 'application', historical: true, objectKey: application.resumeObjectKey, unavailableReason: null };
+  }
+  if (application?.resumeUrl) {
+    return { source: null, historical: true, objectKey: null, unavailableReason: 'storage_reference_missing' };
+  }
+  if (profile?.resumeObjectKey) {
+    return { source: 'profile', historical: false, objectKey: profile.resumeObjectKey, unavailableReason: null };
+  }
+  if (profile?.resumeUrl) {
+    return { source: null, historical: false, objectKey: null, unavailableReason: 'storage_reference_missing' };
+  }
+  if (profile?.cvTemplate) {
+    return { source: 'template', historical: false, objectKey: null, unavailableReason: null };
+  }
+
+  return { source: null, historical: false, objectKey: null, unavailableReason: null };
+};
+
 export class EmployerApplicationProfilePictureUnavailableError extends Error {
   constructor() {
     super('Profile picture not available for this application');
@@ -82,6 +117,7 @@ const applicantSelect = {
       projects: true,
       linkedinUrl: true,
       website: true,
+      resumeUrl: true,
       resumeObjectKey: true,
       cvTemplate: true,
     },
@@ -238,15 +274,7 @@ const mapApplicationListItem = (application, subscription) => {
 
 const mapApplicationDetail = (application, subscription) => {
   const snapshot = application.cvSnapshot ?? null;
-  const source = snapshot
-    ? 'template'
-    : application.resumeObjectKey
-      ? 'application'
-      : application.seeker.seekerProfile?.resumeObjectKey
-        ? 'profile'
-        : application.seeker.seekerProfile?.cvTemplate
-          ? 'template'
-          : null;
+  const cv = resolveApplicationCv(application);
 
   return {
     id: application.id,
@@ -257,10 +285,16 @@ const mapApplicationDetail = (application, subscription) => {
     updatedAt: application.updatedAt,
     contractId: application.contract?.id ?? null,
     resume: {
-      available: Boolean(source),
-      source,
-      submittedAt: application.resumeSubmittedAt,
-      version: application.resumeVersion,
+      available: Boolean(cv.source),
+      source: cv.source,
+      isHistorical: cv.historical,
+      unavailableReason: cv.unavailableReason,
+      submittedAt: cv.historical
+        ? snapshot?.snapshotCapturedAt ?? application.resumeSubmittedAt
+        : null,
+      version: snapshot
+        ? snapshot.templateVersion ?? null
+        : application.resumeVersion ?? null,
     },
     cvSnapshot: snapshot ? {
       id: snapshot.id,
@@ -827,17 +861,23 @@ export const selectContractJobApplication = async (employerId, jobId, applicatio
 export const getEmployerApplicationResume = async (employerId, jobId, applicationId) => {
   const application = await findOwnedApplication(employerId, jobId, applicationId, {
     id: true,
+    resumeUrl: true,
     resumeObjectKey: true,
-    seeker: { select: { seekerProfile: { select: { resumeObjectKey: true } } } },
+    cvSnapshot: { select: { id: true } },
+    seeker: { select: { seekerProfile: { select: { resumeUrl: true, resumeObjectKey: true } } } },
   });
 
-  const objectKey = application?.resumeObjectKey ?? application?.seeker?.seekerProfile?.resumeObjectKey;
-  if (!application || !objectKey) {
+  const cv = resolveApplicationCv(application);
+  if (!application) {
     throw new EmployerApplicationResumeUnavailableError();
   }
+  if (cv.unavailableReason === 'storage_reference_missing') throw new EmployerApplicationResumeReferenceError();
+  if (!cv.source) throw new EmployerApplicationResumeUnavailableError();
+  if (cv.source === 'template') throw new EmployerApplicationResumeUnavailableError();
+  if (!cv.objectKey) throw new EmployerApplicationResumeReferenceError();
 
   return {
-    buffer: await readObject(objectKey),
-    objectKey,
+    buffer: await readObject(cv.objectKey),
+    objectKey: cv.objectKey,
   };
 };

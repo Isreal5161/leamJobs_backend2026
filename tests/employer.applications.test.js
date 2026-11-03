@@ -330,6 +330,157 @@ describe('Employer Applications authorization and privacy', () => {
     expect(response.body.data.application.applicant.bio).toBe('A newer profile summary.');
   });
 
+  test('application CV source prefers its immutable template snapshot over current profile and upload data', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      resumeObjectKey: `seekers/${seekerA}/resume/later-upload.pdf`,
+      resumeVersion: 'later-upload',
+      cvSnapshot: {
+        id: 'cv-snapshot-1',
+        source: 'LEAMJOBS_TEMPLATE',
+        templateId: 'professional',
+        templateName: 'Professional',
+        templateVersion: '1',
+        snapshotCapturedAt: new Date('2026-09-10T10:00:00.000Z'),
+        snapshot: { personalInfo: { fullName: 'Ada Lovelace' }, skills: ['Original skill'] },
+      },
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, resumeObjectKey: `seekers/${seekerA}/resume/current-profile.pdf` },
+      },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      available: true,
+      source: 'template',
+      isHistorical: true,
+      version: '1',
+    });
+    expect(response.body.data.application.cvSnapshot.snapshot.skills).toEqual(['Original skill']);
+  });
+
+  test('legacy profile CV is reported as a non-historical fallback, never as the submitted CV', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, resumeObjectKey: `seekers/${seekerA}/resume/current-profile.pdf` },
+      },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      available: true,
+      source: 'profile',
+      isHistorical: false,
+      submittedAt: null,
+      version: null,
+    });
+  });
+
+  test('application upload is selected before a newer profile CV', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      resumeObjectKey: `seekers/${seekerA}/resume/submitted.pdf`,
+      resumeVersion: 'submitted-version',
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, resumeObjectKey: `seekers/${seekerA}/resume/current-profile.pdf` },
+      },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      available: true,
+      source: 'application',
+      isHistorical: true,
+      version: 'submitted-version',
+    });
+  });
+
+  test('application with no saved CV is distinguished from the current profile fallback', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      seeker: { ...seeker, seekerProfile: { ...profile, resumeUrl: null, resumeObjectKey: null, cvTemplate: null } },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      available: false,
+      source: null,
+      isHistorical: false,
+      submittedAt: null,
+    });
+  });
+
+  test('URL-only application CV is unavailable and does not fall through to the current profile CV', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      resumeUrl: 'https://files.example/old-private-cv.pdf',
+      resumeObjectKey: null,
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, resumeObjectKey: `seekers/${seekerA}/resume/current-profile.pdf` },
+      },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      available: false,
+      source: null,
+      unavailableReason: 'storage_reference_missing',
+    });
+  });
+
+  test('URL-only legacy profile CV is unavailable and not retrieved through its URL', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      resumeUrl: null,
+      resumeObjectKey: null,
+      seeker: {
+        ...seeker,
+        seekerProfile: { ...profile, resumeUrl: 'https://files.example/old-profile-cv.pdf', resumeObjectKey: null, cvTemplate: null },
+      },
+    }));
+
+    const detailResponse = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(detailResponse.status).toBe(200);
+    expect(detailResponse.body.data.application.resume).toMatchObject({
+      available: false,
+      source: null,
+      unavailableReason: 'storage_reference_missing',
+    });
+
+    const resumeResponse = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}/resume`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(resumeResponse.status).toBe(404);
+    expect(resumeResponse.body.error).toMatchObject({
+      code: 'CV_REFERENCE_UNAVAILABLE',
+      message: 'The CV cannot be retrieved securely because its storage reference is unavailable.',
+    });
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
   test('application applicant receives the current server-derived subscription presentation', async () => {
     mockPrisma.application.findMany.mockResolvedValue([detailApplication()]);
     mockPrisma.application.count.mockResolvedValue(1);
@@ -432,6 +583,80 @@ describe('Employer Application status and CV access', () => {
     } finally {
       await deleteObject(objectKey);
     }
+  });
+
+  test('legacy profile upload fallback retrieves the profile object when no application CV exists', async () => {
+    const profileObjectKey = `seekers/${seekerA}/resume/profile.pdf`;
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      seeker: { ...seeker, seekerProfile: { ...profile, resumeObjectKey: profileObjectKey } },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}/resume`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(200);
+    expect(response.body.toString()).toBe('pdf-content');
+    expect(mockPrisma.application.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({
+        resumeObjectKey: true,
+        seeker: { select: { seekerProfile: { select: { resumeUrl: true, resumeObjectKey: true } } } },
+      }),
+    }));
+  });
+
+  test('snapshot source prevents the resume endpoint from falling through to an uploaded object', async () => {
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({
+      resumeObjectKey: `seekers/${seekerA}/resume/unrelated.pdf`,
+      cvSnapshot: { id: 'snapshot-1' },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}/resume`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(404);
+    expect(response.body.message).toBe('CV not available for this application');
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  test('confirmed missing R2 object is reported without exposing storage metadata', async () => {
+    const objectKey = `seekers/${seekerA}/resume/missing-private-file.pdf`;
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({ resumeObjectKey: objectKey }));
+    mockSend.mockRejectedValueOnce(Object.assign(new Error(`No object ${objectKey}`), {
+      name: 'NotFound',
+      Code: 'NotFound',
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}/resume`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toMatchObject({
+      code: 'STORAGE_OBJECT_MISSING',
+      message: 'This file is no longer available in storage.',
+    });
+    expect(JSON.stringify(response.body)).not.toContain(objectKey);
+  });
+
+  test('storage authorization failure is not misreported as a missing object', async () => {
+    const objectKey = `seekers/${seekerA}/resume/private.pdf`;
+    mockPrisma.application.findFirst.mockResolvedValue(detailApplication({ resumeObjectKey: objectKey }));
+    mockSend.mockRejectedValueOnce(Object.assign(new Error(`Access denied for ${objectKey}`), {
+      name: 'AccessDenied',
+      Code: 'AccessDenied',
+      $metadata: { httpStatusCode: 403 },
+    }));
+
+    const response = await request(app)
+      .get(`/api/employer/jobs/${jobA}/applications/${applicationA}/resume`)
+      .set('Authorization', 'Bearer ' + token('EMPLOYER', employerA));
+
+    expect(response.status).toBe(500);
+    expect(response.body.message).toBe('Something went wrong on our side. Please try again shortly.');
+    expect(JSON.stringify(response.body)).not.toContain(objectKey);
+    expect(response.body.error?.code).not.toBe('STORAGE_OBJECT_MISSING');
   });
 
   test('another employer and a mismatched job cannot access an application CV', async () => {

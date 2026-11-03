@@ -54,6 +54,15 @@ const mockPrisma = {
   $transaction: jest.fn(),
 };
 
+const mockReadObject = jest.fn();
+jest.unstable_mockModule('../src/services/storage/storage.service.js', () => ({
+  readObject: mockReadObject,
+  createObjectKey: jest.fn(),
+  deleteObject: jest.fn(),
+  uploadObject: jest.fn(),
+  getStorageInfo: jest.fn(),
+}));
+
 jest.unstable_mockModule('../src/config/database.js', () => ({
   prisma: mockPrisma,
   checkDatabaseHealth: jest.fn(),
@@ -202,6 +211,7 @@ beforeEach(() => {
   mockPrisma.job.findFirst.mockResolvedValue(null);
   mockPrisma.application.findMany.mockResolvedValue([]);
   mockPrisma.application.findFirst.mockResolvedValue(null);
+  mockReadObject.mockResolvedValue(Buffer.from('application-cv'));
   mockPrisma.contract.findFirst.mockResolvedValue(null);
   mockPrisma.contract.create.mockResolvedValue({ id: 'contract-123' });
   mockPrisma.escrow.create.mockResolvedValue({ id: 'escrow-123', status: 'UNFUNDED' });
@@ -257,6 +267,53 @@ describe('Admin applicant authorization', () => {
     expect(response.body.success).toBe(true);
     expect(response.body.data.application.jobId).toBe(jobId);
     expect(response.body.data.application.applicant.email).toBe('ada@example.com');
+  });
+
+  test('ADMIN receives the same application template snapshot metadata used by employers', async () => {
+    mockPrisma.job.findUnique.mockResolvedValue(canonicalJob());
+    mockPrisma.application.findFirst.mockResolvedValue({
+      ...detailApplication,
+      cvSnapshot: {
+        id: 'snapshot-1',
+        source: 'LEAMJOBS_TEMPLATE',
+        templateId: 'professional',
+        templateName: 'Professional',
+        templateVersion: '1',
+        snapshotCapturedAt: new Date('2026-09-11T00:00:00.000Z'),
+        snapshot: { personalInfo: { fullName: 'Ada Lovelace' }, skills: ['Original skill'] },
+      },
+    });
+
+    const response = await request(app)
+      .get(`/api/admin/jobs/${jobId}/applications/${applicationId}`)
+      .set('Authorization', 'Bearer ' + token('ADMIN', adminId));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.application.resume).toMatchObject({
+      source: 'template',
+      isHistorical: true,
+      version: '1',
+    });
+    expect(response.body.data.application.cvSnapshot).toMatchObject({
+      templateId: 'professional',
+      templateVersion: '1',
+      snapshot: { skills: ['Original skill'] },
+    });
+  });
+
+  test('ADMIN can retrieve an uploaded CV for an authorized application', async () => {
+    const objectKey = 'seekers/seeker-1/resume/submitted.pdf';
+    mockPrisma.job.findUnique.mockResolvedValue(canonicalJob());
+    mockPrisma.application.findFirst.mockResolvedValue({ ...detailApplication, resumeObjectKey: objectKey });
+
+    const response = await request(app)
+      .get(`/api/admin/jobs/${jobId}/applications/${applicationId}/resume`)
+      .set('Authorization', 'Bearer ' + token('ADMIN', adminId));
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('application/pdf');
+    expect(response.body.toString()).toBe('application-cv');
+    expect(mockReadObject).toHaveBeenCalledWith(objectKey);
   });
 
   test('ADMIN can list applicants for an unrelated employer job', async () => {
