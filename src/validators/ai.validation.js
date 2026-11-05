@@ -16,6 +16,7 @@ const cvData = z.object({
     phone: text(100).optional(),
     location: text(200).optional(),
     linkedin: text(300).optional(),
+    website: text(500).optional(),
     summary: text(3000).optional(),
   }).strict(),
   summary: text(3000).optional(),

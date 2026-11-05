@@ -127,19 +127,19 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER "AdminPermissionGrantEvent_append_only"
   BEFORE UPDATE OR DELETE ON "AdminPermissionGrantEvent"
-  FOR EACH ROW EXECUTE FUNCTION "preventAdminHistoryMutation"();
+  FOR EACH ROW EXECUTE PROCEDURE "preventAdminHistoryMutation"();
 
 CREATE TRIGGER "AdminPermissionGrantEvent_no_truncate"
   BEFORE TRUNCATE ON "AdminPermissionGrantEvent"
-  FOR EACH STATEMENT EXECUTE FUNCTION "preventAdminHistoryMutation"();
+  FOR EACH STATEMENT EXECUTE PROCEDURE "preventAdminHistoryMutation"();
 
 CREATE TRIGGER "AdminAuditEvent_append_only"
   BEFORE UPDATE OR DELETE ON "AdminAuditEvent"
-  FOR EACH ROW EXECUTE FUNCTION "preventAdminHistoryMutation"();
+  FOR EACH ROW EXECUTE PROCEDURE "preventAdminHistoryMutation"();
 
 CREATE TRIGGER "AdminAuditEvent_no_truncate"
   BEFORE TRUNCATE ON "AdminAuditEvent"
-  FOR EACH STATEMENT EXECUTE FUNCTION "preventAdminHistoryMutation"();
+  FOR EACH STATEMENT EXECUTE PROCEDURE "preventAdminHistoryMutation"();
 
 INSERT INTO "AdminPermission" ("key", "module", "description") VALUES
   ('analytics.view', 'analytics', 'View platform analytics'),

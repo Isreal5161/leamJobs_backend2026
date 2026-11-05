@@ -82,7 +82,7 @@ SET "planId" = CASE "plan"::text
 END;
 ALTER TABLE "Subscription" ALTER COLUMN "planId" SET NOT NULL;
 ALTER TABLE "Subscription" DROP COLUMN "plan";
-DROP TYPE "SubscriptionPlan";
+DROP TYPE "SubscriptionPlanLegacy";
 
 -- Add historical subscription terms and lifecycle fields.
 ALTER TABLE "Subscription"

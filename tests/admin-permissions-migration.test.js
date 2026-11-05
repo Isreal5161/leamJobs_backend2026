@@ -73,8 +73,8 @@ describe('Multi-admin foundation migration', () => {
     expect(migration).toContain('BEFORE UPDATE OR DELETE ON "AdminAuditEvent"');
     expect(migration).toContain('BEFORE TRUNCATE ON "AdminPermissionGrantEvent"');
     expect(migration).toContain('BEFORE TRUNCATE ON "AdminAuditEvent"');
-    expect(migration).toMatch(/"AdminPermissionGrantEvent_no_truncate"[\s\S]+?FOR EACH STATEMENT EXECUTE FUNCTION "preventAdminHistoryMutation"\(\)/);
-    expect(migration).toMatch(/"AdminAuditEvent_no_truncate"[\s\S]+?FOR EACH STATEMENT EXECUTE FUNCTION "preventAdminHistoryMutation"\(\)/);
+    expect(migration).toMatch(/"AdminPermissionGrantEvent_no_truncate"[\s\S]+?FOR EACH STATEMENT EXECUTE PROCEDURE "preventAdminHistoryMutation"\(\)/);
+    expect(migration).toMatch(/"AdminAuditEvent_no_truncate"[\s\S]+?FOR EACH STATEMENT EXECUTE PROCEDURE "preventAdminHistoryMutation"\(\)/);
   });
 
   test('preserves audit actor and subject IDs independently of user deletion', () => {

@@ -65,7 +65,7 @@ const validatePermissionKeys = async (permissionKeys, client, allowEmpty = false
 };
 
 const lockEmail = async (transaction, email) => {
-  await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${email}, 0))`;
+  await transaction.$queryRaw`SELECT pg_advisory_xact_lock(73421, hashtext(${email}))::text`;
 };
 
 const lockInvitation = async (transaction, invitationId) => {
