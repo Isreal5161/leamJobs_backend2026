@@ -184,6 +184,18 @@ export const loginUser = async ({ email, password, role }) => {
       throw new AuthenticationError();
     }
 
+    if (user.role === 'ADMIN') {
+      const adminAccount = await transaction.adminAccount.findUnique({
+        where: { userId: user.id },
+        select: { tier: true, suspendedAt: true },
+      });
+      if (!adminAccount
+        || !['SUPER_ADMIN', 'STAFF_ADMIN'].includes(adminAccount.tier)
+        || adminAccount.suspendedAt != null) {
+        throw new AuthenticationError();
+      }
+    }
+
     if (role && user.role !== role) {
       throw new AuthenticationError();
     }

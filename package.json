@@ -10,7 +10,10 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
+    "test": "npm run test:unit && npm run test:static",
+    "test:unit": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --maxWorkers=1 --config jest.unit.config.cjs",
+    "test:static": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --runTestsByPath tests/admin-permissions-migration.test.js tests/admin-staff-migration.test.js tests/communication-purpose-migration.test.js tests/employer-verification-migration.test.js tests/freelance-escrow-backfill-migration.test.js",
+    "test:postgres": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand --config jest.integration.config.cjs",
     "admin:bootstrap": "node src/scripts/bootstrap-admin.js",
     "content:seed": "node src/scripts/seed-site-content.js",
     "subscription:seed": "node src/scripts/seed-subscription-foundation.js",

@@ -1,7 +1,8 @@
+import './helpers/requireTestDatabase.cjs';
 import { randomUUID } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
-const databaseConfigured = Boolean(process.env.DATABASE_URL);
+const databaseConfigured = Boolean(process.env.TEST_DATABASE_URL);
 
 const { prisma } = await import('../src/config/database.js');
 const { processJobAlerts } = await import('../src/services/jobAlerts.service.js');
@@ -92,7 +93,7 @@ describeDatabase('job alert processor concurrency', () => {
 });
 
 if (!databaseConfigured) {
-  test('requires DATABASE_URL for PostgreSQL job alert concurrency coverage', () => {
+  test('requires TEST_DATABASE_URL for PostgreSQL job alert concurrency coverage', () => {
     expect(databaseConfigured).toBe(false);
   });
 }

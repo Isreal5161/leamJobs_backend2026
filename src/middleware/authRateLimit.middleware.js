@@ -75,6 +75,7 @@ export const authRateLimiters = {
   resetPassword: pair(30, 6),
   verifyEmail: pair(30, 8),
   resendEmailVerification: pair(20, 3),
+  adminInvitationAccept: pair(30, 8),
   googleStart: ipLimiter(30),
   googleCallback: ipLimiter(30),
   googleComplete: pair(20, 5),

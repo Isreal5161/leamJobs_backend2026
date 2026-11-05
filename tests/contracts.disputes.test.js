@@ -67,6 +67,8 @@ const fundedEscrow = (status = 'FUNDED') => ({
 });
 
 const mockPrisma = {
+  adminAccount: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ userId: where.userId, tier: 'SUPER_ADMIN', suspendedAt: null, user: { id: where.userId, role: 'ADMIN', isActive: true } })) },
+  adminPermission: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ key: where.key, isEnabled: true })) },
   authSession: {
     findFirst: jest.fn().mockImplementation(async ({ where }) => ({
       userId: where.userId,

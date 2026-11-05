@@ -74,8 +74,105 @@ model User {
   savedJobs              SavedJob[]
   jobAlerts              JobAlert[]
   supportRequests        SupportRequest[]
+  adminAccount           AdminAccount?
 
   @@index([role])
+}
+
+model AdminAccount {
+  userId      String           @id
+  tier        AdminAccountTier
+  suspendedAt DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  user    User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  grants  AdminPermissionGrant[]
+
+  @@index([tier])
+}
+
+model AdminPermission {
+  key         String   @id
+  module      String
+  description String
+  isEnabled   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  grants      AdminPermissionGrant[]
+  grantEvents AdminPermissionGrantEvent[]
+  invitations AdminInvitationPermission[]
+}
+
+model AdminPermissionGrant {
+  adminUserId   String
+  permissionKey String
+  grantedById   String
+  grantedAt     DateTime @default(now())
+
+  adminAccount AdminAccount    @relation(fields: [adminUserId], references: [userId], onDelete: Cascade)
+  permission   AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+
+  @@id([adminUserId, permissionKey])
+  @@index([permissionKey, adminUserId])
+}
+
+model AdminPermissionGrantEvent {
+  id            String                     @id @default(uuid())
+  actorId       String
+  subjectId     String
+  permissionKey String
+  action        AdminPermissionGrantAction
+  createdAt     DateTime                   @default(now())
+
+  permission AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+
+  @@index([subjectId, permissionKey, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model AdminInvitation {
+  id          String    @id @default(uuid())
+  email       String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  createdById String
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  permissions AdminInvitationPermission[]
+
+  @@index([email, expiresAt])
+  @@index([createdById, createdAt])
+}
+
+model AdminInvitationPermission {
+  invitationId  String
+  permissionKey String
+
+  invitation AdminInvitation @relation(fields: [invitationId], references: [id], onDelete: Restrict)
+  permission AdminPermission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+
+  @@id([invitationId, permissionKey])
+  @@index([permissionKey, invitationId])
+}
+
+model AdminAuditEvent {
+  id         String   @id @default(uuid())
+  actorId    String
+  subjectId  String
+  action     String
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([subjectId, createdAt])
+  @@index([entityType, entityId, createdAt])
 }
 
 model AuthSession {
@@ -1435,6 +1532,16 @@ enum Role {
   SEEKER
   EMPLOYER
   ADMIN
+}
+
+enum AdminAccountTier {
+  SUPER_ADMIN
+  STAFF_ADMIN
+}
+
+enum AdminPermissionGrantAction {
+  GRANTED
+  REVOKED
 }
 
 enum SeekerAvailability {

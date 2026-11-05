@@ -5,6 +5,7 @@ import { completeGoogleRegistration, googleContinuationCookieName, googleStateCo
 import { toUserResponse } from '../utils/userResponse.js';
 import { env } from '../config/env.js';
 import { prisma } from '../config/database.js';
+import { acceptAdminInvitation } from '../services/adminStaff.service.js';
 
 const googleCookieOptions = (path) => ({
   httpOnly: true,
@@ -65,6 +66,15 @@ export const login = async (req, res, next) => {
     });
   } catch (error) {
     await padAuthResponseTime(startedAt);
+    return next(error);
+  }
+};
+
+export const acceptAdminInvitationController = async (req, res, next) => {
+  try {
+    const user = await acceptAdminInvitation(req.body);
+    return res.status(201).json({ success: true, data: user });
+  } catch (error) {
     return next(error);
   }
 };

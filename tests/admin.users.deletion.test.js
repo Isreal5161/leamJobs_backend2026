@@ -13,6 +13,8 @@ const seekerId = '33333333-3333-4333-8333-333333333333';
 const employerId = '11111111-1111-4111-8111-111111111111';
 const state = new Map();
 const mockPrisma = {
+  adminAccount: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ userId: where.userId, tier: 'SUPER_ADMIN', suspendedAt: null, user: { id: where.userId, role: 'ADMIN', isActive: true } })) },
+  adminPermission: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ key: where.key, isEnabled: true })) },
   authSession: {
     findFirst: jest.fn().mockImplementation(async ({ where }) => {
       const currentUser = state.get(where.userId);

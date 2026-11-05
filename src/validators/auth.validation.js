@@ -46,6 +46,18 @@ const loginSchema = z.object({
   role: z.enum(['SEEKER', 'EMPLOYER']).optional(),
 }).strict();
 
+const adminInvitationAcceptanceSchema = z.object({
+  token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Invitation token is invalid'),
+  firstName: z.string().trim().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
+  password: z.string()
+    .min(8)
+    .regex(/[a-z]/)
+    .regex(/[A-Z]/)
+    .regex(/[0-9]/)
+    .regex(/[^A-Za-z0-9]/),
+}).strict();
+
 const verifyEmailSchema = z.object({
   email: z.string().trim().email('A valid email is required'),
   code: z.string().trim().regex(/^\d{6}$/, 'Verification code must be 6 digits'),
@@ -127,6 +139,23 @@ export const validateLegalAcceptance = (req, res, next) => {
 
 export const validateLogin = (req, res, next) => {
   const result = loginSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
+export const validateAdminInvitationAcceptance = (req, res, next) => {
+  const result = adminInvitationAcceptanceSchema.safeParse(req.body);
 
   if (!result.success) {
     return res.status(400).json({

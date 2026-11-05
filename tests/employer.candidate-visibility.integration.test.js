@@ -1,7 +1,8 @@
+import './helpers/requireTestDatabase.cjs';
 import { randomUUID } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
-const testDatabaseUrl = process.env.EMPLOYER_VISIBILITY_TEST_DATABASE_URL || process.env.PHASE4_TEST_DATABASE_URL || process.env.TEST_DATABASE_URL;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (testDatabaseUrl) process.env.DATABASE_URL = testDatabaseUrl;
 const databaseConfigured = Boolean(testDatabaseUrl);
 
@@ -281,7 +282,7 @@ describePostgres('Employer candidate visibility against PostgreSQL', () => {
 });
 
 if (!databaseConfigured) {
-  test('requires EMPLOYER_VISIBILITY_TEST_DATABASE_URL, PHASE4_TEST_DATABASE_URL, or TEST_DATABASE_URL for PostgreSQL verification', () => {
+  test('requires TEST_DATABASE_URL for PostgreSQL verification', () => {
     expect(databaseConfigured).toBe(false);
   });
 }

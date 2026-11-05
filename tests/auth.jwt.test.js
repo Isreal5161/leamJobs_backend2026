@@ -210,6 +210,27 @@ describe('authenticate', () => {
     }
   });
 
+  test('rejects a suspended staff account even if its user row remains active', async () => {
+    mockPrisma.authSession.findFirst.mockResolvedValueOnce({
+      userId: 'staff-1',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: {
+        isActive: true,
+        role: 'ADMIN',
+        adminAccount: { tier: 'STAFF_ADMIN', suspendedAt: new Date() },
+      },
+    });
+    const req = createRequest(signToken({ sub: 'staff-1', role: 'ADMIN' }));
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
   test('fails closed when the session lookup fails', async () => {
     const lookupError = new Error('database unavailable');
     mockPrisma.authSession.findFirst.mockRejectedValueOnce(lookupError);

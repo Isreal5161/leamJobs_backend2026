@@ -14,6 +14,8 @@ const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const applicationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 
 const mockPrisma = {
+  adminAccount: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ userId: where.userId, tier: 'SUPER_ADMIN', suspendedAt: null, user: { id: where.userId, role: 'ADMIN', isActive: true } })) },
+  adminPermission: { findUnique: jest.fn().mockImplementation(async ({ where }) => ({ key: where.key, isEnabled: true })) },
   authSession: {
     findFirst: jest.fn().mockImplementation(async ({ where }) => ({
       userId: where.userId,

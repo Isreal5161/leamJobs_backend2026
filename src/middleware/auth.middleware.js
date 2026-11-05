@@ -46,7 +46,13 @@ export const authenticate = async (req, res, next) => {
         userId: true,
         expiresAt: true,
         revokedAt: true,
-        user: { select: { isActive: true, role: true } },
+        user: {
+          select: {
+            isActive: true,
+            role: true,
+            adminAccount: { select: { tier: true, suspendedAt: true } },
+          },
+        },
       },
     });
 
@@ -55,7 +61,8 @@ export const authenticate = async (req, res, next) => {
       || session.revokedAt
       || session.expiresAt <= new Date()
       || !session.user?.isActive
-      || session.user.role !== claims.role) {
+      || session.user.role !== claims.role
+      || (session.user.role === 'ADMIN' && session.user.adminAccount?.suspendedAt != null)) {
       return res.status(401).json({ message: 'Invalid authentication token' });
     }
 

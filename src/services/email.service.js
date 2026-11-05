@@ -8,6 +8,7 @@ export const EMAIL_TYPES = Object.freeze({
   PASSWORD_RESET: 'PASSWORD_RESET',
   PASSWORD_CHANGED: 'PASSWORD_CHANGED',
   EMAIL_VERIFICATION_CODE: 'EMAIL_VERIFICATION_CODE',
+  ADMIN_STAFF_INVITATION: 'ADMIN_STAFF_INVITATION',
   JOB_APPROVED: 'JOB_APPROVED',
   JOB_REJECTED: 'JOB_REJECTED',
   EMPLOYER_VERIFICATION_APPROVED: 'EMPLOYER_VERIFICATION_APPROVED',
@@ -73,6 +74,43 @@ const deliveryData = ({ recipientUserId, notificationId, emailType, communicatio
 });
 
 export const isEmailEnabled = () => Boolean(getTransport());
+
+export class StaffInvitationEmailDeliveryError extends Error {
+  constructor() {
+    super('Staff invitation was created, but its email could not be delivered. Resend the invitation to try again.');
+    this.name = 'StaffInvitationEmailDeliveryError';
+    this.status = 503;
+    this.publicMessage = this.message;
+  }
+}
+
+export const sendAdminInvitationEmail = async ({ recipientEmail, link, invitationId }) => {
+  const mailer = getTransport();
+  if (!mailer) throw new StaffInvitationEmailDeliveryError();
+
+  const template = renderEmailTemplate(EMAIL_TYPES.ADMIN_STAFF_INVITATION, {
+    title: 'You are invited to LeamJobs Admin',
+    heading: 'Staff administrator invitation',
+    message: 'A LeamJobs Super Admin invited you to activate a staff administrator account. This link expires in 48 hours and can be used once.',
+    link,
+    linkLabel: 'Accept invitation',
+  });
+
+  try {
+    await mailer.sendMail({
+      from: env.EMAIL_FROM_NAME ? `"${safeHeader(env.EMAIL_FROM_NAME)}" <${env.EMAIL_FROM}>` : env.EMAIL_FROM,
+      to: normalizeEmail(recipientEmail),
+      replyTo: env.EMAIL_REPLY_TO || undefined,
+      subject: safeHeader(template.subject),
+      html: template.html,
+      text: template.text,
+      messageId: `<${crypto.createHash('sha256').update(`admin-invitation:${invitationId}`).digest('hex')}@leamjobs.com>`,
+      headers: { 'X-LeamJobs-Email-Type': EMAIL_TYPES.ADMIN_STAFF_INVITATION },
+    });
+  } catch {
+    throw new StaffInvitationEmailDeliveryError();
+  }
+};
 
 export const queueEmail = async ({ recipientUserId = null, publicSubscriberId = null, notificationId, emailType, communicationPurpose, eventKey, recipientEmail, context, client = prisma }) => {
   const email = normalizeEmail(recipientEmail);

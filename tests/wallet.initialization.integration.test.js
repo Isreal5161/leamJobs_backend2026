@@ -1,7 +1,8 @@
+import './helpers/requireTestDatabase.cjs';
 import { randomUUID } from 'node:crypto';
 import { initializeSeekerWallet } from '../src/services/wallet.service.js';
 
-const testDatabaseUrl = process.env.WALLET_TEST_DATABASE_URL;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (testDatabaseUrl) process.env.DATABASE_URL = testDatabaseUrl;
 
 const walletDatabaseDescribe = testDatabaseUrl ? describe : describe.skip;

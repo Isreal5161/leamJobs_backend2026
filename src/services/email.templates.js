@@ -73,6 +73,17 @@ export const renderEmailTemplate = (emailType, context = {}) => {
   const title = context.title || 'LeamJobs notification';
   const message = context.message || 'There is new activity on your LeamJobs account.';
 
+  if (emailType === 'ADMIN_STAFF_INVITATION') {
+    return generic({
+      title: context.title || 'You are invited to LeamJobs Admin',
+      heading: context.heading || 'Staff administrator invitation',
+      message,
+      link: context.link,
+      linkLabel: context.linkLabel || 'Accept invitation',
+      isMarketing: false,
+    });
+  }
+
   if (emailType === 'ESSENTIAL_ANNOUNCEMENT') {
     return generic({
       title,

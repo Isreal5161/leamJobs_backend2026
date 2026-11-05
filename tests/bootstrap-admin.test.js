@@ -9,6 +9,7 @@ process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 
 const mockPrisma = {
+  adminAccount: { findUnique: jest.fn() },
   authSession: {
     create: jest.fn().mockResolvedValue({ id: 'auth-session-1' }),
   },
@@ -198,6 +199,10 @@ describe('Admin bootstrap script', () => {
   });
 
   test('created ADMIN can log in through the shared auth endpoint and receives ADMIN role in JWT', async () => {
+    mockPrisma.adminAccount.findUnique.mockResolvedValue({
+      tier: 'SUPER_ADMIN',
+      suspendedAt: null,
+    });
     mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
       if (where.email === 'admin-login@example.com' || where.id === 'admin-login-1') {
         return {

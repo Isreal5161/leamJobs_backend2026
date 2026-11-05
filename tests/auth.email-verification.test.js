@@ -18,6 +18,7 @@ const mockPrisma = {
   authSession: {
     create: jest.fn().mockResolvedValue({}),
   },
+  adminAccount: { findUnique: jest.fn() },
   user: {
     create: jest.fn(),
     findUnique: jest.fn(),
@@ -236,6 +237,55 @@ test('legacy active users without a verification record can still log in', async
 
   expect(result.user.id).toBe('legacy-user');
   expect(result.token).toBeTruthy();
+});
+
+test('staff administrators use the existing login flow without a client-selected tier', async () => {
+  const staff = {
+    id: 'staff-admin',
+    email: 'staff@example.com',
+    passwordHash: validPasswordHash,
+    role: 'ADMIN',
+    isActive: true,
+    isVerified: true,
+  };
+  mockPrisma.user.findUnique.mockResolvedValue(staff);
+  mockPrisma.user.update.mockResolvedValue({ ...staff, lastLogin: new Date() });
+  mockPrisma.adminAccount.findUnique.mockResolvedValue({ tier: 'STAFF_ADMIN', suspendedAt: null });
+
+  const result = await loginUser({ email: staff.email, password: 'ValidPassword1!' });
+
+  expect(result.user.role).toBe('ADMIN');
+  expect(result.token).toBeTruthy();
+  expect(mockPrisma.authSession.create).toHaveBeenCalledWith({
+    data: { id: expect.any(String), userId: staff.id, expiresAt: expect.any(Date) },
+  });
+  await expect(loginUser({
+    email: staff.email,
+    password: 'ValidPassword1!',
+    role: 'SUPER_ADMIN',
+  })).rejects.toMatchObject({ status: 401 });
+});
+
+test('suspended staff are rejected by the existing login endpoint service', async () => {
+  const staff = {
+    id: 'suspended-staff',
+    email: 'suspended@example.com',
+    passwordHash: validPasswordHash,
+    role: 'ADMIN',
+    isActive: true,
+    isVerified: true,
+  };
+  mockPrisma.user.findUnique.mockResolvedValue(staff);
+  mockPrisma.adminAccount.findUnique.mockResolvedValue({
+    tier: 'STAFF_ADMIN',
+    suspendedAt: new Date(),
+  });
+
+  await expect(loginUser({ email: staff.email, password: 'ValidPassword1!' })).rejects.toMatchObject({
+    status: 401,
+    name: 'AuthenticationError',
+  });
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });
 
 test('a correct verification code verifies the user and activates the account', async () => {

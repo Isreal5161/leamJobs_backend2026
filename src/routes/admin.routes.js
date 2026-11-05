@@ -10,7 +10,12 @@ import {
   updateJob,
 } from '../controllers/adminJobs.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
-import { requireRole } from '../middleware/authorization.middleware.js';
+import {
+  loadAdminContext,
+  requireAdminPermission,
+  requireAdminPermissions,
+  requireRole,
+} from '../middleware/authorization.middleware.js';
 import { getAdminSupportRequests, patchAdminSupportRequest } from '../controllers/premiumSeeker.controller.js';
 import { validateSupportUpdate } from '../validators/premiumSeeker.validation.js';
 import { listReleaseCandidates, releaseContract } from '../controllers/adminRelease.controller.js';
@@ -70,83 +75,89 @@ import {
 import { createPageLimitValidator } from '../validators/collectionPagination.validation.js';
 import { getAdminPlatformFee, updateAdminPlatformFee } from '../controllers/platformFee.controller.js';
 import { validatePlatformFeeUpdate } from '../validators/platformFee.validation.js';
+import adminStaffRouter from './adminStaff.routes.js';
+import { getCurrentAdminPermissionsController } from '../controllers/adminPermission.controller.js';
 
 const adminRouter = Router();
 
-adminRouter.get('/companies', authenticate, requireRole('ADMIN'), validateAdminCompaniesQuery, listCompanies);
-adminRouter.get('/companies/leamjobs', authenticate, requireRole('ADMIN'), getLeamJobsEmployer);
-adminRouter.get('/companies/:userId/logo', authenticate, requireRole('ADMIN'), getCompanyLogo);
-adminRouter.get('/verification-submissions', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listEmployerVerifications);
-adminRouter.get('/verification-submissions/:verificationId', authenticate, requireRole('ADMIN'), viewEmployerVerification);
-adminRouter.get('/verification-documents/:documentId', authenticate, requireRole('ADMIN'), fetchVerificationDocumentForAdmin);
-adminRouter.patch('/verification-submissions/:verificationId/approve', authenticate, requireRole('ADMIN'), approveEmployerVerification);
-adminRouter.patch('/verification-submissions/:verificationId/reject', authenticate, requireRole('ADMIN'), rejectEmployerVerification);
-adminRouter.get('/users', authenticate, requireRole('ADMIN'), validateAdminUsersQuery, listUsers);
-adminRouter.delete('/users/:userId', authenticate, requireRole('ADMIN'), validateAdminAccountId, anonymizeAdminAccount);
-adminRouter.get('/seekers', authenticate, requireRole('ADMIN'), validateAdminSeekersQuery, listSeekers);
-adminRouter.get('/analytics', authenticate, requireRole('ADMIN'), validateAdminAnalyticsQuery, analytics);
-adminRouter.get('/platform-fee', authenticate, requireRole('ADMIN'), getAdminPlatformFee);
-adminRouter.patch('/platform-fee', authenticate, requireRole('ADMIN'), validatePlatformFeeUpdate, updateAdminPlatformFee);
-adminRouter.get('/payments', authenticate, requireRole('ADMIN'), validateAdminPaymentsQuery, listAdminPaymentsController);
+adminRouter.use(authenticate, requireRole('ADMIN'), loadAdminContext);
+adminRouter.use('/staff', adminStaffRouter);
+
+adminRouter.get('/me/permissions', getCurrentAdminPermissionsController);
+adminRouter.get('/companies', requireAdminPermission('companies.view'), validateAdminCompaniesQuery, listCompanies);
+adminRouter.get('/companies/leamjobs', requireAdminPermission('companies.view'), getLeamJobsEmployer);
+adminRouter.get('/companies/:userId/logo', requireAdminPermission('companies.view'), getCompanyLogo);
+adminRouter.get('/verification-submissions', requireAdminPermission('verification.view'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listEmployerVerifications);
+adminRouter.get('/verification-submissions/:verificationId', requireAdminPermission('verification.view'), viewEmployerVerification);
+adminRouter.get('/verification-documents/:documentId', requireAdminPermission('verification.documents.view'), fetchVerificationDocumentForAdmin);
+adminRouter.patch('/verification-submissions/:verificationId/approve', requireAdminPermission('verification.approve'), approveEmployerVerification);
+adminRouter.patch('/verification-submissions/:verificationId/reject', requireAdminPermission('verification.reject'), rejectEmployerVerification);
+adminRouter.get('/users', requireAdminPermission('users.view'), validateAdminUsersQuery, listUsers);
+adminRouter.delete('/users/:userId', requireAdminPermission('users.anonymize'), validateAdminAccountId, anonymizeAdminAccount);
+adminRouter.get('/seekers', requireAdminPermission('users.view'), validateAdminSeekersQuery, listSeekers);
+adminRouter.get('/analytics', requireAdminPermissions(['analytics.view', 'finance.payments.view', 'finance.contractFunding.view', 'fees.view']), validateAdminAnalyticsQuery, analytics);
+adminRouter.get('/platform-fee', requireAdminPermission('fees.view'), getAdminPlatformFee);
+adminRouter.patch('/platform-fee', requireAdminPermission('fees.manage'), validatePlatformFeeUpdate, updateAdminPlatformFee);
+adminRouter.get('/payments', requireAdminPermission('finance.payments.view'), validateAdminPaymentsQuery, listAdminPaymentsController);
 adminRouter.get(
   '/conversion-operations',
-  authenticate,
-  requireRole('ADMIN'),
+  requireAdminPermission('finance.conversions.view'),
   validateAdminConversionOperationsQuery,
   listAdminConversionOperationsController,
 );
-adminRouter.post('/withdrawals/:id/execute', authenticate, requireRole('ADMIN'), executeWithdrawalController);
-adminRouter.post('/withdrawals/:id/reconcile', authenticate, requireRole('ADMIN'), reconcileWithdrawalController);
-adminRouter.post('/withdrawals/:id/recover-flutterwave-transfer', authenticate, requireRole('ADMIN'), validateFlutterwaveWithdrawalRecovery, recoverFlutterwaveTransferController);
-adminRouter.get('/subscription-plans', authenticate, requireRole('ADMIN'), listPlans);
-adminRouter.post('/subscription-plans', authenticate, requireRole('ADMIN'), validateAdminSubscriptionPlanCreate, createPlan);
-adminRouter.patch('/subscription-plans/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);
-adminRouter.get('/subscription-trial-settings', authenticate, requireRole('ADMIN'), trialSettings);
-adminRouter.patch('/subscription-trial-settings', authenticate, requireRole('ADMIN'), validateAdminSubscriptionTrialSettings, updateTrialSettings);
-adminRouter.get('/subscriptions/summary', authenticate, requireRole('ADMIN'), subscriptionSummary);
-adminRouter.get('/subscriptions', authenticate, requireRole('ADMIN'), validateAdminSubscriptionsQuery, subscriptions);
-adminRouter.get('/subscriptions/:id', authenticate, requireRole('ADMIN'), validateAdminSubscriptionId, subscription);
-adminRouter.put('/content', authenticate, requireRole('ADMIN'), validateSiteContentUpdate, writeSiteContent);
-adminRouter.post('/content/about/team-images', authenticate, requireRole('ADMIN'), singleUpload('image'), uploadAboutTeamImageController);
-adminRouter.post('/jobs', authenticate, requireRole('ADMIN'), createJob);
-adminRouter.get('/jobs', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listJobs);
-adminRouter.get('/jobs/:jobId', authenticate, requireRole('ADMIN'), getJob);
-adminRouter.get('/jobs/:jobId/applications', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listAdminApplicationController);
-adminRouter.get('/jobs/:jobId/applications/:applicationId', authenticate, requireRole('ADMIN'), getAdminApplicationController);
-adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', authenticate, requireRole('ADMIN'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
-adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', authenticate, requireRole('ADMIN'), selectAdminContractApplicationController);
-adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', authenticate, requireRole('ADMIN'), getAdminApplicationResumeController);
-adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', authenticate, requireRole('ADMIN'), getAdminApplicationProfilePictureController);
-adminRouter.get('/contracts/release-eligible', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listReleaseCandidates);
-adminRouter.get('/disputes', authenticate, requireRole('ADMIN'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listAdminDisputes);
-adminRouter.get('/disputes/:disputeId', authenticate, requireRole('ADMIN'), validateAdminDisputeId, getAdminDispute);
-adminRouter.patch('/contracts/:contractId/disputes/:disputeId', authenticate, requireRole('ADMIN'), validateDisputeResolution, resolveDispute);
-adminRouter.get('/contracts/:contractId', authenticate, requireRole('ADMIN'), getAdminContract);
-adminRouter.post('/contracts/:contractId/confirm', authenticate, requireRole('ADMIN'), confirmAdminContract);
-adminRouter.post('/contracts/:contractId/payment', authenticate, requireRole('ADMIN'), validateContractPayment, initializeAdminContractPayment);
-adminRouter.post('/contracts/:contractId/payment/verify', authenticate, requireRole('ADMIN'), validateContractPaymentVerification, verifyAdminContractPayment);
-adminRouter.post('/contracts/:contractId/confirm-completion', authenticate, requireRole('ADMIN'), confirmAdminCompletion);
-adminRouter.patch('/jobs/:jobId', authenticate, requireRole('ADMIN'), updateJob);
-adminRouter.patch('/jobs/:jobId/approve', authenticate, requireRole('ADMIN'), approveJob);
-adminRouter.patch('/jobs/:jobId/reject', authenticate, requireRole('ADMIN'), rejectJob);
-adminRouter.patch('/jobs/:jobId/remove', authenticate, requireRole('ADMIN'), removeJob);
-adminRouter.patch('/jobs/:jobId/decision', authenticate, requireRole('ADMIN'), decideJob);
-adminRouter.get('/notifications', authenticate, requireRole('ADMIN'), validateNotificationPagination, listNotifications);
-adminRouter.patch('/notifications/read-all', authenticate, requireRole('ADMIN'), readAllNotifications);
-adminRouter.patch('/notifications/:notificationId/read', authenticate, requireRole('ADMIN'), readNotification);
-adminRouter.get('/communications/templates', authenticate, requireRole('ADMIN'), templates);
-adminRouter.patch('/communications/templates/:key', authenticate, requireRole('ADMIN'), validateTemplateKey, validateTemplateUpdate, updateTemplate);
-adminRouter.post('/communications/templates/:key/preview', authenticate, requireRole('ADMIN'), validateTemplateKey, previewTemplate);
-adminRouter.post('/communications/campaigns', authenticate, requireRole('ADMIN'), validateCampaignCreate, createCampaign);
-adminRouter.get('/communications/campaigns', authenticate, requireRole('ADMIN'), validateCampaignRecordsQuery, campaignRecords);
-adminRouter.patch('/communications/campaigns/:id', authenticate, requireRole('ADMIN'), validateCampaignUpdate, updateCampaign);
-adminRouter.get('/communications/campaigns/:id/preview', authenticate, requireRole('ADMIN'), campaignPreview);
-adminRouter.get('/communications/campaigns/:id/report', authenticate, requireRole('ADMIN'), campaignReport);
-adminRouter.get('/communications/campaigns/:id/deliveries', authenticate, requireRole('ADMIN'), validateCampaignDeliveriesQuery, campaignDeliveries);
-adminRouter.get('/communications/recipients/count', authenticate, requireRole('ADMIN'), validateCampaignRecipientQuery, campaignRecipients);
-adminRouter.get('/support/premium', authenticate, requireRole('ADMIN'), getAdminSupportRequests);
-adminRouter.patch('/support/premium/:requestId', authenticate, requireRole('ADMIN'), validateSupportUpdate, patchAdminSupportRequest);
-adminRouter.post('/communications/campaigns/:id/send', authenticate, requireRole('ADMIN'), sendCampaign);
-adminRouter.post('/contracts/:contractId/release', authenticate, requireRole('ADMIN'), releaseContract);
+adminRouter.post('/withdrawals/:id/execute', requireAdminPermission('finance.withdrawals.execute'), executeWithdrawalController);
+adminRouter.post('/withdrawals/:id/reconcile', requireAdminPermission('finance.withdrawals.reconcile'), reconcileWithdrawalController);
+adminRouter.post('/withdrawals/:id/recover-flutterwave-transfer', requireAdminPermission('finance.providerRecovery.execute'), validateFlutterwaveWithdrawalRecovery, recoverFlutterwaveTransferController);
+adminRouter.get('/subscription-plans', requireAdminPermission('subscriptions.view'), listPlans);
+adminRouter.post('/subscription-plans', requireAdminPermission('subscriptions.plans.manage'), validateAdminSubscriptionPlanCreate, createPlan);
+adminRouter.patch('/subscription-plans/:id', requireAdminPermission('subscriptions.plans.manage'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);
+adminRouter.get('/subscription-trial-settings', requireAdminPermission('subscriptions.view'), trialSettings);
+adminRouter.patch('/subscription-trial-settings', requireAdminPermission('subscriptions.trials.manage'), validateAdminSubscriptionTrialSettings, updateTrialSettings);
+adminRouter.get('/subscriptions/summary', requireAdminPermission('subscriptions.view'), subscriptionSummary);
+adminRouter.get('/subscriptions', requireAdminPermission('subscriptions.view'), validateAdminSubscriptionsQuery, subscriptions);
+adminRouter.get('/subscriptions/:id', requireAdminPermission('subscriptions.view'), validateAdminSubscriptionId, subscription);
+adminRouter.put('/content', requireAdminPermissions(['content.edit', 'content.publish']), validateSiteContentUpdate, writeSiteContent);
+adminRouter.post('/content/about/team-images', requireAdminPermission('content.media.upload'), singleUpload('image'), uploadAboutTeamImageController);
+adminRouter.post('/jobs', requireAdminPermission('jobs.create'), createJob);
+adminRouter.get('/jobs', requireAdminPermission('jobs.view'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listJobs);
+adminRouter.get('/jobs/:jobId', requireAdminPermission('jobs.view'), getJob);
+adminRouter.get('/jobs/:jobId/applications', requireAdminPermission('applications.view'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listAdminApplicationController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId', requireAdminPermission('applications.view'), getAdminApplicationController);
+adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', requireAdminPermission('applications.update'), validateEmployerApplicationStatus, updateAdminApplicationStatusController);
+adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', requireAdminPermission('applications.select'), selectAdminContractApplicationController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', requireAdminPermission('applicants.documents.view'), getAdminApplicationResumeController);
+adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', requireAdminPermission('applicants.documents.view'), getAdminApplicationProfilePictureController);
+adminRouter.get('/contracts/release-eligible', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listReleaseCandidates);
+adminRouter.get('/disputes', requireAdminPermission('disputes.view'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listAdminDisputes);
+adminRouter.get('/disputes/:disputeId', requireAdminPermission('disputes.view'), validateAdminDisputeId, getAdminDispute);
+adminRouter.patch('/contracts/:contractId/disputes/:disputeId', requireAdminPermission('disputes.resolve'), validateDisputeResolution, resolveDispute);
+adminRouter.get('/contracts/:contractId', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), getAdminContract);
+adminRouter.post('/contracts/:contractId/confirm', requireAdminPermission('contracts.confirm'), confirmAdminContract);
+adminRouter.post('/contracts/:contractId/payment', requireAdminPermission('finance.contractFunding.execute'), validateContractPayment, initializeAdminContractPayment);
+adminRouter.post('/contracts/:contractId/payment/verify', requireAdminPermission('finance.contractFunding.execute'), validateContractPaymentVerification, verifyAdminContractPayment);
+adminRouter.post('/contracts/:contractId/confirm-completion', requireAdminPermission('contracts.complete'), confirmAdminCompletion);
+adminRouter.patch('/jobs/:jobId', requireAdminPermission('jobs.edit'), updateJob);
+adminRouter.patch('/jobs/:jobId/approve', requireAdminPermission('jobs.moderate'), approveJob);
+adminRouter.patch('/jobs/:jobId/reject', requireAdminPermission('jobs.moderate'), rejectJob);
+adminRouter.patch('/jobs/:jobId/remove', requireAdminPermission('jobs.delete'), removeJob);
+adminRouter.patch('/jobs/:jobId/decision', requireAdminPermission('jobs.moderate'), decideJob);
+adminRouter.get('/notifications', requireAdminPermission('notifications.view'), validateNotificationPagination, listNotifications);
+adminRouter.patch('/notifications/read-all', requireAdminPermission('notifications.manage'), readAllNotifications);
+adminRouter.patch('/notifications/:notificationId/read', requireAdminPermission('notifications.manage'), readNotification);
+adminRouter.get('/communications/templates', requireAdminPermission('communications.templates.view'), templates);
+adminRouter.patch('/communications/templates/:key', requireAdminPermission('communications.templates.edit'), validateTemplateKey, validateTemplateUpdate, updateTemplate);
+adminRouter.post('/communications/templates/:key/preview', requireAdminPermission('communications.templates.view'), validateTemplateKey, previewTemplate);
+adminRouter.post('/communications/campaigns', requireAdminPermission('communications.campaigns.manage'), validateCampaignCreate, createCampaign);
+adminRouter.get('/communications/campaigns', requireAdminPermission('communications.campaigns.view'), validateCampaignRecordsQuery, campaignRecords);
+adminRouter.patch('/communications/campaigns/:id', requireAdminPermission('communications.campaigns.manage'), validateCampaignUpdate, updateCampaign);
+adminRouter.get('/communications/campaigns/:id/preview', requireAdminPermission('communications.campaigns.view'), campaignPreview);
+adminRouter.get('/communications/campaigns/:id/report', requireAdminPermission('communications.campaigns.view'), campaignReport);
+adminRouter.get('/communications/campaigns/:id/deliveries', requireAdminPermission('communications.campaigns.view'), validateCampaignDeliveriesQuery, campaignDeliveries);
+adminRouter.get('/communications/recipients/count', requireAdminPermission('communications.campaigns.view'), validateCampaignRecipientQuery, campaignRecipients);
+adminRouter.get('/support/premium', requireAdminPermission('support.view'), getAdminSupportRequests);
+adminRouter.patch('/support/premium/:requestId', requireAdminPermission('support.update'), validateSupportUpdate, patchAdminSupportRequest);
+adminRouter.post('/communications/campaigns/:id/send', requireAdminPermission('communications.campaigns.send'), sendCampaign);
+adminRouter.post('/contracts/:contractId/release', requireAdminPermission('finance.escrowRelease.execute'), releaseContract);
 
+export { adminRouter };
 export default adminRouter;

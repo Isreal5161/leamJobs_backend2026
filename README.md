@@ -85,6 +85,10 @@ The server will start on `http://localhost:5000` by default.
 - `npm run prisma:migrate:dev` - Create and apply database migrations
 - `npm run prisma:studio` - Open Prisma Studio
 
+### Admin account provisioning
+
+Existing `ADMIN` accounts are preserved as Super Admins. Super Admins create and manage staff through the protected `/api/admin/staff` endpoints; invited staff activate through `/api/auth/admin-invitations/accept` and then use the existing `/api/auth/login` endpoint. The invitation email links to the frontend `/admin/accept-invitation` page. Do not use `bootstrap-admin.js` as a staff invitation or provisioning workflow.
+
 ## Environment Variables
 
 See `.env.example` for all available configuration options.

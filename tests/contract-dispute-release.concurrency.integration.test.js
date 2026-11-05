@@ -1,26 +1,14 @@
+import './helpers/requireTestDatabase.cjs';
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 
-const testDatabaseUrl = process.env.DISPUTE_RELEASE_TEST_DATABASE_URL;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
 process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 
 if (!testDatabaseUrl) {
-  test.skip('Set DISPUTE_RELEASE_TEST_DATABASE_URL to a dedicated local, migrated PostgreSQL test database', () => {});
+  test.skip('Set TEST_DATABASE_URL to a dedicated local, migrated PostgreSQL test database', () => {});
 } else {
-  const parsedUrl = new URL(testDatabaseUrl);
-  const databaseName = decodeURIComponent(parsedUrl.pathname.slice(1));
-  const localHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
-  const disposableDatabaseName = /(?:test|testing|integration|disposable)/i.test(databaseName);
-
-  if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol)
-    || !localHosts.has(parsedUrl.hostname)
-    || !disposableDatabaseName) {
-    throw new Error(
-      'DISPUTE_RELEASE_TEST_DATABASE_URL must use localhost and a database name containing test, integration, or disposable.',
-    );
-  }
-
   process.env.NODE_ENV = 'test';
   process.env.DATABASE_URL = testDatabaseUrl;
 
@@ -270,8 +258,9 @@ if (!testDatabaseUrl) {
     const [{ database: connectedDatabase }] = await database.$queryRaw`
       SELECT current_database() AS "database"
     `;
+    const databaseName = decodeURIComponent(new URL(testDatabaseUrl).pathname.slice(1));
     if (connectedDatabase !== databaseName) {
-      throw new Error('Connected database does not match DISPUTE_RELEASE_TEST_DATABASE_URL.');
+      throw new Error('Connected database does not match TEST_DATABASE_URL.');
     }
 
     const config = await import('../src/config/database.js');

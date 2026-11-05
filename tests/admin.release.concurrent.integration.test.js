@@ -1,11 +1,12 @@
+import './helpers/requireTestDatabase.cjs';
 import { PrismaClient } from '@prisma/client';
 
-const testDatabaseUrl = process.env.PHASE4_TEST_DATABASE_URL;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 process.env.LEAMJOBS_FREELANCE_PAYMENTS_ENABLED = 'true';
 process.env.LEAMJOBS_FREELANCE_ESCROW_RELEASE_ENABLED = 'true';
 
 if (!testDatabaseUrl) {
-  test.skip('Set PHASE4_TEST_DATABASE_URL to run the PostgreSQL concurrency integration test', () => {});
+  test.skip('Set TEST_DATABASE_URL to run the PostgreSQL concurrency integration test', () => {});
 } else {
   process.env.DATABASE_URL = testDatabaseUrl;
   process.env.NODE_ENV = 'test';

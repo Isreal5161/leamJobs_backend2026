@@ -1,7 +1,8 @@
+import './helpers/requireTestDatabase.cjs';
 import { randomUUID } from 'node:crypto';
 
 process.env.NODE_ENV = 'test';
-const databaseConfigured = Boolean(process.env.DATABASE_URL);
+const databaseConfigured = Boolean(process.env.TEST_DATABASE_URL);
 
 const { prisma } = await import('../src/config/database.js');
 const { recordAiUsage, releaseAiUsage } = await import('../src/services/subscriptionEntitlement.service.js');
@@ -69,7 +70,7 @@ describeDatabase('AI reservation release', () => {
 });
 
 if (!databaseConfigured) {
-  test('requires DATABASE_URL for PostgreSQL AI reservation release coverage', () => {
+  test('requires TEST_DATABASE_URL for PostgreSQL AI reservation release coverage', () => {
     expect(databaseConfigured).toBe(false);
   });
 }
