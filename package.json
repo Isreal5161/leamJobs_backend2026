@@ -27,7 +27,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "postinstall": "prisma generate --schema=prisma/schema.prisma"
+    "postinstall": "node scripts/generate-prisma.cjs"
   },
   "keywords": [
     "job-portal",
