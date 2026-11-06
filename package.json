@@ -27,7 +27,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "postinstall": "node scripts/generate-prisma.cjs"
+    "postinstall": "node -e \"const p=require('node:path'),f=require('node:fs'),c=require('node:child_process'),e=process.env;const candidates=[e.npm_package_json&&p.dirname(p.resolve(e.npm_package_json)),e.npm_config_local_prefix,e.INIT_CWD,e.PWD,process.cwd()].filter(Boolean).map(x=>p.resolve(x));const root=candidates.find(x=>f.existsSync(p.join(x,'package.json'))&&f.existsSync(p.join(x,'scripts','generate-prisma.cjs')));if(!root){console.error('Unable to locate repository root for Prisma postinstall');process.exit(1)}const result=c.spawnSync(process.execPath,[p.join(root,'scripts','generate-prisma.cjs')],{cwd:root,stdio:'inherit',env:e});if(result.error){console.error('Unable to launch Prisma generator: '+result.error.message);process.exit(1)}process.exitCode=result.status===null?1:result.status\""
   },
   "keywords": [
     "job-portal",
