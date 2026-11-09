@@ -1,6 +1,6 @@
 import {
+  countEligibleCampaignRecipients,
   createPromotionalCampaign,
-  getEligibleCampaignRecipients,
   getCampaignDeliveries,
   getCampaignReport,
   listCampaignRecords,
@@ -18,7 +18,7 @@ export const previewTemplate = async (req, res, next) => { try { return res.stat
 export const createCampaign = async (req, res, next) => { try { return res.status(201).json({ success: true, data: { campaign: await createPromotionalCampaign(req.user.sub, req.validatedCommunication) } }); } catch (error) { return next(error); } };
 export const updateCampaign = async (req, res, next) => { try { return res.status(200).json({ success: true, data: { campaign: await updatePromotionalCampaign(req.params.id, req.validatedCommunication) } }); } catch (error) { return next(error); } };
 export const campaignPreview = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await previewPromotionalCampaign(req.params.id) }); } catch (error) { return next(error); } };
-export const campaignRecipients = async (req, res, next) => { try { const recipients = await getEligibleCampaignRecipients(req.validatedPurpose, req.validatedSegment); return res.status(200).json({ success: true, data: { recipientCount: recipients.length } }); } catch (error) { return next(error); } };
+export const campaignRecipients = async (req, res, next) => { try { const recipientCount = await countEligibleCampaignRecipients(req.validatedPurpose, req.validatedSegment); return res.status(200).json({ success: true, data: { recipientCount } }); } catch (error) { return next(error); } };
 export const sendCampaign = async (req, res, next) => { try { return res.status(200).json({ success: true, data: { campaign: await sendCommunicationCampaign(req.params.id) } }); } catch (error) { return next(error); } };
 export const campaignRecords = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await listCampaignRecords(req.validatedQuery) }); } catch (error) { return next(error); } };
 export const campaignReport = async (req, res, next) => { try { return res.status(200).json({ success: true, data: await getCampaignReport(req.params.id) }); } catch (error) { return next(error); } };

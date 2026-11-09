@@ -500,6 +500,59 @@ test('two concurrent verification attempts only consume one challenge', async ()
   expect(updateCalls).toBeGreaterThanOrEqual(2);
 });
 
+test('concurrent invalid codes atomically stop at the challenge attempt limit', async () => {
+  const user = {
+    id: 'user-invalid-race',
+    email: 'invalid-race@example.com',
+    isVerified: false,
+  };
+  mockPrisma.user.findUnique.mockResolvedValue(user);
+  mockPrisma.emailVerificationCode.findUnique.mockResolvedValue({
+    id: 'verification-invalid-race',
+    userId: user.id,
+    codeHash: hashCode('654321'),
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    usedAt: null,
+    attempts: 4,
+    maxAttempts: 5,
+  });
+
+  const state = { attempts: 4, usedAt: null };
+  let successfulIncrements = 0;
+  const updateMany = jest.fn(async ({ where, data }) => {
+    if (data.attempts?.increment) {
+      if (state.usedAt || state.attempts >= where.attempts.lt) return { count: 0 };
+      state.attempts += data.attempts.increment;
+      successfulIncrements += 1;
+      return { count: 1 };
+    }
+    if (data.usedAt && !state.usedAt) {
+      state.usedAt = data.usedAt;
+      return { count: 1 };
+    }
+    return { count: 0 };
+  });
+  const transaction = {
+    emailVerificationCode: {
+      updateMany,
+      findUnique: jest.fn(async () => ({ attempts: state.attempts })),
+    },
+  };
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
+
+  const results = await Promise.allSettled([
+    verifyEmailWithCode({ email: user.email, code: '111111' }),
+    verifyEmailWithCode({ email: user.email, code: '222222' }),
+    verifyEmailWithCode({ email: user.email, code: '333333' }),
+  ]);
+
+  expect(results.every((result) => result.status === 'rejected')).toBe(true);
+  expect(state.attempts).toBe(5);
+  expect(state.usedAt).toBeInstanceOf(Date);
+  expect(successfulIncrements).toBe(1);
+  expect(updateMany).toHaveBeenCalledTimes(4);
+});
+
 test('two concurrent resend requests only allow one update and the other is rejected by cooldown', async () => {
   const user = {
     id: 'user-resend',

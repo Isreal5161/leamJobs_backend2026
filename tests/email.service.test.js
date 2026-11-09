@@ -210,6 +210,119 @@ test('disabled processor does not attempt SMTP work', async () => {
   expect(mockPrisma.emailDelivery.findMany).not.toHaveBeenCalled();
 });
 
+test('email retries use exponential delays and claim stale deliveries with an updatedAt guard', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  jest.useFakeTimers();
+  const now = new Date('2026-11-08T00:00:00.000Z');
+  jest.setSystemTime(now);
+  const delivery = {
+    id: 'delivery-stale',
+    recipientUserId: 'user-stale',
+    recipientEmail: 'user@example.com',
+    emailType: 'APPLICATION_SUBMITTED',
+    eventKey: 'application:submitted:stale',
+    status: 'PROCESSING',
+    attempts: 2,
+    updatedAt: new Date(now.getTime() - 16 * 60 * 1000),
+    subject: 'Application submitted',
+    html: '<p>Applied</p>',
+    text: 'Applied',
+  };
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([delivery]);
+  mockPrisma.emailDelivery.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockSendMail.mockRejectedValue(new Error('temporary provider failure'));
+
+  try {
+    await expect(processPendingEmails({ client: mockPrisma })).resolves.toBe(0);
+    expect(mockPrisma.emailDelivery.updateMany).toHaveBeenCalledWith({
+      where: { id: delivery.id, status: 'PROCESSING', updatedAt: delivery.updatedAt },
+      data: { status: 'PROCESSING' },
+    });
+    expect(mockPrisma.emailDelivery.update).toHaveBeenLastCalledWith({
+      where: { id: delivery.id },
+      data: {
+        status: 'FAILED',
+        lastError: 'temporary provider failure',
+        nextAttemptAt: new Date(now.getTime() + 20 * 60 * 1000),
+      },
+    });
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('workers cannot both claim the same delivery', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  const delivery = {
+    id: 'delivery-race',
+    recipientUserId: 'user-race',
+    recipientEmail: 'user@example.com',
+    emailType: 'APPLICATION_SUBMITTED',
+    eventKey: 'application:submitted:race',
+    status: 'PENDING',
+    attempts: 0,
+    updatedAt: new Date(),
+  };
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([delivery]);
+  let claims = 0;
+  mockPrisma.emailDelivery.updateMany.mockImplementation(async () => ({ count: claims++ === 0 ? 1 : 0 }));
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockSendMail.mockResolvedValue({});
+
+  await Promise.all([
+    processPendingEmails({ client: mockPrisma }),
+    processPendingEmails({ client: mockPrisma }),
+  ]);
+
+  expect(mockPrisma.emailDelivery.updateMany).toHaveBeenCalledTimes(2);
+  expect(mockSendMail).toHaveBeenCalledTimes(1);
+});
+
+test('stale deliveries at the attempt cap are marked failed without another send', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  const delivery = {
+    id: 'delivery-capped',
+    recipientUserId: 'user-capped',
+    recipientEmail: 'user@example.com',
+    emailType: 'APPLICATION_SUBMITTED',
+    eventKey: 'application:submitted:capped',
+    status: 'PROCESSING',
+    attempts: 8,
+    updatedAt: new Date(Date.now() - 16 * 60 * 1000),
+  };
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([delivery]);
+  mockPrisma.emailDelivery.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.update.mockResolvedValue({ ...delivery, status: 'FAILED' });
+
+  await expect(processPendingEmails({ client: mockPrisma })).resolves.toBe(0);
+
+  expect(mockPrisma.emailDelivery.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({
+      OR: expect.arrayContaining([
+        expect.objectContaining({ status: { in: ['PENDING', 'FAILED'] }, attempts: { lt: 8 } }),
+      ]),
+    }),
+  }));
+  expect(mockPrisma.emailDelivery.update).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: delivery.id },
+    data: expect.objectContaining({
+      status: 'FAILED',
+      lastError: 'Maximum delivery attempts reached before the worker recovered.',
+    }),
+  }));
+  expect(mockSendMail).not.toHaveBeenCalled();
+});
+
 test('unsubscribe tokens are signed and reject tampering', () => {
   const token = createUnsubscribeToken({ userId: 'user-1' });
   expect(verifyUnsubscribeToken('user-1', token)).toBe(true);

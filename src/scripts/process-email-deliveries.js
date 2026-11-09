@@ -7,7 +7,10 @@ try {
   const sent = await processPendingEmails({ client: prisma });
   console.log(`Processed ${sent} email delivery(ies).`);
 } catch (error) {
-  console.error('Email delivery processing failed:', error.message);
+  console.error('Email delivery processing failed:', {
+    errorName: typeof error?.name === 'string' ? error.name : 'Error',
+    ...(typeof error?.code === 'string' ? { errorCode: error.code } : {}),
+  });
   process.exitCode = 1;
 } finally {
   await disconnectDatabase();

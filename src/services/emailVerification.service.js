@@ -204,23 +204,40 @@ export const verifyEmailWithCode = async ({ email, code }) => {
     throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
+  const maxAttempts = Number(challenge.maxAttempts ?? getMaxAttempts());
+  if ((challenge.attempts ?? 0) >= maxAttempts) {
+    throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
+  }
+
   const isMatch = verifyHash(normalizedCode, challenge.codeHash);
   if (!isMatch) {
-    const nextAttempts = (challenge.attempts ?? 0) + 1;
-    const maxAttempts = Number(challenge.maxAttempts ?? getMaxAttempts());
-    const updated = await prisma.emailVerificationCode.updateMany({
-      where: { id: challenge.id, usedAt: null },
-      data: { attempts: nextAttempts, ...(nextAttempts >= maxAttempts ? { usedAt: new Date(), expiresAt: new Date(Date.now() - 1000) } : {}) },
+    const now = new Date();
+    await prisma.$transaction(async (transaction) => {
+      const updated = await transaction.emailVerificationCode.updateMany({
+        where: {
+          id: challenge.id,
+          usedAt: null,
+          expiresAt: { gt: now },
+          attempts: { lt: maxAttempts },
+        },
+        data: { attempts: { increment: 1 } },
+      });
+
+      if (updated.count !== 1) {
+        throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
+      }
+
+      const current = await transaction.emailVerificationCode.findUnique({
+        where: { id: challenge.id },
+        select: { attempts: true },
+      });
+      if (current?.attempts >= maxAttempts) {
+        await transaction.emailVerificationCode.updateMany({
+          where: { id: challenge.id, usedAt: null },
+          data: { usedAt: now, expiresAt: new Date(now.getTime() - 1000) },
+        });
+      }
     });
-
-    if (updated.count !== 1) {
-      throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
-    }
-
-    if (nextAttempts >= maxAttempts) {
-      throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
-    }
-
     throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
   }
 
@@ -230,6 +247,7 @@ export const verifyEmailWithCode = async ({ email, code }) => {
         id: challenge.id,
         usedAt: null,
         expiresAt: { gt: new Date() },
+        attempts: { lt: maxAttempts },
       },
       data: { usedAt: new Date() },
     });

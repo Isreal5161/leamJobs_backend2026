@@ -2,6 +2,7 @@ import { jest } from '@jest/globals';
 
 const mockPrisma = {
   $transaction: jest.fn(),
+  $queryRaw: jest.fn(),
   subscription: { findMany: jest.fn() },
   notification: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
 };
@@ -12,6 +13,7 @@ const {
   addBillingInterval,
   expireSubscriptionBatch,
   expireSubscriptions,
+  retryMissingSubscriptionExpiryNotifications,
 } = await import('../src/services/subscriptionLifecycle.service.js');
 
 beforeEach(() => {
@@ -19,6 +21,7 @@ beforeEach(() => {
   mockPrisma.subscription.findMany.mockResolvedValue([]);
   mockPrisma.notification.findFirst.mockResolvedValue(null);
   mockPrisma.notification.findUnique.mockResolvedValue(null);
+  mockPrisma.$queryRaw.mockResolvedValue([]);
   mockPrisma.notification.create.mockResolvedValue({
     id: 'note-1',
     recipientUserId: 'user-1',
@@ -63,6 +66,68 @@ test('expires transitioned subscriptions and records one EXPIRED event in the tr
       metadata: { userId: 'user-1', reason: 'END_DATE_REACHED' },
     },
   });
+});
+
+test('notification failures are logged without rolling back subscription expiration', async () => {
+  const transaction = {
+    $queryRaw: jest.fn().mockResolvedValue([{ id: 'sub-1', userId: 'user-1' }]),
+    subscriptionEvent: { create: jest.fn().mockResolvedValue({ id: 'event-1' }) },
+  };
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
+  mockPrisma.notification.findFirst.mockRejectedValueOnce(new Error('notification storage unavailable'));
+  const logError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  try {
+    await expect(expireSubscriptionBatch({ client: mockPrisma })).resolves.toEqual([
+      { id: 'sub-1', userId: 'user-1' },
+    ]);
+    expect(transaction.subscriptionEvent.create).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith('Subscription expiry notification failed:', expect.objectContaining({
+      subscriptionId: 'sub-1',
+      errorName: 'Error',
+    }));
+  } finally {
+    logError.mockRestore();
+  }
+});
+
+test('retries missing expiry notifications from persisted subscription events', async () => {
+  const persistedEvent = { subscriptionId: 'sub-retry', userId: 'user-retry' };
+  const notificationError = new Error('notification storage unavailable');
+  mockPrisma.$queryRaw
+    .mockResolvedValueOnce([persistedEvent])
+    .mockResolvedValueOnce([persistedEvent]);
+  mockPrisma.notification.findFirst.mockResolvedValue(null);
+  mockPrisma.notification.create
+    .mockRejectedValueOnce(notificationError)
+    .mockResolvedValueOnce({
+      id: 'note-retry',
+      recipientUserId: persistedEvent.userId,
+      actorUserId: null,
+      type: 'INFO',
+      category: 'SUBSCRIPTION',
+      eventKey: `subscription:expired:${persistedEvent.subscriptionId}`,
+      title: 'Subscription expired',
+      message: 'Your subscription has expired. Renew to continue using subscriber benefits.',
+      link: '/seeker/payments',
+      metadata: null,
+      isRead: false,
+      readAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      actor: null,
+    });
+
+  await expect(retryMissingSubscriptionExpiryNotifications(mockPrisma)).rejects.toBe(notificationError);
+  await expect(retryMissingSubscriptionExpiryNotifications(mockPrisma)).resolves.toBe(1);
+
+  expect(mockPrisma.notification.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      recipientUserId: persistedEvent.userId,
+      eventKey: `subscription:expired:${persistedEvent.subscriptionId}`,
+    }),
+  }));
+  expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(2);
 });
 
 test('repeated expiration attempts create no event after the first transition', async () => {
@@ -111,4 +176,69 @@ test('notifies active subscribers once when they enter the three-day reminder wi
       category: 'SUBSCRIPTION',
     }),
   }));
+});
+
+test('surfaces reminder notification failures so the scheduled job can report them', async () => {
+  const notificationError = new Error('notification storage unavailable');
+  const client = {
+    subscription: {
+      findMany: jest.fn().mockResolvedValue([
+        { id: 'sub-1', userId: 'user-1', endDate: new Date(), plan: { displayName: 'Pro' } },
+      ]),
+    },
+    notification: {
+      findFirst: jest.fn().mockRejectedValue(notificationError),
+      findUnique: jest.fn(),
+      create: jest.fn(),
+    },
+  };
+
+  const { notifySubscriptionExpiryReminders } = await import('../src/services/subscriptionLifecycle.service.js');
+  await expect(notifySubscriptionExpiryReminders({ client })).rejects.toBe(notificationError);
+});
+
+test('reminder failures are reported after due subscriptions are expired', async () => {
+  const reminderError = new Error('reminder notification unavailable');
+  mockPrisma.notification.findFirst.mockReset().mockResolvedValue(null);
+  mockPrisma.notification.create.mockReset()
+    .mockResolvedValueOnce({
+      id: 'expiry-notification',
+      recipientUserId: 'user-due',
+      actorUserId: null,
+      type: 'INFO',
+      category: 'SUBSCRIPTION',
+      eventKey: 'subscription:expired:sub-due',
+      title: 'Subscription expired',
+      message: 'Your subscription has expired.',
+      link: '/seeker/payments',
+      metadata: null,
+      isRead: false,
+      readAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      actor: null,
+    })
+    .mockRejectedValueOnce(reminderError);
+  const transaction = {
+    $queryRaw: jest.fn()
+      .mockResolvedValueOnce([{ id: 'sub-due', userId: 'user-due' }])
+      .mockResolvedValueOnce([]),
+    subscriptionEvent: { create: jest.fn().mockResolvedValue({ id: 'event-due' }) },
+  };
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
+  mockPrisma.$queryRaw.mockReset().mockResolvedValue([]);
+  mockPrisma.subscription.findMany.mockReset().mockResolvedValue([
+    { id: 'sub-reminder', userId: 'user-reminder', endDate: new Date(), plan: { displayName: 'Pro' } },
+  ]);
+
+  await expect(expireSubscriptions({ client: mockPrisma, batchSize: 10 })).rejects.toBe(reminderError);
+
+  expect(transaction.subscriptionEvent.create).toHaveBeenCalledWith({
+    data: {
+      subscriptionId: 'sub-due',
+      eventType: 'EXPIRED',
+      metadata: { userId: 'user-due', reason: 'END_DATE_REACHED' },
+    },
+  });
+  expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
 });

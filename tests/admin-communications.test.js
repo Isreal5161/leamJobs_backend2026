@@ -253,6 +253,95 @@ test('campaign send claims a draft once and queues through EmailDelivery', async
   await expect(sendCommunicationCampaign('campaign-1')).resolves.toMatchObject({ status: 'SENT' });
   expect(mockPrisma.emailDelivery.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ recipientUserId: 'user-1', eventKey: 'campaign:1:user-1', emailType: 'PROMOTIONAL_CAMPAIGN' }) }));
   expect(mockPrisma.emailCampaign.updateMany).toHaveBeenCalledWith({ where: { id: 'campaign-1', status: 'DRAFT' }, data: { status: 'SENDING', recipientCount: 1 } });
+  expect(mockPrisma.emailCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: 'campaign-1' },
+    data: expect.objectContaining({ recipientCount: 1 }),
+  }));
+});
+
+test('campaign send queues bounded pages and deduplicates normalized emails across pages', async () => {
+  const campaign = {
+    id: 'campaign-batched',
+    eventKey: 'campaign:batched',
+    subject: 'Update',
+    heading: 'News',
+    body: 'Hello',
+    ctaLabel: null,
+    ctaUrl: null,
+    segment: 'SEEKERS',
+    purpose: 'PROMOTIONAL_MARKETING',
+    operationalContentConfirmed: false,
+    status: 'DRAFT',
+  };
+  const firstBatch = Array.from({ length: 100 }, (_, index) => ({
+    id: `user-${String(index).padStart(3, '0')}`,
+    email: `user-${index}@example.com`,
+  }));
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.user.findMany.mockImplementation(async ({ where }) => (
+    where.id
+      ? [
+        { id: 'user-100', email: ' USER-0@EXAMPLE.COM ' },
+        { id: 'user-101', email: 'last@example.com' },
+      ]
+      : firstBatch
+  ));
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-batched' });
+  mockPrisma.emailCampaign.update.mockImplementation(async ({ data }) => ({
+    ...campaign,
+    ...data,
+    recipientCount: data.recipientCount ?? 101,
+  }));
+
+  await expect(sendCommunicationCampaign(campaign.id)).resolves.toMatchObject({
+    status: 'SENT',
+    recipientCount: 101,
+  });
+
+  expect(mockPrisma.user.findMany).toHaveBeenCalledTimes(2);
+  expect(mockPrisma.user.findMany.mock.calls[0][0]).toEqual(expect.objectContaining({ take: 100 }));
+  expect(mockPrisma.user.findMany.mock.calls[1][0]).toEqual(expect.objectContaining({
+    take: 100,
+    where: expect.objectContaining({ id: { gt: 'user-099' } }),
+  }));
+  expect(mockPrisma.emailDelivery.create).toHaveBeenCalledTimes(101);
+  expect(mockPrisma.emailDelivery.create.mock.calls.at(-1)[0].data.recipientEmail).toBe('last@example.com');
+  expect(mockPrisma.emailCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: { recipientCount: 101 },
+  }));
+});
+
+test('campaign send retries a transient draft-recovery failure after queueing fails', async () => {
+  const campaign = {
+    id: 'campaign-recovery',
+    eventKey: 'campaign:recovery',
+    subject: 'Update',
+    heading: 'News',
+    body: 'Hello',
+    ctaLabel: null,
+    ctaUrl: null,
+    segment: 'SEEKERS',
+    purpose: 'PROMOTIONAL_MARKETING',
+    operationalContentConfirmed: false,
+    status: 'DRAFT',
+  };
+  const queueError = new Error('delivery queue unavailable');
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.user.findMany.mockResolvedValue([{ id: 'user-recovery', email: 'user@example.com' }]);
+  mockPrisma.emailCampaign.updateMany
+    .mockResolvedValueOnce({ count: 1 })
+    .mockRejectedValueOnce(new Error('temporary campaign update failure'))
+    .mockResolvedValueOnce({ count: 1 });
+  mockPrisma.emailDelivery.create.mockRejectedValue(queueError);
+
+  await expect(sendCommunicationCampaign(campaign.id)).rejects.toBe(queueError);
+
+  expect(mockPrisma.emailCampaign.updateMany).toHaveBeenCalledTimes(3);
+  expect(mockPrisma.emailCampaign.updateMany).toHaveBeenLastCalledWith({
+    where: { id: campaign.id, status: 'SENDING' },
+    data: { status: 'DRAFT' },
+  });
 });
 
 const campaignRecord = (overrides = {}) => ({

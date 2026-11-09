@@ -4,6 +4,7 @@ import { recordSubscriptionEvent } from './subscriptionFoundation.service.js';
 import { createNotification } from './notification.service.js';
 
 const DEFAULT_BATCH_SIZE = 100;
+const MAX_BATCH_SIZE = 100;
 const EXPIRY_REMINDER_DAYS = 3;
 
 export const isSubscriptionCurrentlyActive = (subscription, now = new Date()) => (
@@ -61,7 +62,7 @@ const normalizeBatchSize = (value) => {
   if (!Number.isInteger(batchSize) || batchSize < 1) {
     return DEFAULT_BATCH_SIZE;
   }
-  return Math.min(batchSize, 1000);
+  return Math.min(batchSize, MAX_BATCH_SIZE);
 };
 
 const expireBatchInTransaction = async (transaction, { userId, batchSize }) => {
@@ -99,6 +100,19 @@ const expireBatchInTransaction = async (transaction, { userId, batchSize }) => {
         reason: 'END_DATE_REACHED',
       },
     }, transaction);
+  }
+
+  return expired;
+};
+
+export const expireSubscriptionBatch = async ({ userId, batchSize = DEFAULT_BATCH_SIZE, client = prisma } = {}) => {
+  const normalizedBatchSize = normalizeBatchSize(batchSize);
+  const expired = await client.$transaction((transaction) => expireBatchInTransaction(transaction, {
+    userId,
+    batchSize: normalizedBatchSize,
+  }));
+
+  for (const subscription of expired) {
     await createNotification({
       recipientUserId: subscription.userId,
       type: 'INFO',
@@ -107,18 +121,45 @@ const expireBatchInTransaction = async (transaction, { userId, batchSize }) => {
       title: 'Subscription expired',
       message: 'Your subscription has expired. Renew to continue using subscriber benefits.',
       link: '/seeker/payments',
-    }, transaction).catch(() => undefined);
+    }, client).catch((error) => console.error('Subscription expiry notification failed:', {
+      subscriptionId: subscription.id,
+      errorName: typeof error?.name === 'string' ? error.name : 'Error',
+      ...(typeof error?.code === 'string' ? { errorCode: error.code } : {}),
+    }));
   }
-
   return expired;
 };
 
-export const expireSubscriptionBatch = async ({ userId, batchSize = DEFAULT_BATCH_SIZE, client = prisma } = {}) => {
-  const normalizedBatchSize = normalizeBatchSize(batchSize);
-  return client.$transaction((transaction) => expireBatchInTransaction(transaction, {
-    userId,
-    batchSize: normalizedBatchSize,
-  }));
+export const retryMissingSubscriptionExpiryNotifications = async (client = prisma) => {
+  const missingNotifications = await client.$queryRaw(Prisma.sql`
+    SELECT subscription."id" AS "subscriptionId", subscription."userId"
+    FROM "SubscriptionEvent" AS event
+    JOIN "Subscription" AS subscription
+      ON subscription."id" = event."subscriptionId"
+    WHERE event."eventType" = 'EXPIRED'::"SubscriptionEventType"
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "Notification" AS notification
+        WHERE notification."recipientUserId" = subscription."userId"
+          AND notification."eventKey" = 'subscription:expired:' || subscription."id"
+      )
+    ORDER BY event."occurredAt" ASC, event."id" ASC
+    LIMIT ${MAX_BATCH_SIZE}
+  `);
+
+  for (const subscription of missingNotifications) {
+    await createNotification({
+      recipientUserId: subscription.userId,
+      type: 'INFO',
+      category: 'SUBSCRIPTION',
+      eventKey: `subscription:expired:${subscription.subscriptionId}`,
+      title: 'Subscription expired',
+      message: 'Your subscription has expired. Renew to continue using subscriber benefits.',
+      link: '/seeker/payments',
+    }, client);
+  }
+
+  return missingNotifications.length;
 };
 
 export const reconcileExpiredSubscriptionsForUser = async (userId, client = prisma) => {
@@ -153,7 +194,7 @@ const notifySubscriptionExpiryReminderBatch = async ({ batchSize, afterId, clien
     message: `Your ${subscription.plan?.displayName ?? 'subscription'} expires in 3 days.`,
     link: '/seeker/payments',
     metadata: { endDate: subscription.endDate },
-  }, client).catch(() => undefined)));
+  }, client)));
 
   return subscriptions;
 };
@@ -172,14 +213,17 @@ export const notifySubscriptionExpiryReminders = async ({ batchSize = DEFAULT_BA
 
 export const expireSubscriptions = async ({ batchSize = DEFAULT_BATCH_SIZE, client = prisma } = {}) => {
   const normalizedBatchSize = normalizeBatchSize(batchSize);
-  await notifySubscriptionExpiryReminders({ batchSize: normalizedBatchSize, client });
   let totalExpired = 0;
 
   while (true) {
     const expired = await expireSubscriptionBatch({ batchSize: normalizedBatchSize, client });
     totalExpired += expired.length;
     if (expired.length < normalizedBatchSize) {
-      return totalExpired;
+      break;
     }
   }
+
+  await retryMissingSubscriptionExpiryNotifications(client);
+  await notifySubscriptionExpiryReminders({ batchSize: normalizedBatchSize, client });
+  return totalExpired;
 };

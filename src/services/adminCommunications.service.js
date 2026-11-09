@@ -14,6 +14,8 @@ const registeredRoles = ['SEEKER', 'EMPLOYER'];
 const templateSelect = { id: true, key: true, name: true, kind: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, isActive: true, updatedAt: true };
 const campaignSelect = { id: true, eventKey: true, subject: true, heading: true, body: true, ctaLabel: true, ctaUrl: true, segment: true, purpose: true, operationalContentConfirmed: true, status: true, recipientCount: true, createdById: true, sentAt: true, createdAt: true, updatedAt: true };
 const deliveryReportSelect = { id: true, recipientEmail: true, status: true, attempts: true, createdAt: true, sentAt: true, lastError: true, suppressionReason: true };
+const CAMPAIGN_RECIPIENT_BATCH_SIZE = 100;
+const CAMPAIGN_RECOVERY_ATTEMPTS = 3;
 const normalizeFields = (input) => ({
   subject: String(input.subject ?? '').trim(),
   heading: String(input.heading ?? '').trim(),
@@ -88,8 +90,7 @@ const assertPurposeSegment = (purpose, segment) => {
   }
 };
 
-const uniqueValidRecipients = (recipients) => {
-  const seen = new Set();
+const uniqueValidRecipients = (recipients, seen = new Set()) => {
   return recipients.filter((recipient) => {
     const email = normalizeEmail(recipient.email);
     if (!isValidEmail(email) || seen.has(email)) return false;
@@ -98,26 +99,77 @@ const uniqueValidRecipients = (recipients) => {
   }).map((recipient) => ({ ...recipient, email: normalizeEmail(recipient.email) }));
 };
 
-export const getEligibleCampaignRecipients = async (purpose, segment, client = prisma) => {
+export async function* getEligibleCampaignRecipientBatches(purpose, segment, client = prisma) {
   assertPurposeSegment(purpose, segment);
-  if (segment === 'PUBLIC_JOB_SUBSCRIBERS') {
-    const recipients = await client.publicJobSubscriber.findMany({
-      where: { isSubscribed: true, email: { not: '' } },
-      select: { id: true, email: true, unsubscribeHash: true },
+  const seen = new Set();
+  const isPublicSubscriberSegment = segment === 'PUBLIC_JOB_SUBSCRIBERS';
+  const role = segment === 'SEEKERS' ? 'SEEKER' : segment === 'EMPLOYERS' ? 'EMPLOYER' : undefined;
+  const where = isPublicSubscriberSegment
+    ? { isSubscribed: true, email: { not: '' } }
+    : {
+      isActive: true,
+      anonymizedAt: null,
+      role: role ?? { in: registeredRoles },
+      email: { not: '' },
+      ...(purpose === 'PROMOTIONAL_MARKETING' ? { marketingEmailsEnabled: true } : {}),
+    };
+  const select = isPublicSubscriberSegment
+    ? { id: true, email: true, unsubscribeHash: true }
+    : { id: true, email: true };
+  const source = isPublicSubscriberSegment ? client.publicJobSubscriber : client.user;
+  let afterId;
+
+  while (true) {
+    const recipients = await source.findMany({
+      where: { ...where, ...(afterId ? { id: { gt: afterId } } : {}) },
+      orderBy: { id: 'asc' },
+      take: CAMPAIGN_RECIPIENT_BATCH_SIZE,
+      select,
     });
-    return uniqueValidRecipients(recipients);
+    if (recipients.length === 0) return;
+
+    const uniqueRecipients = uniqueValidRecipients(recipients, seen);
+    if (uniqueRecipients.length > 0) yield uniqueRecipients;
+    if (recipients.length < CAMPAIGN_RECIPIENT_BATCH_SIZE) return;
+    afterId = recipients[recipients.length - 1].id;
+  }
+}
+
+export const getEligibleCampaignRecipients = async (purpose, segment, client = prisma) => {
+  const recipients = [];
+  for await (const batch of getEligibleCampaignRecipientBatches(purpose, segment, client)) {
+    recipients.push(...batch);
+  }
+  return recipients;
+};
+
+export const countEligibleCampaignRecipients = async (purpose, segment, client = prisma) => {
+  let count = 0;
+  for await (const batch of getEligibleCampaignRecipientBatches(purpose, segment, client)) {
+    count += batch.length;
+  }
+  return count;
+};
+
+const restoreCampaignDraftAfterFailure = async (campaignId) => {
+  let lastError;
+  for (let attempt = 1; attempt <= CAMPAIGN_RECOVERY_ATTEMPTS; attempt += 1) {
+    try {
+      const restored = await prisma.emailCampaign.updateMany({
+        where: { id: campaignId, status: 'SENDING' },
+        data: { status: 'DRAFT' },
+      });
+      if (restored.count === 1) return;
+      throw new Error('Campaign was no longer in SENDING state during failure recovery');
+    } catch (error) {
+      lastError = error;
+      if (attempt < CAMPAIGN_RECOVERY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+      }
+    }
   }
 
-  const role = segment === 'SEEKERS' ? 'SEEKER' : segment === 'EMPLOYERS' ? 'EMPLOYER' : undefined;
-  const where = {
-    isActive: true,
-    anonymizedAt: null,
-    role: role ?? { in: registeredRoles },
-    email: { not: '' },
-    ...(purpose === 'PROMOTIONAL_MARKETING' ? { marketingEmailsEnabled: true } : {}),
-  };
-  const recipients = await client.user.findMany({ where, select: { id: true, email: true } });
-  return uniqueValidRecipients(recipients);
+  throw lastError;
 };
 
 export const createPromotionalCampaign = async (adminId, input) => {
@@ -184,11 +236,11 @@ export const previewPromotionalCampaign = async (campaignId) => {
   if (purpose === 'ESSENTIAL_ANNOUNCEMENT' && campaign.operationalContentConfirmed !== true) {
     throw Object.assign(new Error('Essential announcement confirmation is required'), { status: 409 });
   }
-  const recipients = await getEligibleCampaignRecipients(purpose, campaign.segment);
+  const recipientCount = await countEligibleCampaignRecipients(purpose, campaign.segment);
   const isMarketing = purpose === 'PROMOTIONAL_MARKETING';
   const unsubscribeUrl = isMarketing ? publicUrl('/unsubscribe-marketing?token=example') : null;
   const emailType = isMarketing ? EMAIL_TYPES.PROMOTIONAL_CAMPAIGN : EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT;
-  return { campaign, recipientCount: recipients.length, ...renderEmailTemplate(emailType, { title: campaign.subject, heading: campaign.heading, message: campaign.body, link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null, linkLabel: campaign.ctaLabel, isMarketing, unsubscribeUrl }) };
+  return { campaign, recipientCount, ...renderEmailTemplate(emailType, { title: campaign.subject, heading: campaign.heading, message: campaign.body, link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null, linkLabel: campaign.ctaLabel, isMarketing, unsubscribeUrl }) };
 };
 
 export const sendCommunicationCampaign = async (campaignId) => {
@@ -200,38 +252,67 @@ export const sendCommunicationCampaign = async (campaignId) => {
   if (purpose === 'ESSENTIAL_ANNOUNCEMENT' && campaign.operationalContentConfirmed !== true) {
     throw Object.assign(new Error('Essential announcement confirmation is required'), { status: 409 });
   }
-  const recipients = await getEligibleCampaignRecipients(purpose, campaign.segment);
-  if (!recipients.length) throw Object.assign(new Error('This campaign has no eligible recipients'), { status: 409 });
-  const claimed = await prisma.emailCampaign.updateMany({ where: { id: campaign.id, status: 'DRAFT' }, data: { status: 'SENDING', recipientCount: recipients.length } });
+  const recipientBatches = getEligibleCampaignRecipientBatches(purpose, campaign.segment);
+  const firstBatch = await recipientBatches.next();
+  if (firstBatch.done) throw Object.assign(new Error('This campaign has no eligible recipients'), { status: 409 });
+  const claimed = await prisma.emailCampaign.updateMany({ where: { id: campaign.id, status: 'DRAFT' }, data: { status: 'SENDING', recipientCount: firstBatch.value.length } });
   if (claimed.count !== 1) throw Object.assign(new Error('This campaign has already been sent or is being processed'), { status: 409 });
   const isMarketing = purpose === 'PROMOTIONAL_MARKETING';
   const emailType = isMarketing ? EMAIL_TYPES.PROMOTIONAL_CAMPAIGN : EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT;
   const unsubscribeUrl = (userId) => publicUrl(`/unsubscribe-marketing?token=${encodeURIComponent(createMarketingUnsubscribeToken(userId))}`);
   try {
-    await Promise.all(recipients.map((recipient) => queueEmail({
-    ...(campaign.segment !== 'PUBLIC_JOB_SUBSCRIBERS' ? { recipientUserId: recipient.id } : {}),
-    ...(campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? { publicSubscriberId: recipient.id } : {}),
-    emailType,
-    communicationPurpose: purpose,
-    eventKey: `${campaign.eventKey}:${recipient.id}`,
-    recipientEmail: recipient.email,
-    context: {
-      title: campaign.subject,
-      heading: campaign.heading,
-      message: campaign.body,
-      link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null,
-      linkLabel: campaign.ctaLabel,
-      isMarketing,
-      ...(isMarketing ? {
-        unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
-          ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${recipient.unsubscribeHash}`)}`)
-          : unsubscribeUrl(recipient.id),
-      } : {}),
-    },
-    })));
-    return prisma.emailCampaign.update({ where: { id: campaign.id }, data: { status: 'SENT', sentAt: new Date() }, select: campaignSelect });
+    let recipients = firstBatch.value;
+    let queuedCount = 0;
+    while (true) {
+      const queued = await Promise.allSettled(recipients.map((recipient) => queueEmail({
+        ...(campaign.segment !== 'PUBLIC_JOB_SUBSCRIBERS' ? { recipientUserId: recipient.id } : {}),
+        ...(campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? { publicSubscriberId: recipient.id } : {}),
+        emailType,
+        communicationPurpose: purpose,
+        eventKey: `${campaign.eventKey}:${recipient.id}`,
+        recipientEmail: recipient.email,
+        context: {
+          title: campaign.subject,
+          heading: campaign.heading,
+          message: campaign.body,
+          link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null,
+          linkLabel: campaign.ctaLabel,
+          isMarketing,
+          ...(isMarketing ? {
+            unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
+              ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${recipient.unsubscribeHash}`)}`)
+              : unsubscribeUrl(recipient.id),
+          } : {}),
+        },
+      })));
+      const failedQueue = queued.find((result) => result.status === 'rejected');
+      if (failedQueue) throw failedQueue.reason;
+      queuedCount += recipients.length;
+      await prisma.emailCampaign.update({ where: { id: campaign.id }, data: { recipientCount: queuedCount } });
+      const nextBatch = await recipientBatches.next();
+      if (nextBatch.done) break;
+      recipients = nextBatch.value;
+    }
+    return prisma.emailCampaign.update({
+      where: { id: campaign.id },
+      data: { status: 'SENT', sentAt: new Date() },
+      select: campaignSelect,
+    });
   } catch (error) {
-    await prisma.emailCampaign.update({ where: { id: campaign.id }, data: { status: 'DRAFT' } }).catch(() => undefined);
+    try {
+      await restoreCampaignDraftAfterFailure(campaign.id);
+    } catch (recoveryError) {
+      console.error('Campaign failed and draft recovery did not complete:', {
+        campaignId: campaign.id,
+        errorName: typeof recoveryError?.name === 'string' ? recoveryError.name : 'Error',
+        ...(typeof recoveryError?.code === 'string' ? { errorCode: recoveryError.code } : {}),
+      });
+      throw new AggregateError(
+        [error, recoveryError],
+        'Campaign failed and could not be returned to draft.',
+        { cause: error },
+      );
+    }
     throw error;
   }
 };

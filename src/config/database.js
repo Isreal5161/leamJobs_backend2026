@@ -23,14 +23,9 @@ export const getPrismaClient = () => {
  * @throws {Error} If database connection fails
  */
 export const connectDatabase = async () => {
-  try {
-    const prisma = getPrismaClient();
-    await prisma.$connect();
-    console.log('✓ Database connected successfully');
-  } catch (error) {
-    console.error('✗ Failed to connect to database:', error.message);
-    process.exit(1);
-  }
+  const prisma = getPrismaClient();
+  await prisma.$connect();
+  console.log('✓ Database connected successfully');
 };
 
 /**
@@ -76,4 +71,3 @@ export const disconnectDatabase = async () => {
 
 // Export the singleton instance for direct use
 export const prisma = getPrismaClient();
-

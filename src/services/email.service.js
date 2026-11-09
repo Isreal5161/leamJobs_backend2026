@@ -46,6 +46,7 @@ export const normalizeEmail = (value) => String(value ?? '').trim().toLowerCase(
 export const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const safeHeader = (value) => String(value ?? '').replace(/[\r\n]/g, ' ').trim();
 const retryDelay = (attempts) => Math.min(24 * 60 * 60 * 1000, 5 * 60 * 1000 * (2 ** Math.max(0, attempts - 1)));
+const MAX_EMAIL_ATTEMPTS = 8;
 
 let transport;
 const getTransport = () => {
@@ -209,7 +210,7 @@ export const processPendingEmails = async ({ batchSize = 50, client = prisma } =
   const deliveries = await client.emailDelivery.findMany({
     where: {
       OR: [
-        { status: { in: ['PENDING', 'FAILED'] }, nextAttemptAt: { lte: now } },
+        { status: { in: ['PENDING', 'FAILED'] }, attempts: { lt: MAX_EMAIL_ATTEMPTS }, nextAttemptAt: { lte: now } },
         { status: 'PROCESSING', updatedAt: { lt: staleProcessingBefore } },
       ],
     },
@@ -220,10 +221,21 @@ export const processPendingEmails = async ({ batchSize = 50, client = prisma } =
   let sent = 0;
   for (const delivery of deliveries) {
     const claimed = await client.emailDelivery.updateMany({
-      where: { id: delivery.id, status: delivery.status },
+      where: { id: delivery.id, status: delivery.status, updatedAt: delivery.updatedAt },
       data: { status: 'PROCESSING' },
     });
     if (claimed.count !== 1) continue;
+    if (delivery.attempts >= MAX_EMAIL_ATTEMPTS) {
+      await client.emailDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          status: 'FAILED',
+          lastError: 'Maximum delivery attempts reached before the worker recovered.',
+          nextAttemptAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+        },
+      });
+      continue;
+    }
     if ([EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT].includes(delivery.emailType)) {
       const suppressionReason = await recheckCampaignDelivery(delivery, client);
       if (suppressionReason) {

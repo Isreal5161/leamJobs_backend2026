@@ -5,6 +5,7 @@ process.env.NODE_ENV = 'test';
 const mockScheduleCallbacks = [];
 const mockScheduleHandles = [];
 const mockDisconnectDatabase = jest.fn().mockResolvedValue(undefined);
+const mockProcessJobAlerts = jest.fn();
 const mockProcessPendingRecovery = jest.fn();
 const mockServerClose = jest.fn();
 const mockHandlers = {};
@@ -31,14 +32,16 @@ jest.unstable_mockModule('node-cron', () => ({
   },
 }));
 jest.unstable_mockModule('../src/services/jobAlerts.service.js', () => ({
-  processJobAlerts: jest.fn().mockResolvedValue(undefined),
+  processJobAlerts: mockProcessJobAlerts,
 }));
 jest.unstable_mockModule('../src/services/contractPayment.service.js', () => ({
   processPendingContractWebhookEvents: mockProcessPendingRecovery,
 }));
 
-test('shutdown stops cron and waits for active contract webhook recovery before disconnecting', async () => {
+test('shutdown stops cron and waits for active scheduled work before disconnecting', async () => {
+  let finishJobAlerts;
   let finishRecovery;
+  mockProcessJobAlerts.mockReturnValue(new Promise((resolve) => { finishJobAlerts = resolve; }));
   mockProcessPendingRecovery.mockReturnValue(new Promise((resolve) => { finishRecovery = resolve; }));
   mockServerClose.mockImplementation((callback) => { mockHandlers.serverClose = callback(); });
   const onSpy = jest.spyOn(process, 'on').mockImplementation((event, handler) => {
@@ -51,10 +54,15 @@ test('shutdown stops cron and waits for active contract webhook recovery before 
     await import('../src/server.js');
     await new Promise(setImmediate);
 
+    mockScheduleCallbacks[0]();
     mockScheduleCallbacks[1]();
     mockHandlers.SIGTERM();
     expect(mockScheduleHandles.map(({ stop }) => stop)).toHaveLength(2);
     expect(mockScheduleHandles.every(({ stop }) => stop.mock.calls.length === 1)).toBe(true);
+    expect(mockDisconnectDatabase).not.toHaveBeenCalled();
+
+    finishJobAlerts();
+    await new Promise(setImmediate);
     expect(mockDisconnectDatabase).not.toHaveBeenCalled();
 
     finishRecovery();

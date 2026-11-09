@@ -44,6 +44,15 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+// Apply request limits before parsing untrusted bodies.
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  skip: (req) => req.path.startsWith('/api/auth/'),
+  message: 'Too many requests from this IP, please try again later.',
+});
+app.use(limiter);
+
 app.post('/api/payments/paystack/webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 app.post('/api/payments/paystack/withdrawal-webhook', express.raw({ type: 'application/json', limit: '1mb' }), paystackWithdrawalWebhook);
 
@@ -52,16 +61,6 @@ app.use('/api/auth', authBodyIpLimiter, express.json({ limit: '32kb' }), express
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  skip: (req) => req.path.startsWith('/api/auth/'),
-  message: 'Too many requests from this IP, please try again later.',
-});
-
-app.use(limiter);
 app.get('/api/payments/paystack/contract-return', paystackContractReturn);
 
 // Health check route - basic application health
