@@ -86,6 +86,22 @@ describe('admin authorization middleware', () => {
     expect(res.json).toHaveBeenCalledWith({ message: 'Forbidden' });
   });
 
+  test('suspended staff cannot load admin context or perform protected actions', async () => {
+    mockPrisma.adminAccount.findUnique
+      .mockResolvedValueOnce({ ...adminRecord(), suspendedAt: new Date() })
+      .mockResolvedValueOnce({ ...adminRecord(), suspendedAt: new Date() });
+    const req = { user: { sub: 'staff-1', role: 'ADMIN' } };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await loadAdminContext(req, res, next);
+    await requireAdminPermission('jobs.view')(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(mockPrisma.adminPermission.findUnique).not.toHaveBeenCalled();
+  });
+
   test('JWT and request-body permission claims cannot elevate staff access', async () => {
     mockPrisma.adminAccount.findUnique.mockResolvedValue(adminRecord());
     mockPrisma.adminPermission.findUnique.mockResolvedValue({ key: 'jobs.view', isEnabled: true });
