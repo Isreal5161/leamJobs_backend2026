@@ -4,6 +4,10 @@ const migration = readFileSync(
   new URL('../prisma/migrations/20261104130000_add_multi_admin_foundation/migration.sql', import.meta.url),
   'utf8',
 );
+const contractManagementMigration = readFileSync(
+  new URL('../prisma/migrations/20261110100000_add_admin_contract_management_permissions/migration.sql', import.meta.url),
+  'utf8',
+);
 const schema = readFileSync(new URL('../prisma/schema.prisma', import.meta.url), 'utf8');
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 
@@ -103,5 +107,13 @@ describe('Multi-admin foundation migration', () => {
     expect(migration).toContain('finance.providerRecovery.execute');
     expect(migration).not.toMatch(/'staff\.[^']+'/i);
     expect(migration).not.toMatch(/'[^']*(?:staff|admin)[^']*\.(?:invite|permissions|suspend|reactivate)[^']*'/i);
+  });
+
+  test('adds contract cancel and archive permissions without granting existing staff access', () => {
+    expect(contractManagementMigration).toContain("'contracts.cancel'");
+    expect(contractManagementMigration).toContain("'contracts.archive'");
+    expect(contractManagementMigration).toContain('ON CONFLICT ("key") DO NOTHING');
+    expect(contractManagementMigration).not.toMatch(/INSERT\s+INTO\s+"AdminPermissionGrant"/i);
+    expect(contractManagementMigration).not.toMatch(/INSERT\s+INTO\s+"AdminInvitationPermission"/i);
   });
 });

@@ -89,6 +89,7 @@ const mockPrisma = {
   financialLedgerEntry: { findFirst: jest.fn() },
   financialAuditLog: { findFirst: jest.fn() },
   dispute: { findFirst: jest.fn() },
+  providerWebhookEvent: { findFirst: jest.fn() },
   job: { update: jest.fn() },
   $transaction: jest.fn(),
   $queryRaw: jest.fn(),
@@ -134,6 +135,7 @@ const prepareCancellation = (escrow = escrowRecord(), type = 'FREELANCE_PROJECT'
   mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
   mockPrisma.financialAuditLog.findFirst.mockResolvedValue(null);
   mockPrisma.dispute.findFirst.mockResolvedValue(null);
+  mockPrisma.providerWebhookEvent.findFirst.mockResolvedValue(null);
   return contract;
 };
 

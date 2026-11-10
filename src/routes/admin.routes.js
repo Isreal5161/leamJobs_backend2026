@@ -19,6 +19,12 @@ import {
 import { getAdminSupportRequests, patchAdminSupportRequest } from '../controllers/premiumSeeker.controller.js';
 import { validateSupportUpdate } from '../validators/premiumSeeker.validation.js';
 import { listReleaseCandidates, releaseContract } from '../controllers/adminRelease.controller.js';
+import {
+  archiveAdminContract,
+  cancelAdminContract,
+  getAdminContract,
+  listAdminContracts,
+} from '../controllers/adminContracts.controller.js';
 import { getAdminDispute, listAdminDisputes, resolveDispute } from '../controllers/contractDispute.controller.js';
 import { validateAdminDisputeId, validateDisputeResolution } from '../validators/contractDispute.validation.js';
 import { listUsers } from '../controllers/adminUsers.controller.js';
@@ -45,7 +51,6 @@ import {
 import {
   confirmAdminCompletion,
   confirmAdminContract,
-  getAdminContract,
   initializeAdminContractPayment,
   verifyAdminContractPayment,
 } from '../controllers/contract.controller.js';
@@ -57,6 +62,8 @@ import {
   listAdminPaymentsController,
 } from '../controllers/adminPayments.controller.js';
 import { validateAdminConversionOperationsQuery } from '../validators/adminConversionOperations.validation.js';
+import { validateAdminContractsQuery } from '../validators/adminContracts.validation.js';
+import { validateContractId } from '../validators/contract.validation.js';
 import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription, trialSettings, updateTrialSettings } from '../controllers/adminSubscriptions.controller.js';
 import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId, validateAdminSubscriptionTrialSettings } from '../validators/adminSubscriptions.validation.js';
 import { executeWithdrawalController, reconcileWithdrawalController, recoverFlutterwaveTransferController } from '../controllers/withdrawal.controller.js';
@@ -127,11 +134,14 @@ adminRouter.patch('/jobs/:jobId/applications/:applicationId/status', requireAdmi
 adminRouter.post('/jobs/:jobId/applications/:applicationId/select-contract', requireAdminPermission('applications.select'), selectAdminContractApplicationController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/resume', requireAdminPermission('applicants.documents.view'), getAdminApplicationResumeController);
 adminRouter.get('/jobs/:jobId/applications/:applicationId/profile-picture', requireAdminPermission('applicants.documents.view'), getAdminApplicationProfilePictureController);
+adminRouter.get('/contracts', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), validateAdminContractsQuery, listAdminContracts);
 adminRouter.get('/contracts/release-eligible', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), createPageLimitValidator({ defaultLimit: 20, maxLimit: 50 }), listReleaseCandidates);
 adminRouter.get('/disputes', requireAdminPermission('disputes.view'), createPageLimitValidator({ defaultLimit: 20, maxLimit: 100 }), listAdminDisputes);
 adminRouter.get('/disputes/:disputeId', requireAdminPermission('disputes.view'), validateAdminDisputeId, getAdminDispute);
 adminRouter.patch('/contracts/:contractId/disputes/:disputeId', requireAdminPermission('disputes.resolve'), validateDisputeResolution, resolveDispute);
-adminRouter.get('/contracts/:contractId', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), getAdminContract);
+adminRouter.get('/contracts/:contractId', requireAdminPermissions(['contracts.view', 'finance.contractFunding.view']), validateContractId, getAdminContract);
+adminRouter.post('/contracts/:contractId/cancel', requireAdminPermission('contracts.cancel'), validateContractId, cancelAdminContract);
+adminRouter.post('/contracts/:contractId/archive', requireAdminPermission('contracts.archive'), validateContractId, archiveAdminContract);
 adminRouter.post('/contracts/:contractId/confirm', requireAdminPermission('contracts.confirm'), confirmAdminContract);
 adminRouter.post('/contracts/:contractId/payment', requireAdminPermission('finance.contractFunding.execute'), validateContractPayment, initializeAdminContractPayment);
 adminRouter.post('/contracts/:contractId/payment/verify', requireAdminPermission('finance.contractFunding.execute'), validateContractPaymentVerification, verifyAdminContractPayment);

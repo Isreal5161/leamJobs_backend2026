@@ -6,8 +6,15 @@ const migration = readFileSync(
   new URL('../prisma/migrations/20261104130000_add_multi_admin_foundation/migration.sql', import.meta.url),
   'utf8',
 );
+const contractManagementMigration = readFileSync(
+  new URL('../prisma/migrations/20261110100000_add_admin_contract_management_permissions/migration.sql', import.meta.url),
+  'utf8',
+);
 const seededPermissions = new Set(
-  [...migration.matchAll(/\('([^']+)', '[^']+', '[^']+'\)/g)].map((match) => match[1]),
+  [
+    ...[...migration.matchAll(/\('([^']+)', '[^']+', '[^']+'\)/g)].map((match) => match[1]),
+    ...[...contractManagementMigration.matchAll(/\('([^']+)', '[^']+', '[^']+', TRUE,/g)].map((match) => match[1]),
+  ],
 );
 
 const routeLayers = adminRouter.stack.filter((layer) => layer.route);
@@ -55,11 +62,14 @@ const expectedPermissionsByRoute = new Map([
   ['POST /jobs/:jobId/applications/:applicationId/select-contract', ['applications.select']],
   ['GET /jobs/:jobId/applications/:applicationId/resume', ['applicants.documents.view']],
   ['GET /jobs/:jobId/applications/:applicationId/profile-picture', ['applicants.documents.view']],
+  ['GET /contracts', ['contracts.view', 'finance.contractFunding.view']],
   ['GET /contracts/release-eligible', ['contracts.view', 'finance.contractFunding.view']],
   ['GET /disputes', ['disputes.view']],
   ['GET /disputes/:disputeId', ['disputes.view']],
   ['PATCH /contracts/:contractId/disputes/:disputeId', ['disputes.resolve']],
   ['GET /contracts/:contractId', ['contracts.view', 'finance.contractFunding.view']],
+  ['POST /contracts/:contractId/cancel', ['contracts.cancel']],
+  ['POST /contracts/:contractId/archive', ['contracts.archive']],
   ['POST /contracts/:contractId/confirm', ['contracts.confirm']],
   ['POST /contracts/:contractId/payment', ['finance.contractFunding.execute']],
   ['POST /contracts/:contractId/payment/verify', ['finance.contractFunding.execute']],

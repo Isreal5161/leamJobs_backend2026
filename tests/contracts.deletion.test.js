@@ -136,6 +136,7 @@ test.each([
     data: { employerArchivedAt: expect.any(Date) },
     select: { id: true },
   });
+  expect(mockPrisma.$transaction).toHaveBeenCalledWith(expect.any(Function));
 });
 
 test.each([

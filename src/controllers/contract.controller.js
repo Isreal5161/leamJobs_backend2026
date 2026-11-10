@@ -56,14 +56,6 @@ export const getEmployerContracts = async (req, res, next) => {
   } catch (error) { return next(error); }
 };
 
-export const getAdminContract = async (req, res, next) => {
-  try {
-    const employerId = await getCanonicalLeamJobsEmployerId();
-    const contract = await getContractForParty({ contractId: req.params.contractId, userId: employerId, role: 'EMPLOYER' });
-    return res.status(200).json({ success: true, data: { contract } });
-  } catch (error) { return next(error); }
-};
-
 export const getSeekerContract = async (req, res, next) => {
   try {
     const contract = await getContractForParty({ contractId: req.params.contractId, userId: req.user.sub, role: 'SEEKER' });
