@@ -285,8 +285,8 @@ export const hasNoContractFinancialHistory = async (client, contractId, escrowId
   return !payments && !ledgerEntry && !dispute && !financialAuditLog;
 };
 
-export const canPossiblyCancelContract = (contract) => {
-  const commonLifecycle = contract.freelanceDetails?.workStatus === 'PENDING'
+const hasUnfundedCancellationLifecycle = (contract) => (
+  contract.freelanceDetails?.workStatus === 'PENDING'
     && !contract.freelanceDetails?.completionSubmittedAt
     && !contract.freelanceDetails?.employerConfirmedAt
     && !contract.freelanceDetails?.seekerConfirmedAt
@@ -296,8 +296,11 @@ export const canPossiblyCancelContract = (contract) => {
     && !contract.cancelledAt
     && contractAssociationsMatch(contract)
     && contractTypeMatchesJob(contract)
-    && hasConsistentUnfundedEscrow(contract.freelanceDetails?.escrow);
-  if (!commonLifecycle) return false;
+    && hasConsistentUnfundedEscrow(contract.freelanceDetails?.escrow)
+);
+
+export const canPossiblyCancelContract = (contract) => {
+  if (!hasUnfundedCancellationLifecycle(contract)) return false;
 
   if (contract.type === 'FREELANCE_PROJECT') {
     return ['PENDING', 'ACTIVE'].includes(contract.status)
@@ -308,6 +311,18 @@ export const canPossiblyCancelContract = (contract) => {
     && contract.status === 'PENDING'
     && contract.application?.status === 'PAYMENT_PENDING';
 };
+
+const canPossiblyCancelAdminContract = (contract) => (
+  !contract.employerArchivedAt
+  && !contract.freelanceDetails?.escrow?.conversionOperation
+  && (
+    canPossiblyCancelContract(contract)
+    || (hasUnfundedCancellationLifecycle(contract)
+      && contract.type === 'CONTRACT_PROJECT'
+      && contract.status === 'PENDING'
+      && contract.application?.status === 'ACCEPTED')
+  )
+);
 
 export const isSafelyCancelledContract = async (client, contract) => {
   const escrow = contract.freelanceDetails?.escrow;
@@ -478,7 +493,12 @@ const isEligibleForEmployerDeletion = async (client, contract, cancellationHisto
   return isSafelyReleasedContract(client, contract);
 };
 
-const contractActions = (contract, cancellationHistoryClear = false, deletionAvailable = false) => {
+const contractActions = (
+  contract,
+  cancellationHistoryClear = false,
+  deletionAvailable = false,
+  cancellationEligibility = canPossiblyCancelContract,
+) => {
   const details = contract.freelanceDetails;
   const escrow = details?.escrow;
   const payments = escrow?.payments ?? [];
@@ -491,7 +511,7 @@ const contractActions = (contract, cancellationHistoryClear = false, deletionAva
   return {
     fund: Boolean(fundableStatus && escrow && ['UNFUNDED', 'FUNDING'].includes(escrow.status)),
     cancel: Boolean(
-      canPossiblyCancelContract(contract)
+      cancellationEligibility(contract)
       && !contractHasFinancialActivity
       && cancellationHistoryClear
       && (escrow
@@ -515,7 +535,14 @@ export const isContractCancellationAvailable = (contract, cancellationHistoryCle
   contractActions(contract, cancellationHistoryClear).cancel
 );
 
-export const mapContract = (contract, { cancellationHistoryClear = false, deletionAvailable = false } = {}) => ({
+export const mapContract = (
+  contract,
+  {
+    cancellationHistoryClear = false,
+    deletionAvailable = false,
+    cancellationEligibility = canPossiblyCancelContract,
+  } = {},
+) => ({
   id: contract.id,
   contractId: contract.id,
   applicationId: contract.applicationId,
@@ -599,7 +626,7 @@ export const mapContract = (contract, { cancellationHistoryClear = false, deleti
     escrowStatus: contract.freelanceDetails.escrow?.status ?? null,
     paymentStatus: contract.freelanceDetails.escrow?.payments?.[0]?.status ?? null,
   } : null,
-  availableActions: contractActions(contract, cancellationHistoryClear, deletionAvailable),
+  availableActions: contractActions(contract, cancellationHistoryClear, deletionAvailable, cancellationEligibility),
 });
 
 const isEligibleForAdminArchive = async (client, contract, cancellationHistoryClear = false) => {
@@ -614,7 +641,7 @@ const isEligibleForAdminArchive = async (client, contract, cancellationHistoryCl
 const adminActionAvailability = async (client, contract, adminEmployerId) => {
   const isAdminOwnedContract = contract.employerId === adminEmployerId
     && contract.job?.employerId === adminEmployerId;
-  const cleanCancellationLifecycle = canPossiblyCancelContract(contract);
+  const cleanCancellationLifecycle = canPossiblyCancelAdminContract(contract);
   const [historyClear, pendingWebhook] = cleanCancellationLifecycle
     && isAdminOwnedContract
     ? await Promise.all([
@@ -640,6 +667,7 @@ const mapAdminContract = (contract, actions) => {
   const mapped = mapContract(contract, {
     cancellationHistoryClear: actions.cancellationHistoryClear,
     deletionAvailable: actions.archiveAvailable,
+    cancellationEligibility: canPossiblyCancelAdminContract,
   });
 
   return {
@@ -1022,6 +1050,7 @@ const cancelContract = async ({ contractId, employerId, adminId, adminEmployerId
                 refunds: { select: { id: true } },
                 disputes: { select: { id: true } },
                 ledgerEntries: { select: { id: true } },
+                conversionOperation: { select: { id: true, status: true } },
               },
             },
           },
@@ -1034,7 +1063,10 @@ const cancelContract = async ({ contractId, employerId, adminId, adminEmployerId
       || contract.job?.employerId !== adminEmployerId
     )) throw new ContractNotFoundError();
     if (contract.status === 'CANCELLED' && await isSafelyCancelledContract(transaction, contract)) return;
-    if (!canPossiblyCancelContract(contract)) {
+    const cancellationLifecycleEligible = adminId
+      ? canPossiblyCancelAdminContract(contract)
+      : canPossiblyCancelContract(contract);
+    if (!cancellationLifecycleEligible) {
       throw new FreelanceContractCancellationError('This contract is no longer eligible for cancellation.');
     }
 
@@ -1063,11 +1095,15 @@ const cancelContract = async ({ contractId, employerId, adminId, adminEmployerId
           refunds: { select: { id: true } },
           disputes: { select: { id: true } },
           ledgerEntries: { select: { id: true } },
+          conversionOperation: { select: { id: true, status: true } },
         },
       });
       if (!escrow) throw new FreelanceContractCancellationError('The contract escrow is unavailable.');
       if (escrow.freelanceContractId !== contract.id) {
         throw new FreelanceContractCancellationError('The contract escrow is linked to inconsistent work history.');
+      }
+      if (adminId && escrow.conversionOperation) {
+        throw new FreelanceContractCancellationError('The contract escrow has an unresolved conversion operation.');
       }
       if (!hasConsistentUnfundedEscrow(escrow)) {
         throw new FreelanceContractCancellationError('The contract escrow has contradictory lifecycle or financial history.');

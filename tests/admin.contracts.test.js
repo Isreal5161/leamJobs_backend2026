@@ -131,6 +131,26 @@ const makeContract = ({
   };
 };
 
+const makeLeamJobsContract = ({
+  type = 'CONTRACT_PROJECT',
+  applicationStatus = 'ACCEPTED',
+} = {}) => {
+  const contract = makeContract({ type, applicationStatus });
+  const canonicalEmployerId = '9d617a5f-ec01-4eb5-8f23-bc942983c0e5';
+  contract.id = 'f7feac6a-2f87-4379-b79b-d902660b10e7';
+  contract.jobId = '18758cf5-7848-4513-b87c-4c2561395dcd';
+  contract.applicationId = 'da00a729-cdeb-46ee-b2af-ef645239e166';
+  contract.employerId = canonicalEmployerId;
+  contract.job.id = contract.jobId;
+  contract.job.employerId = canonicalEmployerId;
+  contract.application.id = contract.applicationId;
+  contract.application.jobId = contract.jobId;
+  contract.freelanceDetails.contractId = contract.id;
+  contract.freelanceDetails.escrow.freelanceContractId = contract.id;
+  mockGetLeamJobsEmployerIdentity.mockResolvedValue({ userId: canonicalEmployerId });
+  return contract;
+};
+
 const configureCleanHistory = () => {
   mockPrisma.escrow.findUnique.mockResolvedValue(null);
   mockPrisma.payment.findFirst.mockResolvedValue(null);
@@ -250,6 +270,89 @@ test('Admin-created unfunded contracts show Cancel without a payment record', as
   }));
 });
 
+test('Admin can cancel the reported unfunded LeamJobs FREELANCE_PROJECT in the PENDING/ACCEPTED lifecycle', async () => {
+  const contract = makeLeamJobsContract({ type: 'FREELANCE_PROJECT' });
+  const cancelledContract = {
+    ...contract,
+    status: 'CANCELLED',
+    cancelledAt: new Date('2026-11-10T08:00:00.000Z'),
+    application: { ...contract.application, status: 'REJECTED' },
+    freelanceDetails: {
+      ...contract.freelanceDetails,
+      workStatus: 'CANCELLED',
+      escrow: {
+        ...contract.freelanceDetails.escrow,
+        status: 'CANCELLED',
+        cancelledAt: new Date('2026-11-10T08:00:00.000Z'),
+      },
+    },
+  };
+  mockPrisma.contract.findUnique
+    .mockResolvedValueOnce(contract)
+    .mockResolvedValueOnce(cancelledContract);
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
+
+  const detail = await getAdminContractById(contract.id);
+  expect(detail.availableActions.cancel).toBe(true);
+  expect(detail.type).toBe('FREELANCE_PROJECT');
+  expect(detail.job.jobType).toBe('FREELANCE_PROJECT');
+  expect(detail.application.status).toBe('ACCEPTED');
+  expect(detail.freelance.workStatus).toBe('PENDING');
+  expect(detail.funding.paymentStatus).toBeNull();
+  expect(detail.freelance.escrow.payments).toEqual([]);
+
+  const cancelled = await cancelAdminContract({ contractId: contract.id, adminId });
+  expect(cancelled.status).toBe('CANCELLED');
+  expect(mockPrisma.contract.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: contract.id, employerId: '9d617a5f-ec01-4eb5-8f23-bc942983c0e5' },
+  }));
+  expect(mockPrisma.financialAuditLog.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({ actorUserId: adminId, entityId: contract.id, action: 'CANCELLED' }),
+  });
+  expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: {
+      OR: [
+        { metadata: { path: ['contractId'], equals: contract.id } },
+        { providerReference: { startsWith: `leamjobs_${contract.id}_` } },
+      ],
+    },
+  }));
+});
+
+test('Admin can cancel an unfunded LeamJobs Contract Job in the PENDING/ACCEPTED lifecycle', async () => {
+  const contract = makeLeamJobsContract();
+  const cancelledContract = {
+    ...contract,
+    status: 'CANCELLED',
+    cancelledAt: new Date('2026-11-10T08:00:00.000Z'),
+    application: { ...contract.application, status: 'REJECTED' },
+    freelanceDetails: {
+      ...contract.freelanceDetails,
+      workStatus: 'CANCELLED',
+      escrow: {
+        ...contract.freelanceDetails.escrow,
+        status: 'CANCELLED',
+        cancelledAt: new Date('2026-11-10T08:00:00.000Z'),
+      },
+    },
+  };
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+  mockPrisma.contract.findUnique
+    .mockResolvedValueOnce(contract)
+    .mockResolvedValueOnce(cancelledContract);
+  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
+
+  const detail = await getAdminContractById(contract.id);
+  expect(detail.availableActions.cancel).toBe(true);
+
+  const cancelled = await cancelAdminContract({ contractId: contract.id, adminId });
+  expect(cancelled.status).toBe('CANCELLED');
+  expect(mockPrisma.financialAuditLog.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({ actorUserId: adminId, entityId: contract.id, action: 'CANCELLED' }),
+  });
+});
+
 test('ordinary employer-owned contracts do not expose Admin cancellation', async () => {
   const ordinaryEmployerId = '66666666-6666-4666-8666-666666666666';
   const contract = makeContract();
@@ -260,6 +363,25 @@ test('ordinary employer-owned contracts do not expose Admin cancellation', async
   const result = await getAdminContractById(contractId);
 
   expect(result.availableActions.cancel).toBe(false);
+});
+
+test.each([
+  ['employer-archived contracts', (contract) => {
+    contract.employerArchivedAt = new Date('2026-11-10T08:00:00.000Z');
+  }],
+  ['contracts with a conversion operation', (contract) => {
+    contract.freelanceDetails.escrow.conversionOperation = { id: 'conversion-1', status: 'PENDING' };
+  }],
+])('Admin detail and cancellation endpoint both reject %s', async (_label, applyUnsafeState) => {
+  const contract = makeLeamJobsContract({ type: 'FREELANCE_PROJECT' });
+  applyUnsafeState(contract);
+  mockPrisma.contract.findUnique.mockResolvedValue(contract);
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+
+  const detail = await getAdminContractById(contract.id);
+  expect(detail.availableActions.cancel).toBe(false);
+  await expect(cancelAdminContract({ contractId: contract.id, adminId })).rejects.toMatchObject({ status: 409 });
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });
 
 test('Admin cancellation allows a clean unfunded Contract Job with no payment record and audits the actor', async () => {
