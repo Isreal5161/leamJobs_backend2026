@@ -8,6 +8,8 @@ const contractId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const jobId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const applicationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const escrowId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const staffAdminId = '55555555-5555-4555-8555-555555555555';
+const mockGetLeamJobsEmployerIdentity = jest.fn().mockResolvedValue({ userId: employerId });
 
 const mockPrisma = {
   contract: {
@@ -31,6 +33,9 @@ const mockPrisma = {
 };
 
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
+jest.unstable_mockModule('../src/services/leamjobsEmployer.service.js', () => ({
+  getLeamJobsEmployerIdentity: mockGetLeamJobsEmployerIdentity,
+}));
 const mockCreateNotification = jest.fn().mockResolvedValue({ id: 'notification-1' });
 jest.unstable_mockModule('../src/services/notification.service.js', () => ({
   createNotification: mockCreateNotification,
@@ -127,6 +132,7 @@ const makeContract = ({
 };
 
 const configureCleanHistory = () => {
+  mockPrisma.escrow.findUnique.mockResolvedValue(null);
   mockPrisma.payment.findFirst.mockResolvedValue(null);
   mockPrisma.payment.findMany.mockResolvedValue([]);
   mockPrisma.financialLedgerEntry.findFirst.mockResolvedValue(null);
@@ -175,6 +181,7 @@ const makeSettledCompletedContract = () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetLeamJobsEmployerIdentity.mockResolvedValue({ userId: employerId });
   configureCleanHistory();
 });
 
@@ -227,18 +234,56 @@ test('Admin detail loads a contract belonging to any employer and exposes archiv
   expect(result.availableActions.archive).toBe(false);
 });
 
-test('Admin cancellation records the real Admin actor and preserves rejection and notification behavior', async () => {
+test('Admin-created unfunded contracts show Cancel without a payment record', async () => {
+  const contract = makeContract({ type: 'CONTRACT_PROJECT', applicationStatus: 'PAYMENT_PENDING' });
+  mockPrisma.contract.findUnique.mockResolvedValue(contract);
+
+  const result = await getAdminContractById(contractId);
+
+  expect(result.availableActions.cancel).toBe(true);
+  expect(result.funding.paymentStatus).toBeNull();
+  expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: { OR: expect.arrayContaining([
+      { metadata: { path: ['contractId'], equals: contractId } },
+      { providerReference: { startsWith: `leamjobs_${contractId}_` } },
+    ]) },
+  }));
+});
+
+test('ordinary employer-owned contracts do not expose Admin cancellation', async () => {
+  const ordinaryEmployerId = '66666666-6666-4666-8666-666666666666';
   const contract = makeContract();
-  const cancelledContract = makeContract({ status: 'CANCELLED', applicationStatus: 'REJECTED' });
-  mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, jobId, applicationId, employerId })
-    .mockResolvedValueOnce(contract);
-  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
+  contract.employerId = ordinaryEmployerId;
+  contract.job.employerId = ordinaryEmployerId;
+  mockPrisma.contract.findUnique.mockResolvedValue(contract);
+
+  const result = await getAdminContractById(contractId);
+
+  expect(result.availableActions.cancel).toBe(false);
+});
+
+test('Admin cancellation allows a clean unfunded Contract Job with no payment record and audits the actor', async () => {
+  const contract = makeContract({ type: 'CONTRACT_PROJECT', applicationStatus: 'PAYMENT_PENDING' });
+  const cancelledContract = makeContract({ type: 'CONTRACT_PROJECT', status: 'CANCELLED', applicationStatus: 'REJECTED' });
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
   mockPrisma.contract.findUnique.mockResolvedValue(cancelledContract);
+  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
 
   const result = await cancelAdminContract({ contractId, adminId });
 
   expect(result.status).toBe('CANCELLED');
+  expect(mockPrisma.$transaction).toHaveBeenCalledWith(
+    expect.any(Function),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+  expect(mockPrisma.payment.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: {
+      OR: [
+        { metadata: { path: ['contractId'], equals: contractId } },
+        { providerReference: { startsWith: `leamjobs_${contractId}_` } },
+      ],
+    },
+  }));
   expect(mockPrisma.contract.update).toHaveBeenCalledWith({
     where: { id: contractId },
     data: { status: 'CANCELLED', cancelledAt: expect.any(Date) },
@@ -248,12 +293,7 @@ test('Admin cancellation records the real Admin actor and preserves rejection an
     data: { status: 'REJECTED' },
   });
   expect(mockPrisma.financialAuditLog.create).toHaveBeenCalledWith({
-    data: expect.objectContaining({
-      actorUserId: adminId,
-      entityType: 'CONTRACT',
-      entityId: contractId,
-      action: 'CANCELLED',
-    }),
+    data: expect.objectContaining({ actorUserId: adminId, entityId: contractId, action: 'CANCELLED' }),
   });
   expect(mockCreateNotification).toHaveBeenCalledWith(expect.objectContaining({
     recipientUserId: seekerId,
@@ -262,46 +302,134 @@ test('Admin cancellation records the real Admin actor and preserves rejection an
   }), mockPrisma);
 });
 
-test('Admin cancellation rejects payment-pending contracts', async () => {
-  const contract = makeContract({ type: 'CONTRACT_PROJECT', applicationStatus: 'PAYMENT_PENDING' });
-  mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, jobId, applicationId, employerId })
-    .mockResolvedValueOnce(contract);
+test('Staff Admin cancellation audits the actual acting Staff Admin', async () => {
+  const contract = makeContract();
+  const cancelledContract = makeContract({ status: 'CANCELLED', applicationStatus: 'REJECTED' });
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
+  mockPrisma.contract.findUnique.mockResolvedValue(cancelledContract);
 
-  await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 409 });
+  const result = await cancelAdminContract({ contractId, adminId: staffAdminId });
+
+  expect(result.status).toBe('CANCELLED');
+  expect(mockPrisma.financialAuditLog.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      actorUserId: staffAdminId,
+      entityType: 'CONTRACT',
+      entityId: contractId,
+      action: 'CANCELLED',
+    }),
+  });
+  expect(mockCreateNotification).toHaveBeenCalledWith(expect.objectContaining({
+    recipientUserId: seekerId,
+    actorUserId: staffAdminId,
+    eventKey: `contract:cancelled:${contractId}`,
+  }), mockPrisma);
+});
+
+test('Admin cannot cancel an ordinary employer-owned contract', async () => {
+  const ordinaryEmployerId = '66666666-6666-4666-8666-666666666666';
+  const contract = makeContract();
+  contract.employerId = ordinaryEmployerId;
+  contract.job.employerId = ordinaryEmployerId;
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+
+  await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 404 });
+  expect(mockPrisma.contract.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: { id: contractId, employerId },
+  }));
   expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });
 
 test('Admin cancellation rejects funded contracts', async () => {
   const funded = makeContract({ status: 'ACTIVE', escrowStatus: 'FUNDED' });
-  mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, jobId, applicationId, employerId })
-    .mockResolvedValueOnce(funded);
+  mockPrisma.contract.findFirst.mockResolvedValue(funded);
 
   await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 409 });
   expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });
 
-test('Admin cancellation rejects pending payment attempts and pending provider webhooks', async () => {
+test('Admin cancellation rejects pending payment attempts', async () => {
   const contract = makeContract();
-  mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, jobId, applicationId, employerId })
-    .mockResolvedValueOnce(contract);
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
   mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
   mockPrisma.payment.findMany.mockResolvedValue([{ id: 'payment-1', status: 'PENDING' }]);
 
   await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 409 });
   expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
 
+test('Admin cancellation rejects pending provider webhooks', async () => {
   jest.clearAllMocks();
+  mockGetLeamJobsEmployerIdentity.mockResolvedValue({ userId: employerId });
   configureCleanHistory();
-  mockPrisma.contract.findFirst
-    .mockResolvedValueOnce({ id: contractId, jobId, applicationId, employerId })
-    .mockResolvedValueOnce(contract);
+  const contract = makeContract();
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
   mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
   mockPrisma.providerWebhookEvent.findFirst.mockResolvedValue({ id: 'webhook-1' });
 
   await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 409 });
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['open dispute', (contract) => {
+    contract.disputes = [{ id: 'dispute-1', status: 'OPEN' }];
+    contract.freelanceDetails.escrow.disputes = [{ id: 'dispute-1', status: 'OPEN' }];
+  }],
+  ['unresolved refund', (contract) => {
+    contract.freelanceDetails.escrow.refunds = [{ id: 'refund-1', status: 'PENDING' }];
+  }],
+])('Admin cancellation rejects contracts with an %s', async (_label, applyUnsafeState) => {
+  const contract = makeContract();
+  applyUnsafeState(contract);
+  mockPrisma.contract.findFirst.mockResolvedValue(contract);
+  mockPrisma.escrow.findUnique.mockResolvedValue(contract.freelanceDetails.escrow);
+
+  await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({ status: 409 });
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
+
+test('Admin cancellation serialization conflict fails safely before updates', async () => {
+  mockPrisma.contract.findFirst.mockResolvedValue(makeContract());
+  mockPrisma.$transaction.mockRejectedValue({ code: 'P2034' });
+
+  await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({
+    status: 409,
+    publicMessage: 'The contract financial state changed during cancellation review. Refresh the contract and try again.',
+  });
+  expect(mockPrisma.$transaction).toHaveBeenCalledWith(
+    expect.any(Function),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+  expect(mockPrisma.contract.update).not.toHaveBeenCalled();
+});
+
+test('Admin cancellation rechecks payment state inside the serializable transaction', async () => {
+  const contract = makeContract();
+  const pendingPayment = {
+    id: 'concurrent-payment',
+    status: 'PENDING',
+    paymentType: 'CONTRACT_FUNDING',
+  };
+  mockPrisma.contract.findFirst
+    .mockResolvedValueOnce(contract)
+    .mockResolvedValueOnce(contract);
+  mockPrisma.escrow.findUnique.mockResolvedValue({
+    ...contract.freelanceDetails.escrow,
+    payments: [pendingPayment],
+  });
+  mockPrisma.payment.findMany.mockResolvedValue([pendingPayment]);
+
+  await expect(cancelAdminContract({ contractId, adminId })).rejects.toMatchObject({
+    status: 409,
+    publicMessage: 'This contract has a payment attempt on record. A provider may still report a late result, so resolve the payment state before cancelling.',
+  });
+  expect(mockPrisma.contract.findFirst).toHaveBeenCalledTimes(2);
+  expect(mockPrisma.$transaction).toHaveBeenCalledWith(
+    expect.any(Function),
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
   expect(mockPrisma.contract.update).not.toHaveBeenCalled();
 });
 

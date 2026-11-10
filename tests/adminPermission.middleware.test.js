@@ -107,6 +107,25 @@ describe('admin authorization middleware', () => {
     expect(mockPrisma.adminPermissionGrant.findUnique).toHaveBeenCalledTimes(1);
   });
 
+  test('Staff Admin with contracts.cancel grant is authorized for cancellation', async () => {
+    mockPrisma.adminAccount.findUnique.mockResolvedValue(adminRecord());
+    mockPrisma.adminPermission.findUnique.mockResolvedValue({ key: 'contracts.cancel', isEnabled: true });
+    mockPrisma.adminPermissionGrant.findUnique.mockResolvedValue({ adminUserId: 'staff-1' });
+    const res = createResponse();
+    const next = jest.fn();
+
+    await requireAdminPermission('contracts.cancel')(
+      { user: { sub: 'staff-1', role: 'ADMIN' } }, res, next,
+    );
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(mockPrisma.adminPermissionGrant.findUnique).toHaveBeenCalledWith({
+      where: { adminUserId_permissionKey: { adminUserId: 'staff-1', permissionKey: 'contracts.cancel' } },
+      select: { adminUserId: true },
+    });
+  });
+
   test('suspended staff cannot load admin context or perform protected actions', async () => {
     mockPrisma.adminAccount.findUnique
       .mockResolvedValueOnce({ ...adminRecord(), suspendedAt: new Date() })

@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database.js';
+import { getLeamJobsEmployerIdentity } from './leamjobsEmployer.service.js';
 import { createNotification } from './notification.service.js';
 
 export const contractSelect = {
@@ -610,16 +611,14 @@ const isEligibleForAdminArchive = async (client, contract, cancellationHistoryCl
     && await isEligibleForEmployerDeletion(client, contract, cancellationHistoryClear);
 };
 
-const adminActionAvailability = async (client, contract) => {
+const adminActionAvailability = async (client, contract, adminEmployerId) => {
+  const isAdminOwnedContract = contract.employerId === adminEmployerId
+    && contract.job?.employerId === adminEmployerId;
   const cleanCancellationLifecycle = canPossiblyCancelContract(contract);
   const [historyClear, pendingWebhook] = cleanCancellationLifecycle
+    && isAdminOwnedContract
     ? await Promise.all([
-      hasNoContractFinancialHistory(
-        client,
-        contract.id,
-        contract.freelanceDetails?.escrow?.id,
-        contract.employerId,
-      ),
+      hasNoContractFinancialHistory(client, contract.id, contract.freelanceDetails?.escrow?.id),
       hasPendingContractWebhook(client, contract.id),
     ])
     : [false, null];
@@ -631,7 +630,6 @@ const adminActionAvailability = async (client, contract) => {
   return {
     cancellationHistoryClear: cancellationHistoryClear
       && !contract.employerArchivedAt
-      && contract.application?.status !== 'PAYMENT_PENDING'
       && contract.status !== 'DISPUTED'
       && (contract.disputes ?? []).length === 0,
     archiveAvailable,
@@ -680,6 +678,7 @@ export const listAdminContracts = async ({
   workStatus,
   search,
 }) => {
+  const { userId: adminEmployerId } = await getLeamJobsEmployerIdentity();
   const where = {
     ...(status ? { status } : {}),
     ...(search ? adminContractSearchWhere(search) : {}),
@@ -703,7 +702,7 @@ export const listAdminContracts = async ({
     prisma.contract.count({ where }),
   ]);
   const mappedContracts = await Promise.all(contracts.map(async (contract) => {
-    const actions = await adminActionAvailability(prisma, contract);
+    const actions = await adminActionAvailability(prisma, contract, adminEmployerId);
     const mapped = mapAdminContract(contract, actions);
 
     return {
@@ -773,7 +772,8 @@ export const listAdminContracts = async ({
 export const getAdminContractById = async (contractId) => {
   const contract = await prisma.contract.findUnique({ where: { id: contractId }, select: contractSelect });
   if (!contract) throw new ContractNotFoundError();
-  return mapAdminContract(contract, await adminActionAvailability(prisma, contract));
+  const { userId: adminEmployerId } = await getLeamJobsEmployerIdentity();
+  return mapAdminContract(contract, await adminActionAvailability(prisma, contract, adminEmployerId));
 };
 
 const lockContract = async (transaction, contractId) => {
@@ -954,16 +954,21 @@ export const getContractForParty = async ({ contractId, userId, role }) => {
   return mapContract(contract, { cancellationHistoryClear });
 };
 
-const cancelContract = async ({ contractId, employerId, adminId, applicationJobId }) => {
+const cancelContract = async ({ contractId, employerId, adminId, adminEmployerId, applicationJobId }) => {
   const existing = await prisma.contract.findFirst({
-    where: { id: contractId, ...(employerId ? { employerId } : {}), ...(applicationJobId ? { jobId: applicationJobId } : {}) },
+    where: {
+      id: contractId,
+      ...(employerId ? { employerId } : {}),
+      ...(adminId ? { employerId: adminEmployerId } : {}),
+      ...(applicationJobId ? { jobId: applicationJobId } : {}),
+    },
     select: { id: true, jobId: true, applicationId: true, employerId: true },
   });
   if (!existing) throw new ContractNotFoundError();
   const contractEmployerId = existing.employerId;
   const actorUserId = adminId ?? employerId;
 
-  await prisma.$transaction(async (transaction) => {
+  const cancelInTransaction = async (transaction) => {
     await transaction.$queryRaw`
       SELECT "id"
       FROM "Job"
@@ -973,7 +978,9 @@ const cancelContract = async ({ contractId, employerId, adminId, applicationJobI
     await transaction.$queryRaw`
       SELECT "id"
       FROM "Contract"
-      WHERE "id" = ${contractId} AND "employerId" = ${contractEmployerId}
+      WHERE "id" = ${contractId}
+        AND "employerId" = ${contractEmployerId}
+        AND (${adminEmployerId ?? null}::text IS NULL OR "employerId" = ${adminEmployerId ?? null})
       FOR UPDATE
     `;
     await transaction.$queryRaw`
@@ -1022,9 +1029,10 @@ const cancelContract = async ({ contractId, employerId, adminId, applicationJobI
       },
     });
     if (!contract) throw new ContractNotFoundError();
-    if (adminId && contract.application?.status === 'PAYMENT_PENDING') {
-      throw new FreelanceContractCancellationError('Payment-pending contracts cannot be cancelled by an administrator.');
-    }
+    if (adminId && (
+      contract.employerId !== adminEmployerId
+      || contract.job?.employerId !== adminEmployerId
+    )) throw new ContractNotFoundError();
     if (contract.status === 'CANCELLED' && await isSafelyCancelledContract(transaction, contract)) return;
     if (!canPossiblyCancelContract(contract)) {
       throw new FreelanceContractCancellationError('This contract is no longer eligible for cancellation.');
@@ -1070,18 +1078,21 @@ const cancelContract = async ({ contractId, employerId, adminId, applicationJobI
     const escrowPayments = escrow
       ? await transaction.payment.findFirst({ where: { escrowId: escrow.id }, select: { id: true } })
       : null;
-    await transaction.$queryRaw`
-      SELECT "id"
-      FROM "Payment"
-      WHERE "userId" = ${contractEmployerId}
-        AND "paymentType" = 'CONTRACT_FUNDING'
-        AND "escrowId" IS NULL
-      FOR UPDATE
-    `;
-    const unlinkedFundingPayment = await transaction.payment.findFirst({
-      where: { userId: contractEmployerId, paymentType: 'CONTRACT_FUNDING', escrowId: null },
-      select: { id: true },
-    });
+    let unlinkedFundingPayment = null;
+    if (!adminId) {
+      await transaction.$queryRaw`
+        SELECT "id"
+        FROM "Payment"
+        WHERE "userId" = ${contractEmployerId}
+          AND "paymentType" = 'CONTRACT_FUNDING'
+          AND "escrowId" IS NULL
+        FOR UPDATE
+      `;
+      unlinkedFundingPayment = await transaction.payment.findFirst({
+        where: { userId: contractEmployerId, paymentType: 'CONTRACT_FUNDING', escrowId: null },
+        select: { id: true },
+      });
+    }
     if (relatedFundingPayments.length > 0 || escrowPayments || unlinkedFundingPayment || (escrow?.payments.length ?? 0) > 0) {
       throw new FreelanceContractCancellationError(
         'This contract has a payment attempt on record. A provider may still report a late result, so resolve the payment state before cancelling.',
@@ -1178,7 +1189,24 @@ const cancelContract = async ({ contractId, employerId, adminId, applicationJobI
       message: `${adminId ? 'An administrator' : 'The employer'} cancelled the unfunded contract for ${contract.job?.title ?? 'the project'}.`,
       link: '/seeker/applications',
     }, transaction);
-  });
+  };
+
+  if (adminId) {
+    try {
+      await prisma.$transaction(cancelInTransaction, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    } catch (error) {
+      if (error?.code === 'P2034') {
+        throw new FreelanceContractCancellationError(
+          'The contract financial state changed during cancellation review. Refresh the contract and try again.',
+        );
+      }
+      throw error;
+    }
+  } else {
+    await prisma.$transaction(cancelInTransaction);
+  }
 
   if (adminId) return getAdminContractById(contractId);
   return getContractForParty({ contractId, userId: employerId, role: 'EMPLOYER' });
@@ -1186,9 +1214,10 @@ const cancelContract = async ({ contractId, employerId, adminId, applicationJobI
 
 export const cancelEmployerFreelanceContract = (options) => cancelContract(options);
 
-export const cancelAdminContract = ({ contractId, adminId }) => (
-  cancelContract({ contractId, adminId })
-);
+export const cancelAdminContract = async ({ contractId, adminId }) => {
+  const { userId: adminEmployerId } = await getLeamJobsEmployerIdentity();
+  return cancelContract({ contractId, adminId, adminEmployerId });
+};
 
 export const listEmployerContracts = async ({ employerId, page, limit, status }) => {
   const where = {
