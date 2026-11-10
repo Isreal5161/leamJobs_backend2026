@@ -12,6 +12,7 @@ process.env.LEAMJOBS_FREELANCE_USD_WITHDRAWALS_ENABLED = 'false';
 const mockPrisma = {
   $transaction: jest.fn(),
   withdrawal: { findUnique: jest.fn(), findMany: jest.fn() },
+  financialAuditLog: { create: jest.fn().mockResolvedValue({}) },
   payoutAttempt: { update: jest.fn().mockResolvedValue({}), findFirst: jest.fn(), updateMany: jest.fn() },
 };
 const paystack = {
@@ -286,6 +287,14 @@ test('provider reconciliation remains available while new transfer execution is 
   await expect(reconcileWithdrawal(withdrawalId)).resolves.toEqual({ status: 'PROCESSING', unresolved: true });
 
   expect(paystack.getPaystackTransferByCode).toHaveBeenCalledWith('TRF_test');
+  expect(mockPrisma.financialAuditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      entityType: 'WITHDRAWAL',
+      entityId: withdrawalId,
+      action: 'RECONCILED',
+      reason: 'Provider reconciliation attempted',
+    }),
+  }));
   expect(paystack.createPaystackTransfer).not.toHaveBeenCalled();
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
 });
@@ -913,6 +922,33 @@ test('a matching Flutterwave transfer ID follows the existing success outcome pa
   }));
   expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({ entryType: 'WITHDRAWAL_SUCCESSFUL', idempotencyKey: `${withdrawalId}:successful` }),
+  }));
+});
+
+test('a reconciliation audit write failure does not alter a confirmed provider outcome', async () => {
+  const tx = setupFlutterwaveOutcome({
+    attemptReference: '12345',
+    transfer: {
+      id: 12345,
+      reference: 'lj_wd_withdrawal-1',
+      status: 'SUCCESSFUL',
+      amount: 1000,
+      currency: 'USD',
+    },
+  });
+  mockPrisma.financialAuditLog.create.mockRejectedValueOnce(new Error('audit store unavailable'));
+  const logError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  try {
+    await expect(reconcileWithdrawal(withdrawalId)).resolves.toEqual({ status: 'SUCCESSFUL' });
+  } finally {
+    logError.mockRestore();
+  }
+
+  expect(flutterwave.getFlutterwaveTransferById).toHaveBeenCalledWith('12345');
+  expect(tx.wallet.update).toHaveBeenCalled();
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ entryType: 'WITHDRAWAL_SUCCESSFUL' }),
   }));
 });
 

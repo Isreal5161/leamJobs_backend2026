@@ -67,7 +67,9 @@ import { validateContractId } from '../validators/contract.validation.js';
 import { createPlan, listPlans, updatePlan, subscriptionSummary, subscriptions, subscription, trialSettings, updateTrialSettings } from '../controllers/adminSubscriptions.controller.js';
 import { validateAdminSubscriptionPlanCreate, validateAdminSubscriptionPlanUpdate, validateAdminSubscriptionsQuery, validateAdminSubscriptionId, validateAdminSubscriptionTrialSettings } from '../validators/adminSubscriptions.validation.js';
 import { executeWithdrawalController, reconcileWithdrawalController, recoverFlutterwaveTransferController } from '../controllers/withdrawal.controller.js';
+import { getAdminWithdrawalController, listAdminWithdrawalsController } from '../controllers/adminWithdrawals.controller.js';
 import { validateFlutterwaveWithdrawalRecovery } from '../validators/withdrawalRecovery.validation.js';
+import { validateAdminWithdrawalId, validateAdminWithdrawalsQuery } from '../validators/adminWithdrawals.validation.js';
 import { listNotifications, readAllNotifications, readNotification } from '../controllers/notification.controller.js';
 import { validateNotificationPagination } from '../validators/notification.validation.js';
 import { campaignDeliveries, campaignPreview, campaignRecipients, campaignRecords, campaignReport, createCampaign, previewTemplate, sendCampaign, templates, updateCampaign, updateTemplate } from '../controllers/adminCommunications.controller.js';
@@ -115,6 +117,8 @@ adminRouter.get(
 adminRouter.post('/withdrawals/:id/execute', requireAdminPermission('finance.withdrawals.execute'), executeWithdrawalController);
 adminRouter.post('/withdrawals/:id/reconcile', requireAdminPermission('finance.withdrawals.reconcile'), reconcileWithdrawalController);
 adminRouter.post('/withdrawals/:id/recover-flutterwave-transfer', requireAdminPermission('finance.providerRecovery.execute'), validateFlutterwaveWithdrawalRecovery, recoverFlutterwaveTransferController);
+adminRouter.get('/withdrawals', requireAdminPermission('finance.withdrawals.view'), validateAdminWithdrawalsQuery, listAdminWithdrawalsController);
+adminRouter.get('/withdrawals/:id', requireAdminPermission('finance.withdrawals.view'), validateAdminWithdrawalId, getAdminWithdrawalController);
 adminRouter.get('/subscription-plans', requireAdminPermission('subscriptions.view'), listPlans);
 adminRouter.post('/subscription-plans', requireAdminPermission('subscriptions.plans.manage'), validateAdminSubscriptionPlanCreate, createPlan);
 adminRouter.patch('/subscription-plans/:id', requireAdminPermission('subscriptions.plans.manage'), validateAdminSubscriptionId, validateAdminSubscriptionPlanUpdate, updatePlan);

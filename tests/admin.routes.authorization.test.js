@@ -40,6 +40,8 @@ const expectedPermissionsByRoute = new Map([
   ['PATCH /platform-fee', ['fees.manage']],
   ['GET /payments', ['finance.payments.view']],
   ['GET /conversion-operations', ['finance.conversions.view']],
+  ['GET /withdrawals', ['finance.withdrawals.view']],
+  ['GET /withdrawals/:id', ['finance.withdrawals.view']],
   ['POST /withdrawals/:id/execute', ['finance.withdrawals.execute']],
   ['POST /withdrawals/:id/reconcile', ['finance.withdrawals.reconcile']],
   ['POST /withdrawals/:id/recover-flutterwave-transfer', ['finance.providerRecovery.execute']],

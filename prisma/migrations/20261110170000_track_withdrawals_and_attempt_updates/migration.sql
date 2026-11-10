@@ -1,0 +1,2 @@
+ALTER TYPE "FinancialAction" ADD VALUE 'RECONCILED';
+ALTER TABLE "PayoutAttempt" ADD COLUMN "updatedAt" TIMESTAMP(3);

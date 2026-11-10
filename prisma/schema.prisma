@@ -1365,6 +1365,7 @@ model PayoutAttempt {
   status            PayoutAttemptStatus @default(PENDING)
   failureReason     String?
   createdAt         DateTime            @default(now())
+  updatedAt         DateTime?           @updatedAt
   processedAt       DateTime?
 
   payout Payout @relation(fields: [payoutId], references: [id], onDelete: Restrict)
@@ -1774,6 +1775,7 @@ enum FinancialEntityType {
 enum FinancialAction {
   CREATED
   VERIFIED
+  RECONCILED
   FUNDED
   WORK_STARTED
   COMPLETION_SUBMITTED

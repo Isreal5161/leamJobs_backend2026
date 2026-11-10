@@ -309,6 +309,25 @@ export const reconcileWithdrawal = async (withdrawalId) => {
         ?? 'Flutterwave did not return a transfer ID. Keep the reservation and reconcile manually; do not submit another payout.',
     };
   }
+  try {
+    await prisma.financialAuditLog.create({
+      data: {
+        entityType: 'WITHDRAWAL',
+        entityId: withdrawal.id,
+        action: 'RECONCILED',
+        fromStatus: withdrawal.status,
+        toStatus: withdrawal.status,
+        reason: 'Provider reconciliation attempted',
+        metadata: { provider: withdrawal.provider },
+      },
+    });
+  } catch (error) {
+    console.error('Withdrawal reconciliation audit event could not be recorded', {
+      withdrawalId: withdrawal.id,
+      provider: withdrawal.provider,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    });
+  }
   const transfer = withdrawal.provider === 'FLUTTERWAVE'
     ? await getFlutterwaveTransferById(transferCode)
     : transferCode
