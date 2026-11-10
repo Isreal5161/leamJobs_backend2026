@@ -1428,6 +1428,102 @@ const assertFundedContract = (contract) => {
   }
 };
 
+const releaseNotificationPermissionKeys = [
+  'notifications.view',
+  'contracts.view',
+  'finance.contractFunding.view',
+];
+
+const getReleaseNotificationRecipients = async () => {
+  const permissions = await prisma.adminPermission.findMany({
+    where: { key: { in: releaseNotificationPermissionKeys } },
+    select: { key: true, isEnabled: true },
+  });
+  const enabledPermissionKeys = new Set(
+    permissions.filter((permission) => permission.isEnabled).map((permission) => permission.key),
+  );
+  if (!releaseNotificationPermissionKeys.every((key) => enabledPermissionKeys.has(key))) return [];
+
+  const accounts = await prisma.adminAccount.findMany({
+    where: {
+      suspendedAt: null,
+      user: { role: 'ADMIN', isActive: true },
+      OR: [
+        { tier: 'SUPER_ADMIN' },
+        {
+          tier: 'STAFF_ADMIN',
+          AND: releaseNotificationPermissionKeys.map((permissionKey) => ({
+            grants: { some: { permissionKey } },
+          })),
+        },
+      ],
+    },
+    select: {
+      userId: true,
+      tier: true,
+      grants: {
+        where: { permissionKey: { in: releaseNotificationPermissionKeys } },
+        select: {
+          permissionKey: true,
+          permission: { select: { isEnabled: true } },
+        },
+      },
+    },
+  });
+
+  return accounts
+    .filter((account) => account.tier === 'SUPER_ADMIN'
+      || releaseNotificationPermissionKeys.every((permissionKey) => (
+        account.grants.some((grant) => (
+          grant.permissionKey === permissionKey && grant.permission.isEnabled
+        ))
+      )))
+    .map(({ userId }) => userId);
+};
+
+const notifyAdminsOfReleaseRequest = async (contract, employerId) => {
+  const escrow = contract.freelanceDetails?.escrow;
+  if (!contractTypeMatchesJob(contract)
+    || escrow?.status !== 'RELEASE_ELIGIBLE'
+    || !contract.freelanceDetails?.completionSubmittedAt
+    || !contract.freelanceDetails?.employerCompletionConfirmedAt) {
+    return;
+  }
+
+  const fundingPayment = escrow.payments?.find((payment) => (
+    payment.paymentType === 'CONTRACT_FUNDING' && payment.status === 'SUCCESSFUL'
+  ));
+  const providerReference = fundingPayment?.providerReference?.trim() || null;
+  const paymentReference = providerReference ? ` Provider reference: ${providerReference}.` : '';
+  const recipients = await getReleaseNotificationRecipients();
+
+  for (const recipientUserId of recipients) {
+    try {
+      await createNotification({
+        recipientUserId,
+        actorUserId: employerId,
+        type: 'ALERT',
+        category: 'PAYMENT',
+        eventKey: `admin:escrow-release-requested:${contract.id}`,
+        title: 'Payment Release Requested',
+        message: `The employer confirmed job completion for contract ${contract.id}. The escrow payment is awaiting Admin review.${paymentReference}`,
+        link: `/admin/contracts/${contract.id}`,
+        metadata: {
+          contractId: contract.id,
+          paymentId: fundingPayment?.id ?? null,
+          providerReference,
+        },
+      });
+    } catch (error) {
+      console.error('Admin payment release notification could not be saved:', {
+        contractId: contract.id,
+        recipientUserId,
+        message: error instanceof Error ? error.message : 'Unknown notification error',
+      });
+    }
+  }
+};
+
 export const submitContractCompletion = async ({ contractId, seekerId, completionNote }) => {
   return prisma.$transaction(async (transaction) => {
     const contract = await lockProgressContract(transaction, contractId);
@@ -1458,10 +1554,12 @@ export const submitContractCompletion = async ({ contractId, seekerId, completio
 };
 
 export const confirmContractCompletion = async ({ contractId, employerId }) => {
-  return prisma.$transaction(async (transaction) => {
+  const confirmation = await prisma.$transaction(async (transaction) => {
     const contract = await lockProgressContract(transaction, contractId);
     if (!contract || contract.employerId !== employerId) throw new ContractNotFoundError();
-    if (contract.freelanceDetails?.escrow?.status === 'RELEASE_ELIGIBLE') return mapContract(contract);
+    if (contract.freelanceDetails?.escrow?.status === 'RELEASE_ELIGIBLE') {
+      return { result: mapContract(contract), notificationContract: contract };
+    }
     assertFundedContract(contract);
     if (!contract.freelanceDetails.completionSubmittedAt) {
       throw new ContractProgressError('The seeker must submit completion before employer confirmation');
@@ -1486,6 +1584,18 @@ export const confirmContractCompletion = async ({ contractId, employerId }) => {
       message: `Payment for ${contract.job?.title ?? 'your contract'} is ready for final release.`,
       link: `/seeker/contracts/${contract.id}`,
     }, transaction).catch(() => undefined);
-    return mapContract(await transaction.contract.findUnique({ where: { id: contractId }, select: contractSelect }));
+    const updatedContract = await transaction.contract.findUnique({ where: { id: contractId }, select: contractSelect });
+    return { result: mapContract(updatedContract), notificationContract: updatedContract };
   });
+
+  try {
+    await notifyAdminsOfReleaseRequest(confirmation.notificationContract, employerId);
+  } catch (error) {
+    console.error('Admin payment release notifications could not be processed:', {
+      contractId,
+      message: error instanceof Error ? error.message : 'Unknown notification error',
+    });
+  }
+
+  return confirmation.result;
 };

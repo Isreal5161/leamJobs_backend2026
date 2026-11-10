@@ -32,6 +32,12 @@ const contract = ({ escrowStatus = 'UNFUNDED', completionSubmittedAt = null, com
   seekerId,
   type: 'FREELANCE_PROJECT',
   status: 'ACTIVE',
+  job: {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    title: 'Freelance project',
+    jobType: 'FREELANCE_PROJECT',
+    engagementType: 'FREELANCE',
+  },
   employer: { email: 'employer@example.com' },
   createdAt: new Date('2026-09-11T10:00:00.000Z'),
   updatedAt: new Date('2026-09-11T10:00:00.000Z'),
@@ -70,6 +76,8 @@ const mockPrisma = {
   payment: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
   escrow: { findUnique: jest.fn(), update: jest.fn() },
   freelanceContract: { update: jest.fn() },
+  adminAccount: { findMany: jest.fn() },
+  adminPermission: { findMany: jest.fn() },
   financialLedgerEntry: { createMany: jest.fn() },
   wallet: { upsert: jest.fn().mockResolvedValue({ id: 'usd-wallet', currency: 'USD' }) },
   providerWebhookEvent: { create: jest.fn(), update: jest.fn(), delete: jest.fn() },
@@ -84,8 +92,12 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => ({
   verifyFlutterwaveTransaction: jest.fn(),
   assertFlutterwaveWebhookSignature: jest.fn(),
 }));
+jest.unstable_mockModule('../src/services/notification.service.js', () => ({
+  createNotification: jest.fn().mockResolvedValue({ id: 'notification-1' }),
+}));
 
 const { initializeFlutterwavePayment, verifyFlutterwaveTransaction } = await import('../src/services/flutterwave.service.js');
+const { createNotification } = await import('../src/services/notification.service.js');
 const { initializeContractPayment, verifyContractPayment } = await import('../src/services/contractPayment.service.js');
 const { submitContractCompletion, confirmContractCompletion } = await import('../src/services/contract.service.js');
 const { env } = await import('../src/config/env.js');
@@ -101,6 +113,21 @@ beforeEach(() => {
   mockPrisma.$queryRaw.mockResolvedValue([{ id: contractId }]);
   mockPrisma.contract.findUnique.mockResolvedValue(contract());
   mockPrisma.contract.findFirst.mockResolvedValue(contract());
+  mockPrisma.adminPermission.findMany.mockResolvedValue([
+    { key: 'notifications.view', isEnabled: true },
+    { key: 'contracts.view', isEnabled: true },
+    { key: 'finance.contractFunding.view', isEnabled: true },
+  ]);
+  mockPrisma.adminAccount.findMany.mockResolvedValue([{
+    userId: 'admin-1',
+    tier: 'STAFF_ADMIN',
+    grants: [
+      { permissionKey: 'notifications.view', permission: { isEnabled: true } },
+      { permissionKey: 'contracts.view', permission: { isEnabled: true } },
+      { permissionKey: 'finance.contractFunding.view', permission: { isEnabled: true } },
+    ],
+  }]);
+  createNotification.mockResolvedValue({ id: 'notification-1' });
   mockPrisma.payment.create.mockImplementation(async ({ data }) => {
     storedPayment = { ...payment(), ...data };
     return storedPayment;
@@ -211,8 +238,192 @@ test('seeker can submit completion only after funded escrow', async () => {
 
 test('employer confirmation makes funded escrow release eligible', async () => {
   const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date(), completionNote: 'Done' });
-  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce({ ...submitted, freelanceDetails: { ...submitted.freelanceDetails, employerCompletionConfirmedAt: new Date(), workStatus: 'RELEASE_ELIGIBLE', escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE', releaseEligibleAt: new Date() } } });
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      workStatus: 'RELEASE_ELIGIBLE',
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE', releaseEligibleAt: new Date() },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
   const result = await confirmContractCompletion({ contractId, employerId });
   expect(mockPrisma.escrow.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'RELEASE_ELIGIBLE', releaseEligibleAt: expect.any(Date) }) }));
   expect(result.freelance.escrow.status).toBe('RELEASE_ELIGIBLE');
+  expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+    recipientUserId: 'admin-1',
+    actorUserId: employerId,
+    type: 'ALERT',
+    category: 'PAYMENT',
+    eventKey: `admin:escrow-release-requested:${contractId}`,
+    title: 'Payment Release Requested',
+    message: expect.stringContaining(providerReference),
+    link: `/admin/contracts/${contractId}`,
+    metadata: { contractId, paymentId, providerReference },
+  }));
+  expect(mockPrisma.adminAccount.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({
+      suspendedAt: null,
+      user: { role: 'ADMIN', isActive: true },
+    }),
+  }));
+});
+
+test('repeated employer confirmation uses the same idempotent Admin notification event key', async () => {
+  const alreadyEligible = contract({ escrowStatus: 'RELEASE_ELIGIBLE', completionSubmittedAt: new Date() });
+  alreadyEligible.freelanceDetails.employerCompletionConfirmedAt = new Date();
+  alreadyEligible.freelanceDetails.escrow.payments = [payment({ status: 'SUCCESSFUL' })];
+  mockPrisma.contract.findUnique.mockResolvedValue(alreadyEligible);
+
+  await confirmContractCompletion({ contractId, employerId });
+  await confirmContractCompletion({ contractId, employerId });
+
+  const adminNotifications = createNotification.mock.calls
+    .map(([input]) => input)
+    .filter((input) => input.eventKey?.startsWith('admin:escrow-release-requested:'));
+  expect(adminNotifications).toHaveLength(2);
+  expect(new Set(adminNotifications.map(({ eventKey }) => eventKey))).toEqual(new Set([
+    `admin:escrow-release-requested:${contractId}`,
+  ]));
+  expect(mockPrisma.escrow.update).not.toHaveBeenCalled();
+});
+
+test('failed employer completion confirmation does not create an Admin release notification', async () => {
+  mockPrisma.contract.findUnique.mockResolvedValue(contract({ escrowStatus: 'FUNDED' }));
+
+  await expect(confirmContractCompletion({ contractId, employerId }))
+    .rejects.toMatchObject({ status: 409 });
+
+  expect(createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+    eventKey: expect.stringMatching(/^admin:escrow-release-requested:/),
+  }));
+  expect(mockPrisma.adminAccount.findMany).not.toHaveBeenCalled();
+});
+
+test('monthly and non-freelance contracts do not generate Admin escrow release notifications', async () => {
+  const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date() });
+  submitted.job.engagementType = 'MONTHLY';
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE' },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
+
+  await confirmContractCompletion({ contractId, employerId });
+
+  expect(createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+    eventKey: expect.stringMatching(/^admin:escrow-release-requested:/),
+  }));
+  expect(mockPrisma.adminAccount.findMany).not.toHaveBeenCalled();
+});
+
+test('contract projects with a platform escrow generate Admin release notifications', async () => {
+  const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date() });
+  submitted.type = 'CONTRACT_PROJECT';
+  submitted.job.jobType = 'NORMAL_EMPLOYMENT';
+  submitted.job.engagementType = 'CONTRACT';
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE' },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
+  mockPrisma.adminAccount.findMany.mockResolvedValue([{
+    userId: 'super-admin-1',
+    tier: 'SUPER_ADMIN',
+    grants: [],
+  }]);
+
+  await confirmContractCompletion({ contractId, employerId });
+
+  expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({
+    recipientUserId: 'super-admin-1',
+    eventKey: `admin:escrow-release-requested:${contractId}`,
+  }));
+});
+
+test('non-platform-held employment contracts do not generate Admin escrow release notifications', async () => {
+  const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date() });
+  submitted.type = 'NORMAL_EMPLOYMENT';
+  submitted.job.jobType = 'NORMAL_EMPLOYMENT';
+  submitted.job.engagementType = 'MONTHLY';
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE' },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
+
+  await confirmContractCompletion({ contractId, employerId });
+
+  expect(createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+    eventKey: expect.stringMatching(/^admin:escrow-release-requested:/),
+  }));
+  expect(mockPrisma.adminAccount.findMany).not.toHaveBeenCalled();
+});
+
+test('Admin release notifications exclude Staff without every active view grant', async () => {
+  const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date() });
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE' },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
+  mockPrisma.adminAccount.findMany.mockResolvedValue([{
+    userId: 'staff-without-finance-access',
+    tier: 'STAFF_ADMIN',
+    grants: [
+      { permissionKey: 'notifications.view', permission: { isEnabled: true } },
+      { permissionKey: 'contracts.view', permission: { isEnabled: true } },
+    ],
+  }]);
+
+  await confirmContractCompletion({ contractId, employerId });
+
+  expect(createNotification).not.toHaveBeenCalledWith(expect.objectContaining({
+    eventKey: expect.stringMatching(/^admin:escrow-release-requested:/),
+  }));
+});
+
+test('Admin notification write failure does not roll back employer completion', async () => {
+  const submitted = contract({ escrowStatus: 'FUNDED', completionSubmittedAt: new Date() });
+  const updatedContract = {
+    ...submitted,
+    freelanceDetails: {
+      ...submitted.freelanceDetails,
+      employerCompletionConfirmedAt: new Date(),
+      escrow: { ...submitted.freelanceDetails.escrow, status: 'RELEASE_ELIGIBLE' },
+    },
+  };
+  mockPrisma.contract.findUnique.mockResolvedValueOnce(submitted).mockResolvedValueOnce(updatedContract);
+  createNotification.mockImplementation(async (input) => {
+    if (input.eventKey.startsWith('admin:escrow-release-requested:')) throw new Error('notification storage unavailable');
+    return { id: 'notification-1' };
+  });
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  const result = await confirmContractCompletion({ contractId, employerId });
+
+  expect(result.freelance.escrow.status).toBe('RELEASE_ELIGIBLE');
+  expect(mockPrisma.escrow.update).toHaveBeenCalled();
+  expect(errorSpy).toHaveBeenCalledWith(
+    'Admin payment release notification could not be saved:',
+    expect.objectContaining({ contractId, recipientUserId: 'admin-1' }),
+  );
+  errorSpy.mockRestore();
 });

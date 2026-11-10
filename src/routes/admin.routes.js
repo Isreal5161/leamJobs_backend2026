@@ -156,8 +156,8 @@ adminRouter.patch('/jobs/:jobId/reject', requireAdminPermission('jobs.moderate')
 adminRouter.patch('/jobs/:jobId/remove', requireAdminPermission('jobs.delete'), removeJob);
 adminRouter.patch('/jobs/:jobId/decision', requireAdminPermission('jobs.moderate'), decideJob);
 adminRouter.get('/notifications', requireAdminPermission('notifications.view'), validateNotificationPagination, listNotifications);
-adminRouter.patch('/notifications/read-all', requireAdminPermission('notifications.manage'), readAllNotifications);
-adminRouter.patch('/notifications/:notificationId/read', requireAdminPermission('notifications.manage'), readNotification);
+adminRouter.patch('/notifications/read-all', requireAdminPermission('notifications.view'), readAllNotifications);
+adminRouter.patch('/notifications/:notificationId/read', requireAdminPermission('notifications.view'), readNotification);
 adminRouter.get('/communications/templates', requireAdminPermission('communications.templates.view'), templates);
 adminRouter.patch('/communications/templates/:key', requireAdminPermission('communications.templates.edit'), validateTemplateKey, validateTemplateUpdate, updateTemplate);
 adminRouter.post('/communications/templates/:key/preview', requireAdminPermission('communications.templates.view'), validateTemplateKey, previewTemplate);

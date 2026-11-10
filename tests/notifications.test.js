@@ -39,6 +39,9 @@ const mockPrisma = {
   user: {
     findUnique: jest.fn(),
   },
+  adminAccount: { findUnique: jest.fn() },
+  adminPermission: { findUnique: jest.fn() },
+  adminPermissionGrant: { findUnique: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -51,6 +54,7 @@ const { sendSeekerMessage } = await import('../src/services/message.service.js')
 const userId = '11111111-1111-4111-8111-111111111111';
 const actorId = '22222222-2222-4222-8222-222222222222';
 const notificationId = '33333333-3333-4333-8333-333333333333';
+const adminId = '44444444-4444-4444-8444-444444444444';
 
 const token = (role = 'SEEKER', sub = userId) => jwt.sign({ sub, role, sid: role }, process.env.JWT_SECRET, {
   algorithm: 'HS256', issuer: process.env.JWT_ISSUER, audience: process.env.JWT_AUDIENCE, expiresIn: '1h',
@@ -198,9 +202,28 @@ describe('notification service', () => {
 
     const read = await markNotificationRead(userId, notificationId);
     expect(read.notification.isRead).toBe(true);
+    expect(mockPrisma.notification.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: notificationId, recipientUserId: userId },
+    }));
 
     const allRead = await markAllNotificationsRead(userId);
     expect(allRead.count).toBe(2);
+    expect(mockPrisma.notification.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { recipientUserId: userId, isRead: false },
+    }));
+  });
+
+  test('cannot mark another users notification as read', async () => {
+    mockPrisma.notification.findFirst.mockResolvedValue(null);
+
+    await expect(markNotificationRead(userId, notificationId))
+      .rejects.toMatchObject({ status: 404 });
+
+    expect(mockPrisma.notification.findFirst).toHaveBeenCalledWith({
+      where: { id: notificationId, recipientUserId: userId },
+      select: { id: true, isRead: true },
+    });
+    expect(mockPrisma.notification.update).not.toHaveBeenCalled();
   });
 
   test('creates an in-app notification when a seeker sends a message', async () => {
@@ -274,6 +297,25 @@ describe('notification service', () => {
 });
 
 describe('notification endpoints', () => {
+  const authorizeAdminNotificationView = () => {
+    mockPrisma.adminAccount.findUnique.mockResolvedValue({
+      userId: adminId,
+      tier: 'STAFF_ADMIN',
+      suspendedAt: null,
+      user: { id: adminId, role: 'ADMIN', isActive: true },
+    });
+    mockPrisma.adminPermission.findUnique.mockImplementation(async ({ where }) => ({
+      key: where.key,
+      isEnabled: true,
+    }));
+    mockPrisma.adminPermissionGrant.findUnique.mockImplementation(async ({ where }) => (
+      where.adminUserId_permissionKey.adminUserId === adminId
+      && where.adminUserId_permissionKey.permissionKey === 'notifications.view'
+        ? { adminUserId: adminId }
+        : null
+    ));
+  };
+
   test('lists only the authenticated user notifications', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({ isActive: true, role: 'SEEKER' });
     mockPrisma.notification.findMany.mockResolvedValue([{
@@ -329,5 +371,75 @@ describe('notification endpoints', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.notification.isRead).toBe(true);
+  });
+
+  test('Admin Staff with notifications.view can mark only their own notification as read', async () => {
+    authorizeAdminNotificationView();
+    mockPrisma.notification.findFirst.mockResolvedValue({
+      id: notificationId,
+      recipientUserId: adminId,
+      isRead: false,
+    });
+    mockPrisma.notification.update.mockResolvedValue({
+      id: notificationId,
+      recipientUserId: adminId,
+      actorUserId: null,
+      type: 'ALERT',
+      category: 'PAYMENT',
+      eventKey: 'admin:escrow-release-requested:contract-1',
+      title: 'Payment Release Requested',
+      message: 'A contract is awaiting review.',
+      link: '/admin/contracts/contract-1',
+      metadata: null,
+      isRead: true,
+      readAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      actor: null,
+    });
+
+    const response = await request(app)
+      .patch(`/api/admin/notifications/${notificationId}/read`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.notification.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: notificationId, recipientUserId: adminId },
+    }));
+    expect(mockPrisma.notification.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: notificationId },
+    }));
+    expect(mockPrisma.adminPermissionGrant.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { adminUserId_permissionKey: { adminUserId: adminId, permissionKey: 'notifications.view' } },
+    }));
+  });
+
+  test('Admin Staff with notifications.view cannot mark another users notification as read', async () => {
+    authorizeAdminNotificationView();
+    mockPrisma.notification.findFirst.mockResolvedValue(null);
+
+    const response = await request(app)
+      .patch(`/api/admin/notifications/${notificationId}/read`)
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(404);
+    expect(mockPrisma.notification.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: notificationId, recipientUserId: adminId },
+    }));
+    expect(mockPrisma.notification.update).not.toHaveBeenCalled();
+  });
+
+  test('Admin mark-all-read changes only the authenticated Admin notifications', async () => {
+    authorizeAdminNotificationView();
+
+    const response = await request(app)
+      .patch('/api/admin/notifications/read-all')
+      .set('Authorization', `Bearer ${token('ADMIN', adminId)}`);
+
+    expect(response.status).toBe(200);
+    expect(mockPrisma.notification.updateMany).toHaveBeenCalledWith({
+      where: { recipientUserId: adminId, isRead: false },
+      data: expect.objectContaining({ isRead: true, readAt: expect.any(Date) }),
+    });
   });
 });
