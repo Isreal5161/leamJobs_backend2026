@@ -19,8 +19,13 @@ const app = express();
 
 app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
-// Security middleware
-app.use(helmet());
+// Avoid imposing HTTPS on hosting subdomains that may not have valid certificates.
+app.use(helmet({
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: false,
+  },
+}));
 
 // CORS configuration
 const normalizeOrigin = (configuredOrigin) => {
@@ -35,6 +40,7 @@ const corsOptions = {
   origin: [
     env.FRONTEND_URL,
     env.FRONTEND_URL_PROD,
+    'https://www.leamjobs.com',
     ...(env.NODE_ENV === 'development' || env.NODE_ENV === 'test' ? ['http://localhost:5173'] : []),
   ].filter(Boolean).map(normalizeOrigin),
   credentials: true,

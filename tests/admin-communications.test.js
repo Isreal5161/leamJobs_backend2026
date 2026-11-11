@@ -10,7 +10,7 @@ const mockPrisma = {
   emailTemplate: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
   emailCampaign: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn(), count: jest.fn(), findMany: jest.fn() },
   user: { findMany: jest.fn() },
-  publicJobSubscriber: { findMany: jest.fn() },
+  publicJobSubscriber: { findMany: jest.fn(), findUnique: jest.fn(), updateMany: jest.fn() },
   emailDelivery: { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
 };
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
@@ -135,6 +135,35 @@ test('public newsletter subscribers are counted, previewed, and queued only once
     }),
   }));
   expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data.recipientUserId).toBeNull();
+});
+
+test('campaigns rotate predictable legacy unsubscribe values before issuing a valid link', async () => {
+  const { legacyJobUpdatesTokenHash } = await import('../src/utils/jobUpdatesTokens.js');
+  const email = 'legacy@example.com';
+  const legacyHash = legacyJobUpdatesTokenHash(email);
+  const campaign = {
+    id: 'campaign-legacy', eventKey: 'campaign:legacy', subject: 'New jobs', heading: 'New jobs',
+    body: 'See the latest job opportunities.', ctaLabel: null, ctaUrl: null,
+    segment: 'PUBLIC_JOB_SUBSCRIBERS', purpose: 'PROMOTIONAL_MARKETING',
+    operationalContentConfirmed: false, status: 'DRAFT',
+  };
+  mockPrisma.publicJobSubscriber.findMany.mockResolvedValue([
+    { id: 'subscriber-legacy', email, unsubscribeHash: legacyHash },
+  ]);
+  mockPrisma.publicJobSubscriber.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailCampaign.findUnique.mockResolvedValue(campaign);
+  mockPrisma.emailCampaign.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailCampaign.update.mockResolvedValue({ ...campaign, status: 'SENT' });
+  mockPrisma.emailDelivery.create.mockResolvedValue({ id: 'delivery-legacy' });
+
+  await sendCommunicationCampaign(campaign.id);
+
+  const rotatedHash = mockPrisma.publicJobSubscriber.updateMany.mock.calls[0][0].data.unsubscribeHash;
+  expect(rotatedHash).not.toBe(legacyHash);
+  expect(rotatedHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(mockPrisma.emailDelivery.create.mock.calls[0][0].data.html).toContain(
+    `/unsubscribe-job-updates?token=${encodeURIComponent(`c3Vic2NyaWJlci1sZWdhY3k.${rotatedHash}`)}`,
+  );
 });
 
 test('incompatible communication purposes and segments are rejected', async () => {

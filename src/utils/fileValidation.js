@@ -18,9 +18,13 @@ export const validateUploadedImage = (file) => {
   const extension = extensionOf(file.originalname);
   const allowed = new Set(['jpeg', 'jpg', 'png', 'webp']);
   const normalizedExtension = extension === 'jpg' ? 'jpeg' : extension;
-  const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+  const expectedMimeType = {
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+  }[normalizedExtension];
 
-  if (!allowed.has(extension) || !allowedMimeTypes.has(file.mimetype) || !imageSignatures[normalizedExtension]?.(file.buffer)) {
+  if (!allowed.has(extension) || file.mimetype !== expectedMimeType || !imageSignatures[normalizedExtension]?.(file.buffer)) {
     throw Object.assign(new Error('Only valid JPEG, PNG, and WebP images are supported'), { status: 400 });
   }
 

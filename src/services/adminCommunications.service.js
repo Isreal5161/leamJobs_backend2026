@@ -3,6 +3,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { createMarketingUnsubscribeToken, EMAIL_TYPES, isValidEmail, normalizeEmail, queueEmail } from './email.service.js';
 import { renderEmailTemplate } from './email.templates.js';
+import { hashJobUpdatesToken, legacyJobUpdatesTokenHash } from '../utils/jobUpdatesTokens.js';
 
 const defaults = {
   WELCOME_SEEKER: { name: 'Welcome - Seeker', subject: 'Welcome to LeamJobs', heading: 'Your next opportunity starts here', body: 'Your LeamJobs account is ready. Complete your profile to discover roles that fit your skills.', ctaLabel: 'Complete your profile', ctaUrl: '/seeker/profile' },
@@ -16,6 +17,26 @@ const campaignSelect = { id: true, eventKey: true, subject: true, heading: true,
 const deliveryReportSelect = { id: true, recipientEmail: true, status: true, attempts: true, createdAt: true, sentAt: true, lastError: true, suppressionReason: true };
 const CAMPAIGN_RECIPIENT_BATCH_SIZE = 100;
 const CAMPAIGN_RECOVERY_ATTEMPTS = 3;
+const getCampaignUnsubscribeHash = async (recipient) => {
+  const legacyHash = legacyJobUpdatesTokenHash(recipient.email);
+  if (recipient.unsubscribeHash !== legacyHash) return recipient.unsubscribeHash;
+
+  const replacementHash = hashJobUpdatesToken(crypto.randomBytes(32).toString('hex'));
+  const rotated = await prisma.publicJobSubscriber.updateMany({
+    where: { id: recipient.id, isSubscribed: true, unsubscribeHash: legacyHash },
+    data: { unsubscribeHash: replacementHash },
+  });
+  if (rotated.count === 1) return replacementHash;
+
+  const current = await prisma.publicJobSubscriber.findUnique({
+    where: { id: recipient.id },
+    select: { isSubscribed: true, unsubscribeHash: true },
+  });
+  if (!current?.isSubscribed || !current.unsubscribeHash || current.unsubscribeHash === legacyHash) {
+    throw new Error('Unable to issue a valid job updates unsubscribe link');
+  }
+  return current.unsubscribeHash;
+};
 const normalizeFields = (input) => ({
   subject: String(input.subject ?? '').trim(),
   heading: String(input.heading ?? '').trim(),
@@ -264,27 +285,32 @@ export const sendCommunicationCampaign = async (campaignId) => {
     let recipients = firstBatch.value;
     let queuedCount = 0;
     while (true) {
-      const queued = await Promise.allSettled(recipients.map((recipient) => queueEmail({
-        ...(campaign.segment !== 'PUBLIC_JOB_SUBSCRIBERS' ? { recipientUserId: recipient.id } : {}),
-        ...(campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? { publicSubscriberId: recipient.id } : {}),
-        emailType,
-        communicationPurpose: purpose,
-        eventKey: `${campaign.eventKey}:${recipient.id}`,
-        recipientEmail: recipient.email,
-        context: {
-          title: campaign.subject,
-          heading: campaign.heading,
-          message: campaign.body,
-          link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null,
-          linkLabel: campaign.ctaLabel,
-          isMarketing,
-          ...(isMarketing ? {
-            unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
-              ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${recipient.unsubscribeHash}`)}`)
-              : unsubscribeUrl(recipient.id),
-          } : {}),
-        },
-      })));
+      const queued = await Promise.allSettled(recipients.map(async (recipient) => {
+        const unsubscribeHash = campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
+          ? await getCampaignUnsubscribeHash(recipient)
+          : null;
+        return queueEmail({
+          ...(campaign.segment !== 'PUBLIC_JOB_SUBSCRIBERS' ? { recipientUserId: recipient.id } : {}),
+          ...(campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS' ? { publicSubscriberId: recipient.id } : {}),
+          emailType,
+          communicationPurpose: purpose,
+          eventKey: `${campaign.eventKey}:${recipient.id}`,
+          recipientEmail: recipient.email,
+          context: {
+            title: campaign.subject,
+            heading: campaign.heading,
+            message: campaign.body,
+            link: campaign.ctaUrl ? publicUrl(campaign.ctaUrl) : null,
+            linkLabel: campaign.ctaLabel,
+            isMarketing,
+            ...(isMarketing ? {
+              unsubscribeUrl: campaign.segment === 'PUBLIC_JOB_SUBSCRIBERS'
+                ? publicUrl(`/unsubscribe-job-updates?token=${encodeURIComponent(`${Buffer.from(recipient.id).toString('base64url')}.${unsubscribeHash}`)}`)
+                : unsubscribeUrl(recipient.id),
+            } : {}),
+          },
+        });
+      }));
       const failedQueue = queued.find((result) => result.status === 'rejected');
       if (failedQueue) throw failedQueue.reason;
       queuedCount += recipients.length;

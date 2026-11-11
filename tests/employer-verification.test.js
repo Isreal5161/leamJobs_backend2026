@@ -82,8 +82,8 @@ const fullVerification = (overrides = {}) => ({
 });
 
 const file = (overrides = {}) => ({
-  buffer: Buffer.from('valid document'),
-  size: 15,
+  buffer: Buffer.from('%PDF-1.7\nvalid document'),
+  size: 23,
   mimetype: 'application/pdf',
   originalname: 'cac.pdf',
   ...overrides,
@@ -343,6 +343,10 @@ describe('Employer verification document privacy and cleanup', () => {
     [file({ mimetype: 'text/plain' }), 'CAC'],
     [file({ size: 11 * 1024 * 1024 }), 'CAC'],
     [file({ buffer: Buffer.alloc(0), size: 0 }), 'CAC'],
+    [file({ buffer: Buffer.from('not a PDF') }), 'CAC'],
+    [file({ originalname: 'cac.png' }), 'CAC'],
+    [file({ buffer: Buffer.from('89504e470d0a1a0a', 'hex'), mimetype: 'image/jpeg', originalname: 'cac.png' }), 'CAC'],
+    [file({ buffer: Buffer.from('89504e470d0a1a0a', 'hex'), mimetype: 'image/jpeg', originalname: 'cac.jpg' }), 'CAC'],
     [file(), 'INVALID'],
   ])('rejects invalid document input', async (invalidFile, kind) => {
     await expect(uploadVerificationDocument(employerId, invalidFile, kind)).rejects.toMatchObject({ status: expect.any(Number) });

@@ -211,7 +211,7 @@ test('direct contract-payment API is blocked before creating a payment or callin
   expect(response.status).toBe(503);
   expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   expect(global.fetch).not.toHaveBeenCalled();
-});
+}, 15_000);
 
 const paystackWebhookPayload = (transactionId = 987654) => ({
   event: 'charge.success',

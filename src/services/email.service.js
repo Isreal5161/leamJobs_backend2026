@@ -3,6 +3,11 @@ import nodemailer from 'nodemailer';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { renderEmailTemplate } from './email.templates.js';
+import {
+  decryptJobUpdatesEmailContent,
+  ENCRYPTED_JOB_UPDATES_EMAIL_PREFIX,
+  encryptJobUpdatesEmailContent,
+} from '../utils/jobUpdatesEmailEncryption.js';
 
 export const EMAIL_TYPES = Object.freeze({
   PASSWORD_RESET: 'PASSWORD_RESET',
@@ -116,7 +121,14 @@ export const sendAdminInvitationEmail = async ({ recipientEmail, link, invitatio
 export const queueEmail = async ({ recipientUserId = null, publicSubscriberId = null, notificationId, emailType, communicationPurpose, eventKey, recipientEmail, context, client = prisma }) => {
   const email = normalizeEmail(recipientEmail);
   if ((!recipientUserId && !publicSubscriberId) || (recipientUserId && publicSubscriberId) || !email || !isValidEmail(email)) throw new Error('A valid email recipient is required');
-  const template = renderEmailTemplate(emailType, context);
+  const renderedTemplate = renderEmailTemplate(emailType, context);
+  const template = emailType === EMAIL_TYPES.JOB_UPDATES_SUBSCRIBED
+    ? {
+      ...renderedTemplate,
+      html: encryptJobUpdatesEmailContent({ html: renderedTemplate.html, text: renderedTemplate.text }),
+      text: '',
+    }
+    : renderedTemplate;
   const data = { ...deliveryData({ recipientUserId, notificationId, emailType, communicationPurpose, eventKey, recipientEmail: email, ...template }), publicSubscriberId };
 
   try {
@@ -142,22 +154,30 @@ export const sendEmailDelivery = async (delivery, client = prisma) => {
   const attempts = delivery.attempts + 1;
   await client.emailDelivery.update({ where: { id: delivery.id }, data: { status: 'PROCESSING', attempts } });
   try {
+    const storedHtml = String(delivery.html ?? '');
+    const emailContent = delivery.emailType === EMAIL_TYPES.JOB_UPDATES_SUBSCRIBED
+      && storedHtml.startsWith(ENCRYPTED_JOB_UPDATES_EMAIL_PREFIX)
+      ? decryptJobUpdatesEmailContent(storedHtml)
+      : { html: delivery.html, text: delivery.text };
     await mailer.sendMail({
       from: env.EMAIL_FROM_NAME ? `"${env.EMAIL_FROM_NAME}" <${env.EMAIL_FROM}>` : env.EMAIL_FROM,
       to: delivery.recipientEmail,
       replyTo: env.EMAIL_REPLY_TO || undefined,
       subject: safeHeader(delivery.subject),
-      html: delivery.html,
-      text: delivery.text,
+      html: emailContent.html,
+      text: emailContent.text,
       messageId: `<${crypto.createHash('sha256').update(`${delivery.recipientUserId ?? delivery.publicSubscriberId}:${delivery.emailType}:${delivery.eventKey}`).digest('hex')}@leamjobs.com>`,
       headers: { 'X-LeamJobs-Email-Type': delivery.emailType },
     });
     return client.emailDelivery.update({ where: { id: delivery.id }, data: { status: 'SENT', sentAt: new Date(), lastError: null } });
   } catch (error) {
-    console.error('Email delivery failed:', { emailType: delivery.emailType, deliveryId: delivery.id, message: error.message });
+    const safeMessage = delivery.emailType === EMAIL_TYPES.JOB_UPDATES_SUBSCRIBED
+      ? 'Job updates email delivery failed'
+      : String(error.message).slice(0, 500);
+    console.error('Email delivery failed:', { emailType: delivery.emailType, deliveryId: delivery.id, message: safeMessage });
     return client.emailDelivery.update({
       where: { id: delivery.id },
-      data: { status: 'FAILED', lastError: String(error.message).slice(0, 500), nextAttemptAt: new Date(Date.now() + retryDelay(attempts)) },
+      data: { status: 'FAILED', lastError: safeMessage, nextAttemptAt: new Date(Date.now() + retryDelay(attempts)) },
     });
   }
 };
@@ -238,6 +258,19 @@ export const processPendingEmails = async ({ batchSize = 50, client = prisma } =
     }
     if ([EMAIL_TYPES.PROMOTIONAL_CAMPAIGN, EMAIL_TYPES.ESSENTIAL_ANNOUNCEMENT].includes(delivery.emailType)) {
       const suppressionReason = await recheckCampaignDelivery(delivery, client);
+      if (suppressionReason) {
+        await suppressDelivery(delivery, suppressionReason, client);
+        continue;
+      }
+    } else if (delivery.publicSubscriberId && delivery.emailType === EMAIL_TYPES.JOB_UPDATES_SUBSCRIBED) {
+      const subscriber = await client.publicJobSubscriber.findUnique({
+        where: { id: delivery.publicSubscriberId },
+        select: { email: true, isSubscribed: true },
+      });
+      let suppressionReason = null;
+      if (!subscriber) suppressionReason = 'Public subscriber is unavailable';
+      else if (subscriber.isSubscribed) suppressionReason = 'Subscription confirmation is no longer needed';
+      else if (normalizeEmail(subscriber.email) !== normalizeEmail(delivery.recipientEmail)) suppressionReason = 'Subscriber email address changed after queueing';
       if (suppressionReason) {
         await suppressDelivery(delivery, suppressionReason, client);
         continue;

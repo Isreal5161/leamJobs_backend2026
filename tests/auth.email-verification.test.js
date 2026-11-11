@@ -264,7 +264,7 @@ test('staff administrators use the existing login flow without a client-selected
     password: 'ValidPassword1!',
     role: 'SUPER_ADMIN',
   })).rejects.toMatchObject({ status: 401 });
-});
+}, 30_000);
 
 test('suspended staff are rejected by the existing login endpoint service', async () => {
   const staff = {

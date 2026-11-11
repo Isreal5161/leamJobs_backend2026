@@ -1,6 +1,7 @@
 import { prisma } from '../config/database.js';
 import { createNotification } from './notification.service.js';
 import { createObjectKey, deleteObject, readObject, uploadObject } from './storage/storage.service.js';
+import { validateUploadedImage, validateUploadedResume } from '../utils/fileValidation.js';
 
 const verificationDocumentSelect = {
   id: true,
@@ -146,6 +147,10 @@ const validateVerificationDocumentFile = (file) => {
     error.status = 400;
     throw error;
   }
+
+  const validatedFile = { ...file, mimetype: mimeType, originalname: originalName };
+  if (mimeType === 'application/pdf') validateUploadedResume(validatedFile);
+  else validateUploadedImage(validatedFile);
 };
 
 const mapVerification = (verification) => {

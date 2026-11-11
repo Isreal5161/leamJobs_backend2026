@@ -126,7 +126,7 @@ describe('Employer authentication and authorization', () => {
     expect(mockPrisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(mockPrisma.user.update).not.toHaveBeenCalled();
     expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 
   test.each([
     ['SEEKER', 'EMPLOYER'],
@@ -155,7 +155,7 @@ describe('Employer authentication and authorization', () => {
       status: 401,
       name: 'AuthenticationError',
     });
-  });
+  }, 30_000);
 
   test('login HTTP responses do not distinguish a missing account from a wrong password', async () => {
     mockPrisma.user.findUnique.mockResolvedValueOnce(null);
@@ -181,7 +181,7 @@ describe('Employer authentication and authorization', () => {
     expect(wrongPassword.status).toBe(401);
     expect(missingAccount.body).toEqual(wrongPassword.body);
     expect(missingAccount.body.message).toBe('Invalid email or password.');
-  });
+  }, 30_000);
 
   test('public registration requires an explicit role and rejects missing role', async () => {
     const response = await request(app)

@@ -57,6 +57,7 @@ export const env = {
   // payout account create/update will succeed - not added to requiredEnvVars to avoid blocking
   // startup for unrelated deployments until this feature is rolled out)
   PAYOUT_ENCRYPTION_KEY: process.env.PAYOUT_ENCRYPTION_KEY || '',
+  JOB_UPDATES_EMAIL_ENCRYPTION_KEY: process.env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY || '',
 
   // Nigerian USD domiciliary transfers require remitter details registered with Flutterwave.
   // These must be copied from approved merchant/KYC records, never inferred from a user profile.

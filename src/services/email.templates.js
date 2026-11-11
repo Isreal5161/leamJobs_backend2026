@@ -176,7 +176,7 @@ export const renderEmailTemplate = (emailType, context = {}) => {
     link: context.link,
     linkLabel: context.linkLabel,
     unsubscribeUrl: context.unsubscribeUrl,
-    isMarketing: context.isMarketing === true || emailType === 'JOB_UPDATES_SUBSCRIBED',
+    isMarketing: context.isMarketing === true,
   });
 };
 

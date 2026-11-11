@@ -17,6 +17,16 @@ test('trusted proxy defaults to disabled until deployment topology is confirmed'
   expect(app.get('trust proxy')).toBe(0);
 });
 
+test('security headers scope HSTS to the responding host', async () => {
+  const response = await request(app).get('/health');
+
+  expect(response.status).toBe(200);
+  expect(response.headers['strict-transport-security']).toBe('max-age=31536000');
+  expect(response.headers['x-content-type-options']).toBe('nosniff');
+  expect(response.headers['x-frame-options']).toBe('SAMEORIGIN');
+  expect(response.headers['referrer-policy']).toBe('no-referrer');
+});
+
 test('CORS allows configured frontend origins with credentials', async () => {
   const response = await request(app)
     .get('/health')
@@ -24,6 +34,16 @@ test('CORS allows configured frontend origins with credentials', async () => {
 
   expect(response.status).toBe(200);
   expect(response.headers['access-control-allow-origin']).toBe('https://frontend.example.test');
+  expect(response.headers['access-control-allow-credentials']).toBe('true');
+});
+
+test('CORS allows the deployed www frontend origin', async () => {
+  const response = await request(app)
+    .get('/health')
+    .set('Origin', 'https://www.leamjobs.com');
+
+  expect(response.status).toBe(200);
+  expect(response.headers['access-control-allow-origin']).toBe('https://www.leamjobs.com');
   expect(response.headers['access-control-allow-credentials']).toBe('true');
 });
 

@@ -6,3 +6,10 @@ export const validateJobUpdatesSubscription = (req, res, next) => {
   req.body = result.data;
   return next();
 };
+
+export const validateJobUpdatesConfirmation = (req, res, next) => {
+  const result = z.object({ token: z.string().min(1) }).strict().safeParse(req.body);
+  if (!result.success) return res.status(400).json({ message: 'A valid confirmation token is required' });
+  req.body = result.data;
+  return next();
+};

@@ -5,6 +5,7 @@ process.env.JWT_SECRET = 'email-test-secret';
 process.env.JWT_ISSUER = 'test-issuer';
 process.env.JWT_AUDIENCE = 'test-audience';
 process.env.EMAIL_ENABLED = 'false';
+process.env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY = 'job-updates-email-test-key-at-least-32-bytes';
 
 const mockSendMail = jest.fn();
 jest.unstable_mockModule('nodemailer', () => ({
@@ -24,11 +25,19 @@ const mockPrisma = {
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: mockPrisma }));
 
 const { env } = await import('../src/config/env.js');
-const { isEmailEnabled, queueEmail, processPendingEmails, createUnsubscribeToken, verifyUnsubscribeToken } = await import('../src/services/email.service.js');
+const {
+  isEmailEnabled,
+  queueEmail,
+  sendEmailDelivery,
+  processPendingEmails,
+  createUnsubscribeToken,
+  verifyUnsubscribeToken,
+} = await import('../src/services/email.service.js');
 
 afterEach(() => {
   jest.clearAllMocks();
   env.EMAIL_ENABLED = false;
+  env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY = process.env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY;
 });
 
 test('email stays safely disabled without SMTP credentials', () => {
@@ -76,6 +85,243 @@ test('public subscription confirmation deliveries use the public-subscriber idem
     },
     select: expect.any(Object),
   });
+});
+
+test('delivers mailbox confirmations while the public subscriber is pending', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  mockSendMail.mockResolvedValue({});
+  const delivery = {
+    id: 'public-confirmation', recipientUserId: null, publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com', emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:hash', status: 'PENDING', attempts: 0,
+    publicSubscriber: { isSubscribed: false },
+  };
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([delivery]);
+  mockPrisma.emailDelivery.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockPrisma.publicJobSubscriber.findUnique.mockResolvedValue({
+    email: 'visitor@example.com',
+    isSubscribed: false,
+  });
+
+  await expect(processPendingEmails({ client: mockPrisma })).resolves.toBe(1);
+  expect(mockPrisma.publicJobSubscriber.findUnique).toHaveBeenCalledWith({
+    where: { id: 'subscriber-1' },
+    select: { email: true, isSubscribed: true },
+  });
+  expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ to: 'visitor@example.com' }));
+});
+
+test('encrypts confirmation email content at rest and decrypts it only for delivery', async () => {
+  const token = 'private-confirmation-bearer-token';
+  const context = {
+    title: 'Confirm your LeamJobs job updates',
+    message: 'Confirm your email address.',
+    link: `https://leamjobs.com/unsubscribe-job-updates?action=confirm&token=${token}`,
+    linkLabel: 'Confirm subscription',
+    isMarketing: false,
+  };
+  mockPrisma.emailDelivery.create.mockImplementation(async ({ data }) => ({ id: 'encrypted-confirmation', ...data }));
+  const queued = await queueEmail({
+    publicSubscriberId: 'subscriber-1',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:hash',
+    recipientEmail: 'visitor@example.com',
+    context,
+  });
+  const durable = mockPrisma.emailDelivery.create.mock.calls[0][0].data;
+
+  expect(durable.html).toContain('leamjobs:job-updates-email:v1:');
+  expect(durable.html).not.toContain(token);
+  expect(durable.text).toBe('');
+  expect(JSON.stringify(durable)).not.toContain(token);
+
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  mockSendMail.mockResolvedValue({});
+  const delivery = {
+    ...queued,
+    recipientUserId: null,
+    publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:hash',
+    attempts: 0,
+  };
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+
+  await expect(sendEmailDelivery(delivery, mockPrisma)).resolves.toMatchObject({ status: 'SENT' });
+  expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({
+    html: expect.stringContaining(token),
+    text: expect.stringContaining(token),
+  }));
+});
+
+test('keeps encrypted confirmation emails retryable after delivery failure', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  const token = 'retryable-confirmation-token';
+  mockPrisma.emailDelivery.create.mockImplementation(async ({ data }) => ({ id: 'retry-confirmation', ...data }));
+  const queued = await queueEmail({
+    publicSubscriberId: 'subscriber-1',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:retry',
+    recipientEmail: 'visitor@example.com',
+    context: { title: 'Confirm', message: 'Confirm here.', link: `https://leamjobs.com/confirm?token=${token}` },
+  });
+  const delivery = {
+    ...queued,
+    recipientUserId: null,
+    publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:retry',
+    attempts: 0,
+  };
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockSendMail.mockRejectedValueOnce(new Error('SMTP unavailable')).mockResolvedValueOnce({});
+
+  await expect(sendEmailDelivery(delivery, mockPrisma)).resolves.toMatchObject({ status: 'FAILED' });
+  expect(mockPrisma.emailDelivery.update).toHaveBeenLastCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ status: 'FAILED', nextAttemptAt: expect.any(Date) }),
+  }));
+  mockSendMail.mockClear();
+  await expect(sendEmailDelivery({ ...delivery, attempts: 1 }, mockPrisma)).resolves.toMatchObject({ status: 'SENT' });
+  expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ html: expect.stringContaining(token) }));
+});
+
+test('redacts confirmation content from transport errors in logs and persisted retry state', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  const token = 'sensitive-confirmation-token';
+  const privateContent = `https://leamjobs.com/confirm?token=${token}<p>${token}</p>`;
+  mockPrisma.emailDelivery.create.mockImplementation(async ({ data }) => ({ id: 'redacted-confirmation', ...data }));
+  const queued = await queueEmail({
+    publicSubscriberId: 'subscriber-1',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:redacted',
+    recipientEmail: 'visitor@example.com',
+    context: { title: 'Confirm', message: 'Confirm here.', link: privateContent },
+  });
+  const delivery = {
+    ...queued,
+    recipientUserId: null,
+    publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:redacted',
+    attempts: 0,
+  };
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockSendMail.mockRejectedValueOnce(new Error(`Email delivery failed: ${privateContent}`));
+  const errorLog = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+  try {
+    await expect(sendEmailDelivery(delivery, mockPrisma)).resolves.toMatchObject({ status: 'FAILED' });
+    expect(mockPrisma.emailDelivery.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        status: 'FAILED',
+        lastError: 'Job updates email delivery failed',
+        nextAttemptAt: expect.any(Date),
+      }),
+    }));
+    expect(errorLog).toHaveBeenCalledWith('Email delivery failed:', expect.objectContaining({
+      emailType: 'JOB_UPDATES_SUBSCRIBED',
+      deliveryId: 'redacted-confirmation',
+      message: 'Job updates email delivery failed',
+    }));
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(mockPrisma.emailDelivery.update.mock.calls)).not.toContain(token);
+  } finally {
+    errorLog.mockRestore();
+  }
+});
+
+test('fails safely on missing or incorrect confirmation email encryption configuration', async () => {
+  const token = 'configuration-test-token';
+  mockPrisma.emailDelivery.create.mockImplementation(async ({ data }) => ({ id: 'config-confirmation', ...data }));
+  const queued = await queueEmail({
+    publicSubscriberId: 'subscriber-1',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:config',
+    recipientEmail: 'visitor@example.com',
+    context: { title: 'Confirm', message: 'Confirm here.', link: `https://leamjobs.com/confirm?token=${token}` },
+  });
+  const delivery = {
+    ...queued,
+    recipientUserId: null,
+    publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:config',
+    attempts: 0,
+  };
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockSendMail.mockResolvedValue({});
+
+  env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY = '';
+  await expect(sendEmailDelivery(delivery, mockPrisma)).resolves.toMatchObject({ status: 'FAILED' });
+  expect(mockSendMail).not.toHaveBeenCalled();
+
+  env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY = 'different-job-updates-email-key-at-least-32-bytes';
+  await expect(sendEmailDelivery({ ...delivery, attempts: 1 }, mockPrisma)).resolves.toMatchObject({ status: 'FAILED' });
+  expect(mockSendMail).not.toHaveBeenCalled();
+});
+
+test('does not queue a confirmation when its encryption secret is missing', async () => {
+  env.JOB_UPDATES_EMAIL_ENCRYPTION_KEY = '';
+  await expect(queueEmail({
+    publicSubscriberId: 'subscriber-1',
+    emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:missing-key',
+    recipientEmail: 'visitor@example.com',
+    context: { title: 'Confirm', message: 'Confirm here.', link: 'https://leamjobs.com/confirm?token=secret' },
+  })).rejects.toThrow('JOB_UPDATES_EMAIL_ENCRYPTION_KEY');
+  expect(mockPrisma.emailDelivery.create).not.toHaveBeenCalled();
+});
+
+test('suppresses a pending confirmation after the subscriber has already confirmed', async () => {
+  env.EMAIL_ENABLED = true;
+  env.EMAIL_HOST = 'smtp.invalid';
+  env.EMAIL_USER = 'test-user';
+  env.EMAIL_PASSWORD = 'test-password';
+  const delivery = {
+    id: 'public-confirmation', recipientUserId: null, publicSubscriberId: 'subscriber-1',
+    recipientEmail: 'visitor@example.com', emailType: 'JOB_UPDATES_SUBSCRIBED',
+    eventKey: 'public-job-updates:confirm:subscriber-1:hash', status: 'PENDING', attempts: 0,
+    publicSubscriber: { isSubscribed: false },
+  };
+  mockPrisma.emailDelivery.findMany.mockResolvedValue([delivery]);
+  mockPrisma.emailDelivery.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.emailDelivery.update.mockImplementation(async ({ data }) => ({ ...delivery, ...data }));
+  mockPrisma.publicJobSubscriber.findUnique.mockResolvedValue({
+    email: 'visitor@example.com',
+    isSubscribed: true,
+  });
+
+  await expect(processPendingEmails({ client: mockPrisma })).resolves.toBe(0);
+  expect(mockPrisma.emailDelivery.update).toHaveBeenLastCalledWith({
+    where: { id: 'public-confirmation' },
+    data: {
+      status: 'SUPPRESSED',
+      suppressionReason: 'Subscription confirmation is no longer needed',
+      lastError: null,
+    },
+  });
+  expect(mockSendMail).not.toHaveBeenCalled();
 });
 
 test('suppresses a promotional delivery when the recipient opted out after queueing', async () => {

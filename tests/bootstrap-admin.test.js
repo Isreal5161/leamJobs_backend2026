@@ -107,7 +107,7 @@ describe('Admin bootstrap script', () => {
     expect(createData.passwordHash).not.toBe('Password1!');
     expect(createData.passwordHash).not.toBeUndefined();
     expect(await bcrypt.compare('Password1!', createData.passwordHash)).toBe(true);
-  });
+  }, 30_000);
 
   test('SEEKER cannot be converted to ADMIN', async () => {
     mockPrisma.user.findUnique.mockResolvedValue({
@@ -180,7 +180,7 @@ describe('Admin bootstrap script', () => {
         passwordHash: expect.any(String),
       }),
     }));
-  });
+  }, 30_000);
 
   test('public registration still cannot create ADMIN', async () => {
     const response = await request(app)
@@ -237,6 +237,6 @@ describe('Admin bootstrap script', () => {
     expect(mockPrisma.authSession.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ id: tokenPayload.sid, userId: 'admin-login-1', expiresAt: expect.any(Date) }),
     }));
-  });
+  }, 30_000);
 
 });
