@@ -222,9 +222,14 @@ const applyOutcome = async ({ withdrawalId, status, providerTransfer, preSubmiss
   if (!withdrawal) throw providerError('Withdrawal not found', 404);
   const isReversal = status === 'REVERSED';
   if (finalizedStatuses.has(withdrawal.status) && !(isReversal && withdrawal.status === 'SUCCESSFUL')) return { alreadyFinalized: true, status: withdrawal.status };
+  if (isReversal && !['PROCESSING', 'SUCCESSFUL'].includes(withdrawal.status)) {
+    throw providerError('A withdrawal can only be reversed while processing or after success', 409);
+  }
   if (!withdrawal.payout) throw providerError('Withdrawal payout record is missing', 409);
 
   const provider = withdrawal.provider;
+  const reversalAfterSuccess = isReversal && withdrawal.status === 'SUCCESSFUL';
+  const reversalWhileProcessing = isReversal && withdrawal.status === 'PROCESSING';
   const providerReference = provider === 'PAYSTACK' && providerTransfer?.transfer_code
     ? String(providerTransfer.transfer_code)
     : withdrawal.providerReference;
@@ -271,8 +276,18 @@ const applyOutcome = async ({ withdrawalId, status, providerTransfer, preSubmiss
   if (status === 'FAILED' || isReversal) {
     const walletRows = await transaction.$queryRaw`SELECT "id", "availableBalance", "pendingWithdrawalBalance" FROM "Wallet" WHERE "id" = ${withdrawal.walletId} AND "currency" = ${withdrawal.currency} FOR UPDATE`;
     const wallet = walletRows[0];
-    if (!wallet || (!isReversal && new Prisma.Decimal(wallet.pendingWithdrawalBalance).lt(withdrawal.amount))) throw providerError('Reserved withdrawal balance is inconsistent', 409);
-    await transaction.wallet.update({ where: { id: withdrawal.walletId }, data: { availableBalance: { increment: withdrawal.amount }, ...(isReversal ? {} : { pendingWithdrawalBalance: { decrement: withdrawal.amount } }), version: { increment: 1 } } });
+    const releasesPendingReservation = !isReversal || reversalWhileProcessing;
+    if (!wallet || (releasesPendingReservation && new Prisma.Decimal(wallet.pendingWithdrawalBalance).lt(withdrawal.amount))) {
+      throw providerError('Reserved withdrawal balance is inconsistent', 409);
+    }
+    await transaction.wallet.update({
+      where: { id: withdrawal.walletId },
+      data: {
+        availableBalance: { increment: withdrawal.amount },
+        ...(releasesPendingReservation ? { pendingWithdrawalBalance: { decrement: withdrawal.amount } } : {}),
+        version: { increment: 1 },
+      },
+    });
     const failureReason = providerTransfer?.failure_reason || providerTransfer?.complete_message || `${provider} transfer failed`;
     await transaction.withdrawal.update({ where: { id: withdrawal.id }, data: { status: 'FAILED', failedAt: new Date(), failureReason } });
     await transaction.payout.update({ where: { id: withdrawal.payout.id }, data: { status: 'FAILED', failedAt: new Date(), failureReason, providerReference } });
@@ -284,8 +299,13 @@ const applyOutcome = async ({ withdrawalId, status, providerTransfer, preSubmiss
       if (attemptTransferReference !== null) attemptData.providerReference = attemptTransferReference;
       await transaction.payoutAttempt.update({ where: { id: attempt.id }, data: attemptData });
     }
-    await transaction.financialLedgerEntry.create({ data: { entryType: 'WITHDRAWAL_FAILED_REVERSAL', amount: withdrawal.amount, currency: withdrawal.currency, balanceAfter: new Prisma.Decimal(wallet.availableBalance).plus(withdrawal.amount), idempotencyKey: `${withdrawal.id}:failed-reversal`, description: isReversal ? `${provider} withdrawal reversed after payout success` : `Withdrawal reservation released after ${provider} failure`, walletId: withdrawal.walletId, withdrawalId: withdrawal.id, payoutId: withdrawal.payout.id } });
-    if (isReversal && withdrawalFeeAmount.gt(0)) {
+    const ledgerDescription = reversalAfterSuccess
+      ? `${provider} withdrawal reversed after payout success`
+      : reversalWhileProcessing
+        ? `${provider} withdrawal transfer reversed while processing; reservation returned`
+        : `Withdrawal reservation released after ${provider} failure`;
+    await transaction.financialLedgerEntry.create({ data: { entryType: 'WITHDRAWAL_FAILED_REVERSAL', amount: withdrawal.amount, currency: withdrawal.currency, balanceAfter: new Prisma.Decimal(wallet.availableBalance).plus(withdrawal.amount), idempotencyKey: `${withdrawal.id}:failed-reversal`, description: ledgerDescription, walletId: withdrawal.walletId, withdrawalId: withdrawal.id, payoutId: withdrawal.payout.id } });
+    if (reversalAfterSuccess && withdrawalFeeAmount.gt(0)) {
       await transaction.financialLedgerEntry.create({ data: { entryType: 'WITHDRAWAL_FEE_REVERSAL', amount: withdrawalFeeAmount, currency: withdrawal.currency, idempotencyKey: `${withdrawal.id}:fee-reversal`, description: 'Platform withdrawal charge reversed after payout reversal', walletId: withdrawal.walletId, withdrawalId: withdrawal.id, payoutId: withdrawal.payout.id } });
     }
     return { status: 'FAILED' };
@@ -579,11 +599,18 @@ export const executePendingWithdrawals = async ({ batchSize = 25 } = {}) => {
   const results = [];
   for (const withdrawal of withdrawals) {
     try {
-      results.push(await executeWithdrawal(withdrawal.id));
+      results.push({ withdrawalId: withdrawal.id, ...(await executeWithdrawal(withdrawal.id)) });
     } catch (error) {
-      results.push(error?.preSubmissionFailure
-        ? { status: 'PENDING', unresolved: true, manualReviewRequired: true, message: error.message }
-        : { status: 'PROCESSING', unresolved: true });
+      results.push({
+        withdrawalId: withdrawal.id,
+        status: error?.preSubmissionFailure ? 'PENDING' : 'PROCESSING',
+        unresolved: true,
+        ...(error?.preSubmissionFailure ? { manualReviewRequired: true } : {}),
+        error: {
+          name: typeof error?.name === 'string' ? error.name : 'Error',
+          message: typeof error?.message === 'string' ? error.message : 'Withdrawal execution failed',
+        },
+      });
     }
   }
   return results;
@@ -593,7 +620,19 @@ export const reconcilePendingWithdrawals = async ({ batchSize = 25 } = {}) => {
   const withdrawals = await prisma.withdrawal.findMany({ where: { status: 'PROCESSING', provider: { in: ['PAYSTACK', 'FLUTTERWAVE'] } }, orderBy: [{ processingAt: 'asc' }, { id: 'asc' }], take: Math.min(Math.max(Number(batchSize) || 25, 1), 100), select: { id: true } });
   const results = [];
   for (const withdrawal of withdrawals) {
-    try { results.push(await reconcileWithdrawal(withdrawal.id)); } catch { results.push({ status: 'PROCESSING', unresolved: true }); }
+    try {
+      results.push({ withdrawalId: withdrawal.id, ...(await reconcileWithdrawal(withdrawal.id)) });
+    } catch (error) {
+      results.push({
+        withdrawalId: withdrawal.id,
+        status: 'PROCESSING',
+        unresolved: true,
+        error: {
+          name: typeof error?.name === 'string' ? error.name : 'Error',
+          message: typeof error?.message === 'string' ? error.message : 'Withdrawal reconciliation failed',
+        },
+      });
+    }
   }
   return results;
 };

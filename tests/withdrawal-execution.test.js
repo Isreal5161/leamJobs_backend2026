@@ -61,6 +61,7 @@ jest.unstable_mockModule('../src/services/flutterwave.service.js', () => flutter
 const {
   executePendingWithdrawals,
   executeWithdrawal,
+  reconcilePendingWithdrawals,
   reconcileWithdrawal,
   recoverFlutterwaveTransfer,
   withdrawalReference,
@@ -187,22 +188,34 @@ const usUsdWithdrawal = (overrides = {}) => ({
   ...overrides,
 });
 
-const setupFlutterwaveOutcome = ({ transfer, attemptReference }) => {
+const setupFlutterwaveOutcome = ({
+  transfer,
+  attemptReference,
+  withdrawalStatus = 'PROCESSING',
+  amount = '1000.00',
+  feeAmount = '0.00',
+  payoutAmount = '1000.00',
+  pendingWithdrawalBalance = amount,
+} = {}) => {
   const tx = {
     $queryRaw: jest.fn()
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: 'wallet-1', pendingWithdrawalBalance: new Prisma.Decimal('1000.00'), availableBalance: new Prisma.Decimal('0.00') }]),
+      .mockResolvedValueOnce([{
+        id: 'wallet-1',
+        pendingWithdrawalBalance: new Prisma.Decimal(pendingWithdrawalBalance),
+        availableBalance: new Prisma.Decimal('0.00'),
+      }]),
     withdrawal: {
       findUnique: jest.fn().mockResolvedValue({
         id: withdrawalId,
         walletId: 'wallet-1',
-        amount: new Prisma.Decimal('1000.00'),
-        withdrawalFeeAmount: new Prisma.Decimal('0.00'),
+        amount: new Prisma.Decimal(amount),
+        withdrawalFeeAmount: new Prisma.Decimal(feeAmount),
         currency: 'USD',
-        status: 'PROCESSING',
+        status: withdrawalStatus,
         provider: 'FLUTTERWAVE',
         providerReference: 'lj_wd_withdrawal-1',
-        payout: { id: 'payout-1', amount: new Prisma.Decimal('1000.00') },
+        payout: { id: 'payout-1', amount: new Prisma.Decimal(payoutAmount) },
       }),
       update: jest.fn(),
     },
@@ -216,7 +229,7 @@ const setupFlutterwaveOutcome = ({ transfer, attemptReference }) => {
   };
   mockPrisma.withdrawal.findUnique.mockResolvedValue({
     id: withdrawalId,
-    status: 'PROCESSING',
+    status: withdrawalStatus,
     provider: 'FLUTTERWAVE',
     providerReference: 'lj_wd_withdrawal-1',
     payout: { attempts: [{ providerReference: attemptReference }] },
@@ -995,6 +1008,24 @@ test('pending provider status preserves the wallet reservation', async () => {
   expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
+test('retrying a submitted processing withdrawal does not initiate a second transfer', async () => {
+  const tx = setupTransaction();
+  paystack.createPaystackTransfer.mockResolvedValue({ transfer_code: 'TRF_test', reference: 'lj_wd_withdrawal-1', status: 'pending', amount: 8000000, currency: 'NGN' });
+  paystack.getPaystackTransferByReference.mockResolvedValue({ reference: 'lj_wd_withdrawal-1', status: 'pending' });
+
+  await expect(executeWithdrawal(withdrawalId)).resolves.toMatchObject({ status: 'PROCESSING' });
+  mockPrisma.withdrawal.findUnique.mockResolvedValue({
+    status: 'PROCESSING',
+    provider: 'PAYSTACK',
+    currency: 'NGN',
+    payoutAccount: { provider: 'PAYSTACK' },
+  });
+  await expect(executeWithdrawal(withdrawalId)).resolves.toEqual({ status: 'PROCESSING', alreadyHandled: true });
+
+  expect(paystack.createPaystackTransfer).toHaveBeenCalledTimes(1);
+  expect(tx.wallet.update).not.toHaveBeenCalled();
+});
+
 test('already-finalized reconciliation performs no financial mutation', async () => {
   const tx = setupTransaction();
   mockPrisma.withdrawal.findUnique.mockResolvedValue({ id: withdrawalId, status: 'SUCCESSFUL', provider: 'PAYSTACK', providerReference: 'lj_wd_withdrawal-1', payout: { attempts: [{ providerReference: 'TRF_test' }] } });
@@ -1030,10 +1061,168 @@ test('a Paystack reversal after success restores available balance once', async 
   tx.$queryRaw.mockReset().mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'wallet-1', pendingWithdrawalBalance: new Prisma.Decimal('0.00'), availableBalance: new Prisma.Decimal('20000.00') }]);
   const result = await reconcileWithdrawal(withdrawalId);
   expect(result.status).toBe('FAILED');
+  expect(tx.wallet.update).toHaveBeenCalledWith({
+    where: { id: 'wallet-1' },
+    data: { availableBalance: { increment: new Prisma.Decimal('80000.00') }, version: { increment: 1 } },
+  });
   expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ entryType: 'WITHDRAWAL_FAILED_REVERSAL', idempotencyKey: `${withdrawalId}:failed-reversal` }) }));
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ description: 'PAYSTACK withdrawal reversed after payout success' }),
+  }));
   expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({ entryType: 'WITHDRAWAL_FEE_REVERSAL', amount: new Prisma.Decimal('4000.00'), idempotencyKey: `${withdrawalId}:fee-reversal` }),
   }));
+
+  mockPrisma.withdrawal.findUnique.mockResolvedValue({
+    id: withdrawalId,
+    status: 'FAILED',
+    provider: 'PAYSTACK',
+    providerReference: 'lj_wd_withdrawal-1',
+  });
+  await expect(reconcileWithdrawal(withdrawalId)).resolves.toEqual({ alreadyFinalized: true, status: 'FAILED' });
+  expect(paystack.getPaystackTransferByCode).toHaveBeenCalledTimes(1);
+  expect(tx.wallet.update).toHaveBeenCalledTimes(1);
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledTimes(2);
+});
+
+test('Flutterwave reversal while processing returns available funds and releases the reservation once', async () => {
+  const tx = setupFlutterwaveOutcome({
+    transfer: {
+      id: 12345,
+      reference: 'lj_wd_withdrawal-1',
+      status: 'REVERSED',
+      amount: 950,
+      currency: 'USD',
+    },
+    attemptReference: '12345',
+    amount: '1000.00',
+    feeAmount: '50.00',
+    payoutAmount: '950.00',
+    pendingWithdrawalBalance: '1000.00',
+  });
+
+  await expect(reconcileWithdrawal(withdrawalId)).resolves.toEqual({ status: 'FAILED' });
+
+  expect(tx.wallet.update).toHaveBeenCalledWith({
+    where: { id: 'wallet-1' },
+    data: {
+      availableBalance: { increment: new Prisma.Decimal('1000.00') },
+      pendingWithdrawalBalance: { decrement: new Prisma.Decimal('1000.00') },
+      version: { increment: 1 },
+    },
+  });
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({
+      entryType: 'WITHDRAWAL_FAILED_REVERSAL',
+      description: 'FLUTTERWAVE withdrawal transfer reversed while processing; reservation returned',
+      idempotencyKey: `${withdrawalId}:failed-reversal`,
+    }),
+  }));
+  expect(tx.financialLedgerEntry.create).not.toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ entryType: 'WITHDRAWAL_FEE_REVERSAL' }),
+  }));
+
+  mockPrisma.withdrawal.findUnique.mockResolvedValue({
+    id: withdrawalId,
+    status: 'FAILED',
+    provider: 'FLUTTERWAVE',
+    providerReference: 'lj_wd_withdrawal-1',
+  });
+  await expect(reconcileWithdrawal(withdrawalId)).resolves.toEqual({ alreadyFinalized: true, status: 'FAILED' });
+  expect(flutterwave.getFlutterwaveTransferById).toHaveBeenCalledTimes(1);
+  expect(tx.wallet.update).toHaveBeenCalledTimes(1);
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledTimes(1);
+});
+
+test('concurrent reconciliation applies a processing reversal only once', async () => {
+  const tx = setupFlutterwaveOutcome({
+    transfer: {
+      id: 12345,
+      reference: 'lj_wd_withdrawal-1',
+      status: 'REVERSED',
+      amount: 1000,
+      currency: 'USD',
+    },
+    attemptReference: '12345',
+  });
+  let currentStatus = 'PROCESSING';
+  tx.withdrawal.findUnique.mockImplementation(async () => ({
+    id: withdrawalId,
+    walletId: 'wallet-1',
+    amount: new Prisma.Decimal('1000.00'),
+    withdrawalFeeAmount: new Prisma.Decimal('0.00'),
+    currency: 'USD',
+    status: currentStatus,
+    provider: 'FLUTTERWAVE',
+    providerReference: 'lj_wd_withdrawal-1',
+    payout: { id: 'payout-1', amount: new Prisma.Decimal('1000.00') },
+  }));
+  let transactionTail = Promise.resolve();
+  mockPrisma.$transaction.mockImplementation(async (callback) => {
+    const previousTransaction = transactionTail;
+    let releaseTransaction;
+    transactionTail = new Promise((resolve) => { releaseTransaction = resolve; });
+    await previousTransaction;
+    try {
+      const result = await callback(tx);
+      const latestUpdate = tx.withdrawal.update.mock.calls.at(-1)?.[0]?.data;
+      if (latestUpdate?.status) currentStatus = latestUpdate.status;
+      return result;
+    } finally {
+      releaseTransaction();
+    }
+  });
+
+  const results = await Promise.all([
+    reconcileWithdrawal(withdrawalId),
+    reconcileWithdrawal(withdrawalId),
+  ]);
+
+  expect(results.map((result) => result.status).sort()).toEqual(['FAILED', 'FAILED']);
+  expect(results.filter((result) => result.alreadyFinalized)).toHaveLength(1);
+  expect(tx.wallet.update).toHaveBeenCalledTimes(1);
+  expect(tx.financialLedgerEntry.create).toHaveBeenCalledTimes(1);
+});
+
+test('processing reversal rejects an insufficient pending reservation without financial mutation', async () => {
+  const tx = setupFlutterwaveOutcome({
+    transfer: {
+      id: 12345,
+      reference: 'lj_wd_withdrawal-1',
+      status: 'REVERSED',
+      amount: 1000,
+      currency: 'USD',
+    },
+    attemptReference: '12345',
+    pendingWithdrawalBalance: '0.00',
+  });
+
+  await expect(reconcileWithdrawal(withdrawalId)).rejects.toMatchObject({ status: 409 });
+  expect(tx.wallet.update).not.toHaveBeenCalled();
+  expect(tx.withdrawal.update).not.toHaveBeenCalled();
+  expect(tx.payout.update).not.toHaveBeenCalled();
+  expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
+});
+
+test('provider lookup failure leaves a withdrawal unresolved and never starts another transfer', async () => {
+  const tx = setupFlutterwaveOutcome({
+    transfer: null,
+    attemptReference: '12345',
+  });
+  flutterwave.getFlutterwaveTransferById.mockRejectedValue(new Error('provider lookup unavailable'));
+  mockPrisma.withdrawal.findMany.mockResolvedValue([{ id: withdrawalId }]);
+
+  const [result] = await reconcilePendingWithdrawals();
+
+  expect(result).toMatchObject({
+    withdrawalId,
+    status: 'PROCESSING',
+    unresolved: true,
+    error: { message: 'provider lookup unavailable' },
+  });
+  expect(flutterwave.createFlutterwaveTransfer).not.toHaveBeenCalled();
+  expect(tx.wallet.update).not.toHaveBeenCalled();
+  expect(tx.financialLedgerEntry.create).not.toHaveBeenCalled();
 });
 
 test('amount mismatch does not finalize a provider result', async () => {

@@ -40,12 +40,13 @@ const corsOptions = {
   origin: [
     env.FRONTEND_URL,
     env.FRONTEND_URL_PROD,
+    'https://leamjobs.com',
     'https://www.leamjobs.com',
     ...(env.NODE_ENV === 'development' || env.NODE_ENV === 'test' ? ['http://localhost:5173'] : []),
   ].filter(Boolean).map(normalizeOrigin),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
 };
 
 app.use(cors(corsOptions));

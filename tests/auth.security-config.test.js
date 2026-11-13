@@ -47,6 +47,25 @@ test('CORS allows the deployed www frontend origin', async () => {
   expect(response.headers['access-control-allow-credentials']).toBe('true');
 });
 
+test.each(['https://leamjobs.com', 'https://www.leamjobs.com'])(
+  'CORS withdrawal preflight allows Idempotency-Key from %s',
+  async (origin) => {
+    const response = await request(app)
+      .options('/api/seeker/payments/withdrawals')
+      .set('Origin', origin)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'authorization,content-type,idempotency-key');
+
+    expect(response.status).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe(origin);
+    expect(response.headers['access-control-allow-credentials']).toBe('true');
+    expect(response.headers['access-control-allow-methods']).toContain('POST');
+    expect(response.headers['access-control-allow-headers'].toLowerCase().split(/,\s*/)).toEqual(
+      expect.arrayContaining(['authorization', 'content-type', 'idempotency-key']),
+    );
+  },
+);
+
 test('CORS does not grant credentials to arbitrary origins', async () => {
   const response = await request(app)
     .get('/health')
