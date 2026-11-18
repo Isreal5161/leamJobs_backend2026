@@ -144,6 +144,14 @@ const safeErrorMessage = (error, status) => {
   return message || 'Something went wrong. Please try again.';
 };
 
+const redactOAuthDiagnostic = (value) => String(value ?? '')
+  .replace(/\b(authorization|cookie|set-cookie)(\s*[:=]\s*)[^\r\n]*/gi, '$1$2[REDACTED]')
+  .replace(
+    /(["']?\b(?:code_verifier|client_secret|access_token|id_token|refresh_token|code|state|nonce)\b["']?)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s&;,)]+)/gi,
+    '$1$2[REDACTED]',
+  )
+  .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]');
+
 // Global error handler
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
@@ -151,6 +159,14 @@ app.use((err, req, res, next) => {
   const errorCode = typeof err.code === 'string' && /^[A-Z0-9_]+$/.test(err.code)
     ? err.code
     : undefined;
+  if (req.method === 'GET' && req.path === '/api/auth/google/callback') {
+    console.error('Google OAuth callback diagnostic', {
+      errorName: typeof err.name === 'string' ? err.name : 'Error',
+      errorMessage: redactOAuthDiagnostic(err.message),
+      ...(err.code !== undefined ? { errorCode: String(err.code) } : {}),
+      errorStack: redactOAuthDiagnostic(err.stack),
+    });
+  }
   console.error('Request failed', {
     method: req.method,
     path: req.path,
