@@ -2,6 +2,7 @@ import { DuplicateEmailError, getCurrentUser, getLegalAcceptanceStatus, loginUse
 import { requestPasswordReset, resetPassword } from '../services/passwordReset.service.js';
 import { resendEmailVerification, verifyEmailWithCode } from '../services/emailVerification.service.js';
 import { completeGoogleRegistration, googleContinuationCookieName, googleStateCookieName, handleGoogleCallback, startGoogleOAuth } from '../services/googleOAuth.service.js';
+import { buildGoogleCallbackUrl } from '../utils/googleOAuthCallbackUrl.js';
 import { toUserResponse } from '../utils/userResponse.js';
 import { env } from '../config/env.js';
 import { prisma } from '../config/database.js';
@@ -182,16 +183,14 @@ export const googleStartController = async (req, res, next) => {
 };
 
 export const googleCallbackController = async (req, res, next) => {
-  const state = typeof req.query.state === 'string' ? req.query.state : '';
-  const stateCookieName = state ? googleStateCookieName(state) : '';
+  let stateCookieName = '';
   try {
+    const callbackUrl = buildGoogleCallbackUrl(req.originalUrl, env.GOOGLE_REDIRECT_URI);
+    const state = callbackUrl.searchParams.get('state') || '';
+    stateCookieName = state ? googleStateCookieName(state) : '';
     const result = await handleGoogleCallback({
-      code: req.query.code,
-      state,
-      nonce: req.query.nonce,
+      callbackUrl,
       browserBinding: readCookie(req, stateCookieName),
-      error: req.query.error,
-      errorDescription: req.query.error_description,
     });
 
     if (stateCookieName) res.clearCookie(stateCookieName, googleCookieOptions('/api/auth/google/callback'));

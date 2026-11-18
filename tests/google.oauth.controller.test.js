@@ -36,7 +36,11 @@ jest.unstable_mockModule('../src/services/googleOAuth.service.js', () => ({
 }));
 jest.unstable_mockModule('../src/utils/userResponse.js', () => ({ toUserResponse: jest.fn((user) => user) }));
 jest.unstable_mockModule('../src/config/env.js', () => ({
-  env: { FRONTEND_URL: 'https://frontend.example', NODE_ENV: 'test' },
+  env: {
+    FRONTEND_URL: 'https://frontend.example',
+    GOOGLE_REDIRECT_URI: 'https://api.leamjobs.com/api/auth/google/callback',
+    NODE_ENV: 'test',
+  },
 }));
 jest.unstable_mockModule('../src/config/database.js', () => ({ prisma: {} }));
 
@@ -47,6 +51,7 @@ const {
   register,
 } = await import('../src/controllers/auth.controller.js');
 const { validateGoogleComplete } = await import('../src/validators/auth.validation.js');
+const { buildGoogleCallbackUrl } = await import('../src/utils/googleOAuthCallbackUrl.js');
 
 const createResponse = () => {
   const res = {
@@ -91,17 +96,28 @@ test('Google callback uses the browser binding and keeps the continuation token 
     continuationToken: 'secret-continuation-token',
   });
   const req = {
-    query: { code: 'authorization-code', state: 'oauth-state' },
-    headers: { cookie: 'state_cookie=random-browser-secret' },
+    originalUrl: '/api/auth/google/callback?code=authorization-code&state=oauth-state&scope=openid',
+    headers: {
+      cookie: 'state_cookie=random-browser-secret',
+      host: 'attacker.example',
+      'x-forwarded-host': 'attacker.example',
+      'x-forwarded-proto': 'http',
+    },
   };
   const res = createResponse();
 
   await googleCallbackController(req, res, jest.fn());
 
-  expect(handleGoogleCallback).toHaveBeenCalledWith(expect.objectContaining({
-    state: 'oauth-state',
+  const callbackArguments = handleGoogleCallback.mock.calls[0][0];
+  expect(callbackArguments).toEqual(expect.objectContaining({
     browserBinding: 'random-browser-secret',
   }));
+  expect(callbackArguments.callbackUrl).toBeInstanceOf(URL);
+  expect(callbackArguments.callbackUrl.origin).toBe('https://api.leamjobs.com');
+  expect(callbackArguments.callbackUrl.pathname).toBe('/api/auth/google/callback');
+  expect(callbackArguments.callbackUrl.searchParams.get('code')).toBe('authorization-code');
+  expect(callbackArguments.callbackUrl.searchParams.get('state')).toBe('oauth-state');
+  expect(callbackArguments.callbackUrl.searchParams.get('scope')).toBe('openid');
   expect(res.clearCookie).toHaveBeenCalledWith('state_cookie', expect.objectContaining({
     path: '/api/auth/google/callback',
   }));
@@ -117,6 +133,44 @@ test('Google callback uses the browser binding and keeps the continuation token 
   expect(redirectUrl.toString()).not.toContain('secret-continuation-token');
   expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
   expect(res.set).toHaveBeenCalledWith('Referrer-Policy', 'no-referrer');
+});
+
+test('Google callback rejects duplicate query parameters instead of choosing one', async () => {
+  const req = {
+    originalUrl: '/api/auth/google/callback?state=first&state=second&code=authorization-code',
+    headers: { cookie: 'state_cookie=random-browser-secret' },
+  };
+  const res = createResponse();
+  const next = jest.fn();
+
+  await googleCallbackController(req, res, next);
+
+  expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 400 }));
+  expect(handleGoogleCallback).not.toHaveBeenCalled();
+});
+
+test('callback URL builder rejects malformed parameters and preserves provider error parameters', () => {
+  expect(() => buildGoogleCallbackUrl(
+    '/api/auth/google/callback?state=%',
+    'https://api.leamjobs.com/api/auth/google/callback',
+  )).toThrow();
+  expect(() => buildGoogleCallbackUrl(
+    '//attacker.example/api/auth/google/callback?state=oauth-state',
+    'https://api.leamjobs.com/api/auth/google/callback',
+  )).toThrow();
+  expect(() => buildGoogleCallbackUrl(
+    '/api/auth/google/callback?state=%C3%28',
+    'https://api.leamjobs.com/api/auth/google/callback',
+  )).toThrow();
+
+  const callbackUrl = buildGoogleCallbackUrl(
+    '/api/auth/google/callback?error=access_denied&error_description=Cancelled&state=oauth-state',
+    'https://api.leamjobs.com/api/auth/google/callback',
+  );
+  expect(callbackUrl.origin).toBe('https://api.leamjobs.com');
+  expect(callbackUrl.searchParams.get('error')).toBe('access_denied');
+  expect(callbackUrl.searchParams.get('error_description')).toBe('Cancelled');
+  expect(callbackUrl.searchParams.get('state')).toBe('oauth-state');
 });
 
 test('Google completion reads the continuation from HttpOnly cookie and clears it after success', async () => {
@@ -209,7 +263,7 @@ test('OAuth credentials use Secure cookies in production', async () => {
   });
   const callbackResponse = createResponse();
   await googleCallbackController({
-    query: { code: 'authorization-code', state: 'oauth-state' },
+    originalUrl: '/api/auth/google/callback?code=authorization-code&state=oauth-state',
     headers: { cookie: 'state_cookie=random-browser-secret' },
   }, callbackResponse, jest.fn());
 

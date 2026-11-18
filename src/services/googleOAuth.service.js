@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { discovery } from 'openid-client';
+import { authorizationCodeGrant, buildAuthorizationUrl, discovery } from 'openid-client';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { registerEmailVerificationOnUser } from './emailVerification.service.js';
@@ -104,16 +104,48 @@ const verifyPendingContinuation = (token) => {
   }
 };
 
-const getGoogleClient = async () => {
+const getGoogleConfiguration = async () => {
   ensureGoogleConfig();
 
-  const issuer = await discovery(new URL(env.GOOGLE_ISSUER || 'https://accounts.google.com'));
-  return new issuer.Client({
-    client_id: env.GOOGLE_CLIENT_ID,
+  return discovery(new URL(env.GOOGLE_ISSUER || 'https://accounts.google.com'), env.GOOGLE_CLIENT_ID, {
     client_secret: env.GOOGLE_CLIENT_SECRET,
     redirect_uris: [env.GOOGLE_REDIRECT_URI],
     response_types: ['code'],
   });
+};
+
+const invalidCallbackRequest = () => Object.assign(
+  new Error('Invalid Google OAuth callback URL.'),
+  {
+    status: 400,
+    publicMessage: 'Google sign-in could not be completed. Please try again.',
+  },
+);
+
+const getCallbackParameters = (callbackUrl) => {
+  let redirectUrl;
+  try {
+    redirectUrl = new URL(env.GOOGLE_REDIRECT_URI);
+  } catch {
+    ensureGoogleConfig();
+    throw invalidCallbackRequest();
+  }
+
+  if (
+    !(callbackUrl instanceof URL)
+    || callbackUrl.origin !== redirectUrl.origin
+    || callbackUrl.pathname !== redirectUrl.pathname
+    || callbackUrl.hash
+  ) {
+    throw invalidCallbackRequest();
+  }
+
+  const parameters = new Map();
+  for (const [name, value] of callbackUrl.searchParams) {
+    if (parameters.has(name)) throw invalidCallbackRequest();
+    parameters.set(name, value);
+  }
+  return parameters;
 };
 
 const normalizeRole = (requestedRole) => {
@@ -150,9 +182,9 @@ export const startGoogleOAuth = async (requestedRole, legalVersions) => {
     },
   });
 
-  const client = await getGoogleClient();
+  const configuration = await getGoogleConfiguration();
 
-  const redirectUrl = client.authorizationUrl({
+  const redirectUrl = buildAuthorizationUrl(configuration, {
     redirect_uri: env.GOOGLE_REDIRECT_URI,
     scope: GOOGLE_OAUTH_SCOPE,
     response_type: 'code',
@@ -163,26 +195,34 @@ export const startGoogleOAuth = async (requestedRole, legalVersions) => {
   });
 
   return {
-    redirectUrl,
+    redirectUrl: redirectUrl.toString(),
     pendingId: pending.id,
     stateCookieName: googleStateCookieName(state),
     stateCookieValue: browserBinding,
   };
 };
 
-export const handleGoogleCallback = async ({ code, state, nonce, browserBinding, error, errorDescription }) => {
-  if (error) {
-    const googleError = new Error(errorDescription || 'Google authentication failed.');
-    googleError.status = 400;
-    googleError.publicMessage = 'Google authentication failed. Please try again.';
-    throw googleError;
-  }
+export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
+  const callbackParameters = getCallbackParameters(callbackUrl);
+  const code = callbackParameters.get('code');
+  const state = callbackParameters.get('state');
+  const error = callbackParameters.get('error');
+  const errorDescription = callbackParameters.get('error_description');
 
-  if (!code || !state || !browserBinding) {
+  if (code && error) throw invalidCallbackRequest();
+
+  if (!state || !browserBinding) {
     const invalidState = new Error('Missing Google OAuth state or authorization code.');
     invalidState.status = 400;
     invalidState.publicMessage = 'Google sign-in could not be completed. Please try again.';
     throw invalidState;
+  }
+
+  if (!code && !error) {
+    const missingCode = new Error('Missing Google OAuth authorization code.');
+    missingCode.status = 400;
+    missingCode.publicMessage = 'Google sign-in could not be completed. Please try again.';
+    throw missingCode;
   }
 
   const pending = await prisma.pendingOAuthRegistration.findFirst({
@@ -200,24 +240,30 @@ export const handleGoogleCallback = async ({ code, state, nonce, browserBinding,
     throw invalidState;
   }
 
-  if (nonce && String(nonce).trim() !== pending.nonce) {
-    const invalidNonce = new Error('Invalid Google OAuth nonce.');
-    invalidNonce.status = 400;
-    invalidNonce.publicMessage = 'Google identity verification failed.';
-    throw invalidNonce;
+  if (error) {
+    const googleError = new Error(errorDescription || 'Google authentication failed.');
+    googleError.status = 400;
+    googleError.publicMessage = 'Google authentication failed. Please try again.';
+    throw googleError;
   }
 
-  const client = await getGoogleClient();
+  if (!pending.nonce || !pending.codeVerifier) {
+    const invalidPending = new Error('Google OAuth pending registration is missing security checks.');
+    invalidPending.status = 400;
+    invalidPending.publicMessage = 'Your Google sign-in session is invalid. Please start again.';
+    throw invalidPending;
+  }
 
+  const configuration = await getGoogleConfiguration();
   let tokenSet;
   try {
-    tokenSet = await client.callback(
-      env.GOOGLE_REDIRECT_URI,
-      { code, state },
+    tokenSet = await authorizationCodeGrant(
+      configuration,
+      callbackUrl,
       {
-        state,
-        nonce: pending.nonce,
-        code_verifier: pending.codeVerifier,
+        expectedState: state,
+        expectedNonce: pending.nonce,
+        pkceCodeVerifier: pending.codeVerifier,
       },
     );
   } catch (callbackError) {

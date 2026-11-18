@@ -53,25 +53,27 @@ const mockPrisma = {
 mockPrisma.$transaction.mockImplementation(async (callback) => callback(mockPrisma));
 
 let lastAuthorizationParameters;
-const mockClient = {
-  authorizationUrl: jest.fn((parameters) => {
-    lastAuthorizationParameters = parameters;
-    return 'https://accounts.google.com/o/oauth2/v2/auth?client_id=google-client-id';
+const mockConfiguration = {};
+const mockDiscovery = jest.fn().mockResolvedValue(mockConfiguration);
+const mockBuildAuthorizationUrl = jest.fn((_configuration, parameters) => {
+  lastAuthorizationParameters = parameters;
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  for (const [name, value] of Object.entries(parameters)) url.searchParams.set(name, value);
+  return url;
+});
+const mockAuthorizationCodeGrant = jest.fn(async () => ({
+  claims: () => ({
+    sub: 'google-subject-123',
+    email: 'alice@example.com',
+    email_verified: true,
+    given_name: 'Alice',
+    family_name: 'Example',
+    picture: 'https://example.com/avatar.png',
+    iss: 'https://accounts.google.com',
+    aud: 'google-client-id',
+    exp: Math.floor(Date.now() / 1000) + 3600,
   }),
-  callback: jest.fn(async () => ({
-    claims: () => ({
-      sub: 'google-subject-123',
-      email: 'alice@example.com',
-      email_verified: true,
-      given_name: 'Alice',
-      family_name: 'Example',
-      picture: 'https://example.com/avatar.png',
-      iss: 'https://accounts.google.com',
-      aud: 'google-client-id',
-      exp: Math.floor(Date.now() / 1000) + 3600,
-    }),
-  })),
-};
+}));
 
 const mockRegisterEmailVerificationOnUser = jest.fn().mockResolvedValue({ success: true });
 
@@ -80,9 +82,9 @@ jest.unstable_mockModule('../src/services/emailVerification.service.js', () => (
   registerEmailVerificationOnUser: mockRegisterEmailVerificationOnUser,
 }));
 jest.unstable_mockModule('openid-client', () => ({
-  discovery: jest.fn().mockResolvedValue({
-    Client: jest.fn().mockImplementation(() => mockClient),
-  }),
+  discovery: mockDiscovery,
+  buildAuthorizationUrl: mockBuildAuthorizationUrl,
+  authorizationCodeGrant: mockAuthorizationCodeGrant,
 }));
 
 const {
@@ -90,8 +92,20 @@ const {
   handleGoogleCallback: handleGoogleCallbackImplementation,
   completeGoogleRegistration,
 } = await import('../src/services/googleOAuth.service.js');
+const callbackUrlFor = ({ code, state, error, errorDescription }) => {
+  const callbackUrl = new URL(process.env.GOOGLE_REDIRECT_URI);
+  for (const [name, value] of Object.entries({
+    code,
+    state,
+    error,
+    error_description: errorDescription,
+  })) {
+    if (value !== undefined) callbackUrl.searchParams.set(name, value);
+  }
+  return callbackUrl;
+};
 const handleGoogleCallback = (options) => handleGoogleCallbackImplementation({
-  ...options,
+  callbackUrl: options.callbackUrl ?? callbackUrlFor(options),
   browserBinding: options.browserBinding ?? 'test-browser-binding',
 });
 
@@ -141,6 +155,12 @@ test('seeker starts Google signup and binds the intended role to the pending OAu
       .update(`${lastAuthorizationParameters.state}:${result.stateCookieValue}`)
       .digest('hex'),
   );
+  const pendingData = mockPrisma.pendingOAuthRegistration.create.mock.calls[0][0].data;
+  expect(lastAuthorizationParameters.nonce).toBe(pendingData.nonce);
+  expect(lastAuthorizationParameters.code_challenge).toBe(
+    crypto.createHash('sha256').update(pendingData.codeVerifier).digest('base64url'),
+  );
+  expect(lastAuthorizationParameters.code_challenge_method).toBe('S256');
   expect(mockPrisma.pendingOAuthRegistration.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({
       provider: 'GOOGLE',
@@ -149,6 +169,24 @@ test('seeker starts Google signup and binds the intended role to the pending OAu
     acceptedPrivacyVersion: '1.0',
       status: 'PENDING',
     }),
+  }));
+  expect(mockDiscovery).toHaveBeenCalledWith(
+    new URL('https://accounts.google.com'),
+    'google-client-id',
+    {
+      client_secret: 'google-client-secret',
+      redirect_uris: [process.env.GOOGLE_REDIRECT_URI],
+      response_types: ['code'],
+    },
+  );
+  expect(mockBuildAuthorizationUrl).toHaveBeenCalledWith(mockConfiguration, expect.objectContaining({
+    redirect_uri: process.env.GOOGLE_REDIRECT_URI,
+    scope: 'openid email profile',
+    response_type: 'code',
+    state: expect.any(String),
+    nonce: expect.any(String),
+    code_challenge: expect.any(String),
+    code_challenge_method: 'S256',
   }));
 });
 
@@ -207,7 +245,14 @@ test('invalid Google role is rejected at start', async () => {
 });
 
 test('Google cancellation returns a safe restart message', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-cancelled',
+    status: 'PENDING',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+
   await expect(handleGoogleCallback({
+    state: 'state-cancelled',
     error: 'access_denied',
     errorDescription: 'The user cancelled the Google sign-in request.',
   })).rejects.toMatchObject({
@@ -215,7 +260,10 @@ test('Google cancellation returns a safe restart message', async () => {
     publicMessage: 'Google authentication failed. Please try again.',
   });
 
-  expect(mockPrisma.pendingOAuthRegistration.findFirst).not.toHaveBeenCalled();
+  expect(mockPrisma.pendingOAuthRegistration.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ status: 'PENDING' }),
+  }));
+  expect(mockAuthorizationCodeGrant).not.toHaveBeenCalled();
 });
 
 test('handleGoogleCallback rejects invalid state', async () => {
@@ -226,10 +274,22 @@ test('handleGoogleCallback rejects invalid state', async () => {
   });
 });
 
+test('handleGoogleCallback rejects an expired pending OAuth state', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue(null);
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'expired-state' })).rejects.toMatchObject({
+    status: 400,
+    publicMessage: 'Your Google sign-in session expired. Please try again.',
+  });
+  expect(mockPrisma.pendingOAuthRegistration.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ expiresAt: { gt: expect.any(Date) } }),
+  }));
+  expect(mockAuthorizationCodeGrant).not.toHaveBeenCalled();
+});
+
 test('handleGoogleCallback rejects a missing browser binding without querying state', async () => {
   await expect(handleGoogleCallbackImplementation({
-    code: 'auth-code-123',
-    state: 'state-123',
+    callbackUrl: callbackUrlFor({ code: 'auth-code-123', state: 'state-123' }),
   })).rejects.toMatchObject({ status: 400 });
 
   expect(mockPrisma.pendingOAuthRegistration.findFirst).not.toHaveBeenCalled();
@@ -239,8 +299,7 @@ test('handleGoogleCallback binds OAuth state to the initiating browser secret', 
   mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue(null);
 
   await expect(handleGoogleCallbackImplementation({
-    code: 'auth-code-123',
-    state: 'state-123',
+    callbackUrl: callbackUrlFor({ code: 'auth-code-123', state: 'state-123' }),
     browserBinding: 'different-browser-secret',
   })).rejects.toMatchObject({ status: 400 });
 
@@ -253,7 +312,7 @@ test('handleGoogleCallback binds OAuth state to the initiating browser secret', 
   });
 });
 
-test('handleGoogleCallback rejects invalid nonce', async () => {
+test('authorization-code grant validates the stored nonce and PKCE verifier without a nonce query parameter', async () => {
   mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
     id: 'pending-1',
     nonce: 'nonce-valid',
@@ -265,9 +324,19 @@ test('handleGoogleCallback rejects invalid nonce', async () => {
     email: '',
     expiresAt: new Date(Date.now() + 60_000),
   });
+  mockAuthorizationCodeGrant.mockRejectedValueOnce(new Error('ID Token nonce mismatch'));
 
   await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-bad' })).rejects.toMatchObject({
     status: 400,
+  });
+
+  const [configuration, callbackUrl, checks] = mockAuthorizationCodeGrant.mock.calls[0];
+  expect(configuration).toBe(mockConfiguration);
+  expect(callbackUrl.searchParams.has('nonce')).toBe(false);
+  expect(checks).toEqual({
+    expectedState: 'state-123',
+    expectedNonce: 'nonce-valid',
+    pkceCodeVerifier: 'code-verifier-123',
   });
 });
 
@@ -339,7 +408,7 @@ test('handleGoogleCallback rejects unverified Google email', async () => {
     email: '',
     expiresAt: new Date(Date.now() + 60_000),
   });
-  mockClient.callback.mockImplementationOnce(async () => ({
+  mockAuthorizationCodeGrant.mockResolvedValueOnce({
     claims: () => ({
       sub: 'google-subject-123',
       email: 'alice@example.com',
@@ -348,7 +417,7 @@ test('handleGoogleCallback rejects unverified Google email', async () => {
       aud: 'google-client-id',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }),
-  }));
+  });
 
   await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
     status: 400,
@@ -390,6 +459,15 @@ test('handleGoogleCallback creates a user and keeps the email-verification workf
 
   expect(result.email).toBe('alice@example.com');
   expect(result.role).toBe('SEEKER');
+  const [configuration, callbackUrl, checks] = mockAuthorizationCodeGrant.mock.calls[0];
+  expect(configuration).toBe(mockConfiguration);
+  expect(callbackUrl.origin + callbackUrl.pathname).toBe(process.env.GOOGLE_REDIRECT_URI);
+  expect(callbackUrl.searchParams.has('nonce')).toBe(false);
+  expect(checks).toEqual({
+    expectedState: 'state-123',
+    expectedNonce: 'nonce-123',
+    pkceCodeVerifier: 'code-verifier-123',
+  });
   expect(mockPrisma.user.create).toHaveBeenCalledTimes(1);
   expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
     data: expect.objectContaining({
