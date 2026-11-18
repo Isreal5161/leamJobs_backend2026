@@ -313,7 +313,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
   }
 
   const callbackResult = await prisma.$transaction(async (transaction) => {
-    const existingOAuthAccount = await transaction.oauthAccount.findUnique({
+    const existingOAuthAccount = await transaction.oAuthAccount.findUnique({
       where: {
         provider_providerSubject: {
           provider: GOOGLE_PROVIDER,
@@ -441,7 +441,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
     await recordLegalAcceptance(transaction, createdUser.id, legalVersions, 'GOOGLE');
 
     try {
-      await transaction.oauthAccount.create({
+      await transaction.oAuthAccount.create({
         data: {
           provider: GOOGLE_PROVIDER,
           providerSubject,
@@ -454,7 +454,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
       });
     } catch (error) {
       if (error?.code === 'P2002') {
-        const canonicalAccount = await transaction.oauthAccount.findUnique({
+        const canonicalAccount = await transaction.oAuthAccount.findUnique({
           where: {
             provider_providerSubject: {
               provider: GOOGLE_PROVIDER,
