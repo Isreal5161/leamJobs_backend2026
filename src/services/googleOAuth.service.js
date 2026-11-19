@@ -528,7 +528,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
   return callbackResult;
 };
 
-export const completeGoogleRegistration = async ({ pendingId, continuationToken, email, companyName, phone }) => {
+export const completeGoogleRegistration = async ({ pendingId, continuationToken, email }) => {
   if (!pendingId || !continuationToken) {
     const error = new Error('Missing Google registration continuation data.');
     error.status = 400;
@@ -579,42 +579,6 @@ export const completeGoogleRegistration = async ({ pendingId, continuationToken,
     error.status = 409;
     error.publicMessage = 'Google signup role mismatch. Please start again.';
     throw error;
-  }
-
-  if (pending.intendedRole === 'EMPLOYER') {
-    const existingEmployerProfile = await prisma.employerProfile.findUnique({
-      where: { userId: user.id },
-      select: { id: true },
-    });
-
-    if (!existingEmployerProfile) {
-      const trimmedCompanyName = String(companyName || '').trim();
-      const trimmedPhone = String(phone || user.phone || '').trim();
-
-      if (!trimmedCompanyName || !trimmedPhone) {
-        const error = new Error('Company name and phone number are required.');
-        error.status = 400;
-        error.publicMessage = 'Company name and phone number are required to complete employer signup.';
-        throw error;
-      }
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { phone: trimmedPhone },
-      });
-
-      await prisma.employerProfile.upsert({
-        where: { userId: user.id },
-        create: {
-          userId: user.id,
-          companyName: trimmedCompanyName,
-          companyLogoUrl: null,
-        },
-        update: {
-          companyName: trimmedCompanyName,
-        },
-      });
-    }
   }
 
   const { finalizedUser, token } = await prisma.$transaction(async (transaction) => {

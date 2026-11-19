@@ -225,7 +225,7 @@ test('Google completion reads the continuation from HttpOnly cookie and clears i
   expect(res.status).toHaveBeenCalledWith(200);
 });
 
-test('Google completion request no longer accepts a continuation token in the request body', () => {
+test('Google completion request only accepts its pending registration and email', () => {
   const req = { body: { pendingId: 'pending-1', email: 'user@example.com' } };
   const res = createResponse();
   const next = jest.fn();
@@ -234,6 +234,22 @@ test('Google completion request no longer accepts a continuation token in the re
 
   expect(next).toHaveBeenCalledTimes(1);
   expect(req.body).toEqual({ pendingId: 'pending-1', email: 'user@example.com' });
+
+  const profileDataReq = {
+    body: {
+      pendingId: 'pending-1',
+      email: 'user@example.com',
+      companyName: 'Untrusted Company',
+      phone: '+234 800 000 0000',
+    },
+  };
+  const profileDataRes = createResponse();
+  const nextWithProfileData = jest.fn();
+
+  validateGoogleComplete(profileDataReq, profileDataRes, nextWithProfileData);
+
+  expect(profileDataRes.status).toHaveBeenCalledWith(400);
+  expect(nextWithProfileData).not.toHaveBeenCalled();
 });
 
 test('new and duplicate registrations receive the same enumeration-safe response', async () => {

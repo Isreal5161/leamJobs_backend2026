@@ -877,6 +877,62 @@ test('completeGoogleRegistration issues a session once for a verified seeker', a
   }));
 });
 
+test('completeGoogleRegistration allows a verified Google employer to finish before profile completion', async () => {
+  const pending = {
+    id: 'pending-employer-incomplete',
+    intendedRole: 'EMPLOYER',
+    email: 'employer@example.com',
+    provider: 'GOOGLE',
+    providerSubject: 'google-subject-123',
+    userId: 'user-employer-incomplete',
+    status: 'VERIFICATION_PENDING',
+    expiresAt: new Date(Date.now() + 60_000),
+    consumedAt: null,
+  };
+  mockPrisma.pendingOAuthRegistration.findUnique.mockResolvedValue(pending);
+  mockPrisma.user.findUnique
+    .mockResolvedValueOnce({
+      id: pending.userId,
+      email: pending.email,
+      firstName: 'Alex',
+      lastName: 'Employer',
+      role: 'EMPLOYER',
+      isActive: true,
+      isVerified: true,
+      phone: null,
+    })
+    .mockResolvedValueOnce({
+      id: pending.userId,
+      email: pending.email,
+      firstName: 'Alex',
+      lastName: 'Employer',
+      role: 'EMPLOYER',
+      isActive: true,
+      isVerified: true,
+      phone: null,
+      createdAt: new Date(),
+    });
+  mockPrisma.employerProfile.findUnique.mockResolvedValue(null);
+  mockPrisma.pendingOAuthRegistration.updateMany.mockResolvedValue({ count: 1 });
+
+  const result = await completeGoogleRegistration({
+    pendingId: pending.id,
+    continuationToken: createContinuationToken({
+      pendingId: pending.id,
+      userId: pending.userId,
+      email: pending.email,
+      role: 'EMPLOYER',
+    }),
+    email: pending.email,
+  });
+
+  expect(result.user.role).toBe('EMPLOYER');
+  expect(mockPrisma.employerProfile.upsert).not.toHaveBeenCalled();
+  expect(mockPrisma.pendingOAuthRegistration.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: expect.objectContaining({ id: pending.id, userId: pending.userId }),
+  }));
+});
+
 test('repeated Google completion cannot consume the same pending registration twice', async () => {
   const pending = {
     id: 'pending-replay',

@@ -29,8 +29,27 @@ const employerProfileSchema = z.object({
   phone: nullableText('Company phone', 40),
 }).strict();
 
+const employerProfileCompletionSchema = z.object({
+  companyName: z.string().trim().min(1, 'Company name is required').max(160, 'Company name must be 160 characters or fewer'),
+  phone: z.string().trim().min(1, 'Company phone is required').max(40, 'Company phone must be 40 characters or fewer'),
+}).strict();
+
 export const validateEmployerProfileUpdate = (req, res, next) => {
   const result = employerProfileSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
+export const validateEmployerProfileCompletion = (req, res, next) => {
+  const result = employerProfileCompletionSchema.safeParse(req.body);
 
   if (!result.success) {
     return res.status(400).json({

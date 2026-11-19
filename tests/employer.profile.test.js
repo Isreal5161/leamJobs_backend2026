@@ -17,7 +17,7 @@ const mockPrisma = {
     })),
   },
 
-  user: { findUnique: jest.fn() },
+  user: { findUnique: jest.fn(), update: jest.fn() },
   employerProfile: { upsert: jest.fn() },
   job: { findMany: jest.fn(), count: jest.fn() },
   employmentCompensation: { deleteMany: jest.fn() },
@@ -58,6 +58,7 @@ const user = (employerProfile = profile(), role = 'EMPLOYER') => ({
   isActive: true,
   role,
   email: 'employer@example.com',
+  phone: '+234 801 234 5678',
   employerProfile,
 });
 
@@ -135,6 +136,68 @@ describe('Employer Profile authentication and authorization', () => {
     expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: employerB } }));
   });
 
+  test('incomplete employer is blocked from protected operations but can read and complete their own profile', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(user(null));
+
+    const blockedResponse = await request(app)
+      .get('/api/employer/me')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+    expect(blockedResponse.status).toBe(403);
+    expect(blockedResponse.body.code).toBe('EMPLOYER_PROFILE_INCOMPLETE');
+
+    const profileResponse = await request(app)
+      .get('/api/employer/profile')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+    expect(profileResponse.status).toBe(200);
+
+    mockPrisma.employerProfile.upsert.mockResolvedValue(profile({ companyName: 'Completed Ltd' }));
+    const completionResponse = await request(app)
+      .put('/api/employer/profile/complete')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send({ companyName: ' Completed Ltd ', phone: ' +234 801 234 5678 ' });
+
+    expect(completionResponse.status).toBe(200);
+    expect(mockPrisma.employerProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: employerA },
+      create: expect.objectContaining({ userId: employerA, companyName: 'Completed Ltd' }),
+    }));
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+      where: { id: employerA },
+      data: { phone: '+234 801 234 5678' },
+    });
+  });
+
+  test('profile completion requires both sanitized company name and phone', async () => {
+    const response = await request(app)
+      .put('/api/employer/profile/complete')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send({ companyName: '   ', phone: '' });
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.employerProfile.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('profile completion rejects client-supplied account identifiers', async () => {
+    const response = await request(app)
+      .put('/api/employer/profile/complete')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`)
+      .send({ companyName: 'Completed Ltd', phone: '+234 801 234 5678', userId: employerB });
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.employerProfile.upsert).not.toHaveBeenCalled();
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('complete employer profile does not block employer operations', async () => {
+    const response = await request(app)
+      .get('/api/employer/me')
+      .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ id: employerA, role: 'EMPLOYER' });
+  });
+
   test('client identity and role fields are rejected instead of trusted', async () => {
     const response = await request(app)
       .patch('/api/employer/profile?userId=' + employerB + '&employerId=' + employerB)
@@ -155,7 +218,7 @@ describe('Employer Profile lifecycle and validation', () => {
       .set('Authorization', `Bearer ${token('EMPLOYER', employerA)}`);
 
     expect(response.status).toBe(200);
-    expect(response.body.data).toEqual({ profile: null, account: { email: 'employer@example.com' } });
+    expect(response.body.data).toEqual({ profile: null, account: { email: 'employer@example.com', phone: '+234 801 234 5678' } });
   });
 
   test('PATCH creates a missing profile using authenticated userId', async () => {
