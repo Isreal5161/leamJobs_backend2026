@@ -276,6 +276,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
   const claims = tokenSet.claims();
   const providerSubject = String(claims.sub || '').trim();
   const normalizedEmail = String(claims.email || '').trim().toLowerCase();
+  const googleEmailVerified = claims.email_verified === true;
 
   if (!providerSubject || !normalizedEmail) {
     const invalidIdentity = new Error('Google did not return a valid identity.');
@@ -303,13 +304,6 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
     expiredToken.status = 400;
     expiredToken.publicMessage = 'Google identity verification expired. Please try again.';
     throw expiredToken;
-  }
-
-  if (claims.email_verified !== true) {
-    const unverifiedEmail = new Error('Google email is not verified.');
-    unverifiedEmail.status = 400;
-    unverifiedEmail.publicMessage = 'Google email verification is required before continuing.';
-    throw unverifiedEmail;
   }
 
   const callbackResult = await prisma.$transaction(async (transaction) => {
@@ -396,6 +390,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
       const emailConflict = new Error('This email is already associated with a LeamJobs account.');
       emailConflict.status = 409;
       emailConflict.publicMessage = 'This email is already associated with a LeamJobs account. Please sign in to link Google or use a different email.';
+      emailConflict.oauthErrorCode = 'EMAIL_ALREADY_REGISTERED';
       throw emailConflict;
     }
 
@@ -416,8 +411,8 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
           lastName: String(claims.family_name || '').trim() || 'User',
           passwordHash: await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 12),
           role: pending.intendedRole,
-          isActive: false,
-          isVerified: false,
+          isActive: googleEmailVerified,
+          isVerified: googleEmailVerified,
         },
       });
     } catch (error) {
@@ -429,6 +424,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
           const emailConflict = new Error('This email is already associated with a LeamJobs account.');
           emailConflict.status = 409;
           emailConflict.publicMessage = 'This email is already associated with a LeamJobs account. Please sign in to link Google or use a different email.';
+          emailConflict.oauthErrorCode = 'EMAIL_ALREADY_REGISTERED';
           throw emailConflict;
         }
       }
@@ -500,7 +496,9 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
       throw error;
     }
 
-    await registerEmailVerificationOnUser(createdUser);
+    if (!googleEmailVerified) {
+      await registerEmailVerificationOnUser(createdUser);
+    }
 
     await transaction.pendingOAuthRegistration.update({
       where: { id: pending.id },

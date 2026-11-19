@@ -213,6 +213,14 @@ export const googleCallbackController = async (req, res, next) => {
     return res.redirect(302, target.toString());
   } catch (error) {
     if (stateCookieName) res.clearCookie(stateCookieName, googleCookieOptions('/api/auth/google/callback'));
+    if (error?.oauthErrorCode === 'EMAIL_ALREADY_REGISTERED') {
+      const frontendBase = env.FRONTEND_URL || 'http://localhost:4173';
+      const target = new URL('/register', frontendBase);
+      target.searchParams.set('oauth_error', 'email_already_registered');
+      res.set('Cache-Control', 'no-store');
+      res.set('Referrer-Policy', 'no-referrer');
+      return res.redirect(302, target.toString());
+    }
     return next(error);
   }
 };

@@ -149,6 +149,34 @@ test('Google callback rejects duplicate query parameters instead of choosing one
   expect(handleGoogleCallback).not.toHaveBeenCalled();
 });
 
+test('Google callback redirects email conflicts to signup with a safe error identifier', async () => {
+  const conflict = Object.assign(new Error('This email is already associated with a LeamJobs account.'), {
+    status: 409,
+    oauthErrorCode: 'EMAIL_ALREADY_REGISTERED',
+  });
+  handleGoogleCallback.mockRejectedValueOnce(conflict);
+  const req = {
+    originalUrl: '/api/auth/google/callback?code=authorization-code&state=oauth-state',
+    headers: { cookie: 'state_cookie=random-browser-secret' },
+  };
+  const res = createResponse();
+  const next = jest.fn();
+
+  await googleCallbackController(req, res, next);
+
+  expect(res.clearCookie).toHaveBeenCalledWith('state_cookie', expect.objectContaining({
+    path: '/api/auth/google/callback',
+  }));
+  expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  expect(res.set).toHaveBeenCalledWith('Referrer-Policy', 'no-referrer');
+  expect(res.redirect).toHaveBeenCalledTimes(1);
+  const redirectUrl = new URL(res.redirect.mock.calls[0][1]);
+  expect(redirectUrl.origin).toBe('https://frontend.example');
+  expect(redirectUrl.pathname).toBe('/register');
+  expect([...redirectUrl.searchParams.entries()]).toEqual([['oauth_error', 'email_already_registered']]);
+  expect(next).not.toHaveBeenCalled();
+});
+
 test('callback URL builder rejects malformed parameters and preserves provider error parameters', () => {
   expect(() => buildGoogleCallbackUrl(
     '/api/auth/google/callback?state=%',
