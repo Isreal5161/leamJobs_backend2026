@@ -18,12 +18,15 @@ const countApplicationsByStatus = (employerId, status) => prisma.application.cou
 });
 
 export const getEmployerDashboard = async (employerId) => {
-  const [openRoles, ...applicationCounts] = await Promise.all([
+  const [openRoles, totalApplicants, ...applicationCounts] = await Promise.all([
     prisma.job.count({
       where: {
         employerId,
         status: 'APPROVED',
       },
+    }),
+    prisma.application.count({
+      where: { job: { employerId } },
     }),
     ...applicationStatuses.map((status) => countApplicationsByStatus(employerId, status)),
     prisma.job.findMany({
@@ -69,7 +72,7 @@ export const getEmployerDashboard = async (employerId) => {
       openRoles,
       newApplicants: statusCounts.APPLIED,
       interviews: statusCounts.INTERVIEW,
-      averageMatchScore: null,
+      totalApplicants,
     },
     pipeline: {
       applied: statusCounts.APPLIED,

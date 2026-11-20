@@ -62,10 +62,15 @@ const createApplication = (id, name, title) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => ({
-    isActive: true,
-    role: where.id === 'seeker-1' ? 'SEEKER' : where.id === 'admin-1' ? 'ADMIN' : 'EMPLOYER',
-  }));
+  mockPrisma.user.findUnique.mockImplementation(async ({ where }) => {
+    const role = where.id === 'seeker-1' ? 'SEEKER' : where.id === 'admin-1' ? 'ADMIN' : 'EMPLOYER';
+    return {
+      isActive: true,
+      role,
+      phone: '+234 801 234 5678',
+      employerProfile: { companyName: 'Example Company' },
+    };
+  });
   mockPrisma.job.count.mockResolvedValue(0);
   mockPrisma.application.count.mockResolvedValue(0);
   mockPrisma.job.findMany.mockResolvedValue([]);
@@ -98,7 +103,7 @@ describe('GET /api/employer/dashboard', () => {
   test('allows an EMPLOYER token and returns database-derived dashboard data', async () => {
     mockPrisma.job.count.mockResolvedValue(2);
     mockPrisma.application.count.mockImplementation(({ where }) => Promise.resolve(
-      where.status === 'APPLIED' ? 3 : where.status === 'INTERVIEW' ? 1 : 0,
+      !where.status ? 7 : where.status === 'APPLIED' ? 3 : where.status === 'INTERVIEW' ? 1 : 0,
     ));
     mockPrisma.job.findMany.mockResolvedValue([createJob('job-a', 'Frontend Engineer')]);
     mockPrisma.application.findMany.mockResolvedValue([
@@ -117,7 +122,7 @@ describe('GET /api/employer/dashboard', () => {
           openRoles: 2,
           newApplicants: 3,
           interviews: 1,
-          averageMatchScore: null,
+          totalApplicants: 7,
         },
         pipeline: {
           applied: 3,
@@ -172,7 +177,7 @@ describe('GET /api/employer/dashboard', () => {
         openRoles: 0,
         newApplicants: 0,
         interviews: 0,
-        averageMatchScore: null,
+        totalApplicants: 0,
       },
       pipeline: {
         applied: 0,
