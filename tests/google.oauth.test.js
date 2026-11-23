@@ -90,6 +90,7 @@ jest.unstable_mockModule('openid-client', () => ({
 const {
   startGoogleOAuth,
   handleGoogleCallback: handleGoogleCallbackImplementation,
+  getGoogleRegistrationStatus,
   completeGoogleRegistration,
 } = await import('../src/services/googleOAuth.service.js');
 const callbackUrlFor = ({ code, state, error, errorDescription }) => {
@@ -126,6 +127,44 @@ const createContinuationToken = ({ pendingId, userId, email, role }) => jwt.sign
     expiresIn: '15m',
   },
 );
+
+test('Google registration status requires a valid pending continuation and returns trusted account state', async () => {
+  const pendingId = 'pending-status';
+  const userId = 'employer-status';
+  const email = 'employer@example.com';
+  const continuationToken = createContinuationToken({ pendingId, userId, email, role: 'EMPLOYER' });
+  mockPrisma.pendingOAuthRegistration.findUnique.mockResolvedValue({
+    id: pendingId,
+    userId,
+    provider: 'GOOGLE',
+    providerSubject: 'google-subject-123',
+    intendedRole: 'EMPLOYER',
+    email,
+    status: 'VERIFICATION_PENDING',
+    consumedAt: null,
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: userId,
+    email,
+    role: 'EMPLOYER',
+    isVerified: false,
+    isActive: false,
+    employerProfile: { companyName: '' },
+    phone: null,
+  });
+
+  const status = await getGoogleRegistrationStatus({ pendingId, continuationToken });
+
+  expect(status).toEqual({
+    email,
+    role: 'EMPLOYER',
+    isVerified: false,
+    isActive: false,
+    requiresEmailVerification: true,
+    requiresEmployerProfile: true,
+  });
+});
 
 afterEach(() => {
   jest.clearAllMocks();

@@ -107,7 +107,7 @@ const normalizePublicRegistrationRole = (role) => {
   throw new InvalidPublicRegistrationRoleError();
 };
 
-export const registerUser = async ({ firstName, lastName, email, password, phone, role, termsAccepted, privacyAccepted, acceptedTermsVersion, acceptedPrivacyVersion }) => {
+export const registerUser = async ({ firstName, lastName, email, password, phone, companyName, role, termsAccepted, privacyAccepted, acceptedTermsVersion, acceptedPrivacyVersion }) => {
   const legalVersions = { termsAccepted, privacyAccepted, acceptedTermsVersion, acceptedPrivacyVersion };
   assertCurrentLegalAcceptance(legalVersions);
   const normalizedFirstName = firstName.trim();
@@ -133,6 +133,15 @@ export const registerUser = async ({ firstName, lastName, email, password, phone
 
       if (normalizedRole === 'SEEKER') {
         await initializeSeekerWallet(transaction, createdUser.id);
+      }
+
+      if (normalizedRole === 'EMPLOYER') {
+        await transaction.employerProfile.create({
+          data: {
+            userId: createdUser.id,
+            companyName: companyName.trim(),
+          },
+        });
       }
 
       await recordLegalAcceptance(transaction, createdUser.id, legalVersions, 'PASSWORD');

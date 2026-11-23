@@ -27,6 +27,9 @@ const mockPrisma = {
   wallet: {
     upsert: jest.fn(),
   },
+  employerProfile: {
+    create: jest.fn(),
+  },
   userLegalAcceptance: { createMany: jest.fn().mockResolvedValue({ count: 2 }) },
   emailVerificationCode: {
     findUnique: jest.fn(),
@@ -121,7 +124,7 @@ test('registration creates a pending unverified user and queues an email verific
   }));
 });
 
-test('employer registration creates no wallet', async () => {
+test('employer registration stores the company profile without creating a wallet', async () => {
   const createdEmployer = {
     id: 'employer-1',
     firstName: 'Ada',
@@ -141,6 +144,7 @@ test('employer registration creates no wallet', async () => {
     lastName: 'Lovelace',
     email: createdEmployer.email,
     password: 'ValidPassword1!',
+    companyName: 'Lovelace Analytics',
     role: 'EMPLOYER',
     termsAccepted: true,
     privacyAccepted: true,
@@ -149,6 +153,9 @@ test('employer registration creates no wallet', async () => {
   })).resolves.toMatchObject({ id: createdEmployer.id, role: 'EMPLOYER' });
 
   expect(mockPrisma.wallet.upsert).not.toHaveBeenCalled();
+  expect(mockPrisma.employerProfile.create).toHaveBeenCalledWith({
+    data: { userId: createdEmployer.id, companyName: 'Lovelace Analytics' },
+  });
   expect(mockPrisma.userLegalAcceptance.createMany).toHaveBeenCalledWith({
     data: [
       { userId: createdEmployer.id, documentType: 'TERMS', version: '1.0', registrationMethod: 'PASSWORD' },
@@ -311,6 +318,7 @@ test('a correct verification code verifies the user and activates the account', 
   });
   mockPrisma.emailVerificationCode.updateMany.mockResolvedValue({ count: 1 });
   mockPrisma.$transaction.mockImplementation(async (callback) => callback({
+    authSession: mockPrisma.authSession,
     emailVerificationCode: {
       findUnique: jest.fn().mockResolvedValue({
         id: 'verification-2',
@@ -339,6 +347,8 @@ test('a correct verification code verifies the user and activates the account', 
   const value = await verifyEmailWithCode({ email: 'verify@example.com', code });
 
   expect(value.success).toBe(true);
+  expect(value.token).toBeTruthy();
+  expect(value.user).toMatchObject({ role: 'SEEKER', isVerified: true, isActive: true });
   expect(mockPrisma.user.update).not.toHaveBeenCalled();
 });
 
@@ -469,6 +479,7 @@ test('two concurrent verification attempts only consume one challenge', async ()
 
   let updateCalls = 0;
   mockPrisma.$transaction.mockImplementation(async (callback) => callback({
+    authSession: mockPrisma.authSession,
     emailVerificationCode: {
       updateMany: jest.fn().mockImplementation(async () => {
         updateCalls += 1;

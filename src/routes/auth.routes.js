@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { acceptAdminInvitationController, acceptCurrentLegalDocuments, forgotPassword, googleCallbackController, googleCompleteController, googleStartController, legalAcceptanceStatus, login, logout, me, register, resendEmailVerificationController, resetPasswordController, verifyEmailController } from '../controllers/auth.controller.js';
+import { acceptAdminInvitationController, acceptCurrentLegalDocuments, forgotPassword, googleCallbackController, googleCompleteController, googleRegistrationStatusController, googleStartController, googleVerifyEmailController, legalAcceptanceStatus, login, logout, me, register, resendEmailVerificationController, resetPasswordController, verifyEmailController } from '../controllers/auth.controller.js';
 import { authenticate } from '../middleware/auth.middleware.js';
-import { validateAdminInvitationAcceptance, validateGoogleComplete, validateGoogleStart, validateLegalAcceptance, validateLogin, validateRegistration, validateResendEmailVerification, validateVerifyEmail } from '../validators/auth.validation.js';
+import { validateAdminInvitationAcceptance, validateGoogleComplete, validateGoogleStart, validateGoogleStatus, validateGoogleVerifyEmail, validateLegalAcceptance, validateLogin, validateRegistration, validateResendEmailVerification, validateVerifyEmail } from '../validators/auth.validation.js';
 import { validateForgotPassword, validateResetPassword } from '../validators/passwordReset.validation.js';
 import { getPreferences, unsubscribe, updatePreferences } from '../controllers/emailPreference.controller.js';
 import { validateEmailPreferenceUpdate } from '../validators/emailPreference.validation.js';
@@ -15,6 +15,8 @@ authRouter.get('/legal-acceptances', authenticate, legalAcceptanceStatus);
 authRouter.post('/legal-acceptances', authenticate, validateLegalAcceptance, acceptCurrentLegalDocuments);
 authRouter.get('/google/start', authRateLimiters.googleStart, validateGoogleStart, googleStartController);
 authRouter.get('/google/callback', authRateLimiters.googleCallback, googleCallbackController);
+authRouter.get('/google/complete/status', authRateLimiters.googleComplete, validateGoogleStatus, googleRegistrationStatusController);
+authRouter.post('/google/complete/verify-email', authRateLimiters.googleComplete, validateGoogleVerifyEmail, googleVerifyEmailController);
 authRouter.post('/google/complete', authRateLimiters.googleComplete, validateGoogleComplete, googleCompleteController);
 authRouter.post('/verify-email', authRateLimiters.verifyEmail, validateVerifyEmail, verifyEmailController);
 authRouter.post('/verify-email/resend', authRateLimiters.resendEmailVerification, validateResendEmailVerification, resendEmailVerificationController);

@@ -391,6 +391,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
       emailConflict.status = 409;
       emailConflict.publicMessage = 'This email is already associated with a LeamJobs account. Please sign in to link Google or use a different email.';
       emailConflict.oauthErrorCode = 'EMAIL_ALREADY_REGISTERED';
+      emailConflict.existingRole = existingUserByEmail.role;
       throw emailConflict;
     }
 
@@ -425,6 +426,7 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
           emailConflict.status = 409;
           emailConflict.publicMessage = 'This email is already associated with a LeamJobs account. Please sign in to link Google or use a different email.';
           emailConflict.oauthErrorCode = 'EMAIL_ALREADY_REGISTERED';
+          emailConflict.existingRole = canonicalUser.role;
           throw emailConflict;
         }
       }
@@ -526,6 +528,51 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
   });
 
   return callbackResult;
+};
+
+export const getGoogleRegistrationStatus = async ({ pendingId, continuationToken }) => {
+  if (!pendingId || !continuationToken) {
+    throw Object.assign(new Error('Google sign-up status is missing.'), {
+      status: 400,
+      publicMessage: 'Your Google sign-up session is incomplete or expired. Please start again.',
+    });
+  }
+
+  const payload = verifyPendingContinuation(continuationToken);
+  const pending = await prisma.pendingOAuthRegistration.findUnique({
+    where: { id: pendingId },
+  });
+  assertPendingContinuationMatchesRecord(pending, payload, payload.email);
+
+  const user = await prisma.user.findUnique({
+    where: { id: pending.userId },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      isVerified: true,
+      isActive: true,
+      employerProfile: { select: { companyName: true } },
+      phone: true,
+    },
+  });
+
+  if (!user) {
+    throw Object.assign(new Error('Google registration user is missing.'), {
+      status: 400,
+      publicMessage: 'Your Google sign-up session is incomplete or expired. Please start again.',
+    });
+  }
+
+  return {
+    email: user.email,
+    role: user.role,
+    isVerified: Boolean(user.isVerified),
+    isActive: Boolean(user.isActive),
+    requiresEmailVerification: !user.isVerified || !user.isActive,
+    requiresEmployerProfile: user.role === 'EMPLOYER'
+      && (!user.employerProfile?.companyName?.trim() || !user.phone?.trim()),
+  };
 };
 
 export const completeGoogleRegistration = async ({ pendingId, continuationToken, email }) => {

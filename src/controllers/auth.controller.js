@@ -1,7 +1,7 @@
 import { DuplicateEmailError, getCurrentUser, getLegalAcceptanceStatus, loginUser, recordAccountLegalAcceptance, registerUser } from '../services/auth.service.js';
 import { requestPasswordReset, resetPassword } from '../services/passwordReset.service.js';
 import { resendEmailVerification, verifyEmailWithCode } from '../services/emailVerification.service.js';
-import { completeGoogleRegistration, googleContinuationCookieName, googleStateCookieName, handleGoogleCallback, startGoogleOAuth } from '../services/googleOAuth.service.js';
+import { completeGoogleRegistration, getGoogleRegistrationStatus, googleContinuationCookieName, googleStateCookieName, handleGoogleCallback, startGoogleOAuth } from '../services/googleOAuth.service.js';
 import { buildGoogleCallbackUrl } from '../utils/googleOAuthCallbackUrl.js';
 import { toUserResponse } from '../utils/userResponse.js';
 import { env } from '../config/env.js';
@@ -50,6 +50,18 @@ export const register = async (req, res, next) => {
       });
     }
     await padAuthResponseTime(startedAt);
+    return next(error);
+  }
+};
+
+export const googleRegistrationStatusController = async (req, res, next) => {
+  try {
+    const pendingId = req.googlePendingId;
+    const continuationToken = readCookie(req, googleContinuationCookieName(pendingId));
+    const status = await getGoogleRegistrationStatus({ pendingId, continuationToken });
+    res.set('Cache-Control', 'no-store');
+    return res.status(200).json({ success: true, data: status });
+  } catch (error) {
     return next(error);
   }
 };
@@ -154,6 +166,30 @@ export const verifyEmailController = async (req, res, next) => {
   }
 };
 
+export const googleVerifyEmailController = async (req, res, next) => {
+  const startedAt = Date.now();
+  try {
+    const { pendingId, email, code } = req.body;
+    const continuationToken = readCookie(req, googleContinuationCookieName(pendingId));
+    const status = await getGoogleRegistrationStatus({ pendingId, continuationToken });
+    if (status.email.toLowerCase() !== email.trim().toLowerCase()) {
+      throw Object.assign(new Error('Google registration email mismatch.'), {
+        status: 400,
+        publicMessage: 'The verification request could not be completed. Check the code or request a new one.',
+      });
+    }
+
+    const verified = await verifyEmailWithCode({ email, code }, { createSession: false });
+    const completion = await completeGoogleRegistration({ pendingId, continuationToken, email });
+    res.clearCookie(googleContinuationCookieName(pendingId), googleCookieOptions('/api/auth/google/complete'));
+    await padAuthResponseTime(startedAt);
+    return res.status(200).json({ ...verified, token: completion.token, user: completion.user });
+  } catch (error) {
+    await padAuthResponseTime(startedAt);
+    return next(error);
+  }
+};
+
 export const resendEmailVerificationController = async (req, res, next) => {
   const startedAt = Date.now();
   try {
@@ -217,6 +253,9 @@ export const googleCallbackController = async (req, res, next) => {
       const frontendBase = env.FRONTEND_URL || 'http://localhost:4173';
       const target = new URL('/register', frontendBase);
       target.searchParams.set('oauth_error', 'email_already_registered');
+      if (error.existingRole === 'SEEKER' || error.existingRole === 'EMPLOYER') {
+        target.searchParams.set('existing_role', error.existingRole);
+      }
       res.set('Cache-Control', 'no-store');
       res.set('Referrer-Policy', 'no-referrer');
       return res.redirect(302, target.toString());

@@ -58,6 +58,27 @@ test('password registration accepts matching explicit versions through the stand
   expect(result.response.statusCode).toBe(200);
 });
 
+test('employer password registration requires a company name', () => {
+  const missingCompany = runValidator(validateRegistration, {
+    body: { ...validRegistration, role: 'EMPLOYER', phone: '+2348000000000' },
+  });
+  expect(missingCompany.response.statusCode).toBe(400);
+  expect(missingCompany.response.body.errors).toContainEqual(expect.objectContaining({ field: 'companyName' }));
+
+  const validCompany = runValidator(validateRegistration, {
+    body: { ...validRegistration, role: 'EMPLOYER', companyName: 'Example Company', phone: '+2348000000000' },
+  });
+  expect(validCompany.nextCalled).toBe(true);
+});
+
+test('employer password registration requires a company phone number', () => {
+  const missingPhone = runValidator(validateRegistration, {
+    body: { ...validRegistration, role: 'EMPLOYER', companyName: 'Example Company' },
+  });
+  expect(missingPhone.response.statusCode).toBe(400);
+  expect(missingPhone.response.body.errors).toContainEqual(expect.objectContaining({ field: 'phone' }));
+});
+
 test('authenticated legal acceptance rejects declined choices and client-selected user IDs', () => {
   const declined = runValidator(validateLegalAcceptance, { body: {
     termsAccepted: true,

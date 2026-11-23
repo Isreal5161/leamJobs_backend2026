@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { EMAIL_TYPES, queueEmail } from './email.service.js';
+import { createAuthenticatedSession } from './authSession.service.js';
 
 const CODE_LENGTH = 6;
 const DEFAULT_CODE_EXPIRY_MINUTES = 15;
@@ -27,10 +28,10 @@ const buildVerificationCode = () => {
 
 const buildVerificationEventKey = (userId) => `email-verification:${userId}:${Date.now()}:${crypto.randomBytes(4).toString('hex')}`;
 
-const buildVerificationEmailContext = (code) => ({
-  title: 'Verify your LeamJobs email',
-  heading: 'Verify your email address',
-  message: `Use the verification code below to confirm your email address. This code expires in ${getCodeExpiryMinutes()} minutes. Do not share it with anyone.`,
+const buildVerificationEmailContext = (code, role) => ({
+  title: `Verify your LeamJobs ${role === 'EMPLOYER' ? 'employer ' : ''}account`,
+  heading: role === 'EMPLOYER' ? 'Verify your employer account' : 'Verify your job seeker account',
+  message: `Use the verification code below to confirm the email address for your ${role === 'EMPLOYER' ? 'employer' : 'job seeker'} account. This code expires in ${getCodeExpiryMinutes()} minutes. Do not share it with anyone.`,
   code,
   link: null,
   linkLabel: null,
@@ -100,7 +101,7 @@ export const createEmailVerificationChallenge = async (userIdOrEmail, maybeEmail
           emailType: EMAIL_TYPES.EMAIL_VERIFICATION_CODE,
           eventKey: buildVerificationEventKey(user.id),
           recipientEmail: user.email,
-          context: buildVerificationEmailContext(code),
+          context: buildVerificationEmailContext(code, user.role),
         });
         return { success: true, message: 'A verification code has been sent to your email address.' };
       }
@@ -142,7 +143,7 @@ export const createEmailVerificationChallenge = async (userIdOrEmail, maybeEmail
         emailType: EMAIL_TYPES.EMAIL_VERIFICATION_CODE,
         eventKey: buildVerificationEventKey(user.id),
         recipientEmail: user.email,
-        context: buildVerificationEmailContext(code),
+        context: buildVerificationEmailContext(code, user.role),
       });
 
       return { success: true, message: 'A verification code has been sent to your email address.' };
@@ -166,7 +167,7 @@ export const resendEmailVerification = async ({ email }) => {
   return GENERIC_RESEND_RESPONSE;
 };
 
-export const verifyEmailWithCode = async ({ email, code }) => {
+export const verifyEmailWithCode = async ({ email, code }, { createSession = true } = {}) => {
   const normalizedEmail = String(email ?? '').trim().toLowerCase();
   const normalizedCode = String(code ?? '').trim();
   const user = await getUserForVerification(normalizedEmail);
@@ -256,17 +257,20 @@ export const verifyEmailWithCode = async ({ email, code }) => {
       throw Object.assign(new Error(GENERIC_VERIFICATION_ERROR), { status: 400, publicMessage: GENERIC_VERIFICATION_ERROR });
     }
 
-    return transaction.user.update({
+    const completedUser = await transaction.user.update({
       where: { id: user.id, isVerified: false },
       data: { isVerified: true, isActive: true },
-      select: { id: true, email: true, firstName: true, lastName: true, isVerified: true, isActive: true },
+      select: { id: true, email: true, firstName: true, lastName: true, role: true, isVerified: true, isActive: true },
     });
+    const token = createSession ? await createAuthenticatedSession(completedUser, transaction) : null;
+    return { completedUser, token };
   });
 
   return {
     success: true,
     message: 'Your email address has been verified successfully.',
-    user: result,
+    token: result.token,
+    user: result.completedUser,
   };
 };
 

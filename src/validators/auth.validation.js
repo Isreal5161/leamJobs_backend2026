@@ -34,9 +34,18 @@ const registrationSchema = z.object({
     .regex(/[0-9]/, 'Password must contain a number')
     .regex(/[^A-Za-z0-9]/, 'Password must contain a special character'),
   phone: z.string().trim().min(1, 'Phone must not be empty').optional(),
+  companyName: z.string().trim().min(1, 'Company name is required').max(160, 'Company name must be 160 characters or fewer').optional(),
   role: publicRegistrationRoleSchema,
   ...legalAcceptanceFields,
-}).strict().superRefine(enforceCurrentLegalVersions);
+}).strict().superRefine((value, context) => {
+  enforceCurrentLegalVersions(value, context);
+  if (value.role === 'EMPLOYER' && !value.companyName) {
+    context.addIssue({ code: 'custom', path: ['companyName'], message: 'Company name is required for employer registration.' });
+  }
+  if (value.role === 'EMPLOYER' && !value.phone) {
+    context.addIssue({ code: 'custom', path: ['phone'], message: 'Phone number is required for employer registration.' });
+  }
+});
 
 const legalAcceptanceSchema = z.object(legalAcceptanceFields).strict().superRefine(enforceCurrentLegalVersions);
 
@@ -59,6 +68,11 @@ const adminInvitationAcceptanceSchema = z.object({
 }).strict();
 
 const verifyEmailSchema = z.object({
+  email: z.string().trim().email('A valid email is required'),
+  code: z.string().trim().regex(/^\d{6}$/, 'Verification code must be 6 digits'),
+}).strict();
+const googleVerifyEmailSchema = z.object({
+  pendingId: z.string().trim().min(1, 'Pending registration is required'),
   email: z.string().trim().email('A valid email is required'),
   code: z.string().trim().regex(/^\d{6}$/, 'Verification code must be 6 digits'),
 }).strict();
@@ -99,6 +113,9 @@ const googleStartSchema = z.object({
 const googleCompleteSchema = z.object({
   pendingId: z.string().trim().min(1, 'Pending registration is required'),
   email: z.string().trim().email('A valid email is required'),
+}).strict();
+const googleStatusSchema = z.object({
+  pendingId: z.string().trim().min(1, 'Pending registration is required'),
 }).strict();
 
 export const validateRegistration = (req, res, next) => {
@@ -186,6 +203,23 @@ export const validateVerifyEmail = (req, res, next) => {
   return next();
 };
 
+export const validateGoogleVerifyEmail = (req, res, next) => {
+  const result = googleVerifyEmailSchema.safeParse(req.body);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.body = result.data;
+  return next();
+};
+
 export const validateResendEmailVerification = (req, res, next) => {
   const result = resendEmailVerificationSchema.safeParse(req.body);
 
@@ -246,5 +280,22 @@ export const validateGoogleComplete = (req, res, next) => {
   }
 
   req.body = result.data;
+  return next();
+};
+
+export const validateGoogleStatus = (req, res, next) => {
+  const result = googleStatusSchema.safeParse(req.query);
+
+  if (!result.success) {
+    return res.status(400).json({
+      message: 'Validation failed',
+      errors: result.error.issues.map(({ path, message }) => ({
+        field: path.join('.'),
+        message,
+      })),
+    });
+  }
+
+  req.googlePendingId = result.data.pendingId;
   return next();
 };

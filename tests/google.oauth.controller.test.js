@@ -6,6 +6,8 @@ process.env.FRONTEND_URL = 'https://frontend.example';
 const startGoogleOAuth = jest.fn();
 const handleGoogleCallback = jest.fn();
 const completeGoogleRegistration = jest.fn();
+const getGoogleRegistrationStatus = jest.fn();
+const verifyEmailWithCode = jest.fn();
 const registerUser = jest.fn();
 const googleStateCookieName = jest.fn(() => 'state_cookie');
 const googleContinuationCookieName = jest.fn(() => 'completion_cookie');
@@ -25,10 +27,11 @@ jest.unstable_mockModule('../src/services/passwordReset.service.js', () => ({
 }));
 jest.unstable_mockModule('../src/services/emailVerification.service.js', () => ({
   resendEmailVerification: jest.fn(),
-  verifyEmailWithCode: jest.fn(),
+  verifyEmailWithCode,
 }));
 jest.unstable_mockModule('../src/services/googleOAuth.service.js', () => ({
   completeGoogleRegistration,
+  getGoogleRegistrationStatus,
   googleContinuationCookieName,
   googleStateCookieName,
   handleGoogleCallback,
@@ -48,9 +51,11 @@ const {
   googleStartController,
   googleCallbackController,
   googleCompleteController,
+  googleRegistrationStatusController,
+  googleVerifyEmailController,
   register,
 } = await import('../src/controllers/auth.controller.js');
-const { validateGoogleComplete } = await import('../src/validators/auth.validation.js');
+const { validateGoogleComplete, validateGoogleStatus } = await import('../src/validators/auth.validation.js');
 const { buildGoogleCallbackUrl } = await import('../src/utils/googleOAuthCallbackUrl.js');
 
 const createResponse = () => {
@@ -153,6 +158,7 @@ test('Google callback redirects email conflicts to signup with a safe error iden
   const conflict = Object.assign(new Error('This email is already associated with a LeamJobs account.'), {
     status: 409,
     oauthErrorCode: 'EMAIL_ALREADY_REGISTERED',
+    existingRole: 'SEEKER',
   });
   handleGoogleCallback.mockRejectedValueOnce(conflict);
   const req = {
@@ -173,7 +179,10 @@ test('Google callback redirects email conflicts to signup with a safe error iden
   const redirectUrl = new URL(res.redirect.mock.calls[0][1]);
   expect(redirectUrl.origin).toBe('https://frontend.example');
   expect(redirectUrl.pathname).toBe('/register');
-  expect([...redirectUrl.searchParams.entries()]).toEqual([['oauth_error', 'email_already_registered']]);
+  expect([...redirectUrl.searchParams.entries()]).toEqual([
+    ['oauth_error', 'email_already_registered'],
+    ['existing_role', 'SEEKER'],
+  ]);
   expect(next).not.toHaveBeenCalled();
 });
 
@@ -223,6 +232,81 @@ test('Google completion reads the continuation from HttpOnly cookie and clears i
     path: '/api/auth/google/complete',
   }));
   expect(res.status).toHaveBeenCalledWith(200);
+});
+
+test('Google registration status uses only the continuation cookie and disables caching', async () => {
+  getGoogleRegistrationStatus.mockResolvedValue({
+    email: 'employer@example.com',
+    role: 'EMPLOYER',
+    requiresEmailVerification: false,
+    requiresEmployerProfile: true,
+  });
+  const req = {
+    query: { pendingId: 'pending-1' },
+    headers: { cookie: 'completion_cookie=secret-continuation-token' },
+  };
+  const validationResponse = createResponse();
+  let nextCalled = false;
+  validateGoogleStatus(req, validationResponse, () => { nextCalled = true; });
+  expect(nextCalled).toBe(true);
+
+  const res = createResponse();
+  await googleRegistrationStatusController(req, res, jest.fn());
+
+  expect(getGoogleRegistrationStatus).toHaveBeenCalledWith({
+    pendingId: 'pending-1',
+    continuationToken: 'secret-continuation-token',
+  });
+  expect(res.set).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  expect(res.status).toHaveBeenCalledWith(200);
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ role: 'EMPLOYER' }),
+  }));
+});
+
+test('Google code verification finalizes its pending OAuth registration in one session', async () => {
+  const verifiedUser = {
+    id: 'user-1',
+    email: 'employer@example.com',
+    role: 'EMPLOYER',
+    isVerified: true,
+    isActive: true,
+  };
+  getGoogleRegistrationStatus.mockResolvedValue({ email: verifiedUser.email });
+  verifyEmailWithCode.mockResolvedValue({
+    success: true,
+    message: 'verified',
+    token: null,
+    user: verifiedUser,
+  });
+  completeGoogleRegistration.mockResolvedValue({
+    token: 'final-session-token',
+    user: verifiedUser,
+  });
+  const req = {
+    body: { email: verifiedUser.email, code: '123456', pendingId: 'pending-1' },
+    headers: { cookie: 'completion_cookie=secret-continuation-token' },
+  };
+  const res = createResponse();
+
+  await googleVerifyEmailController(req, res, jest.fn());
+
+  expect(verifyEmailWithCode).toHaveBeenCalledWith(
+    { email: verifiedUser.email, code: '123456' },
+    { createSession: false },
+  );
+  expect(completeGoogleRegistration).toHaveBeenCalledWith({
+    pendingId: 'pending-1',
+    continuationToken: 'secret-continuation-token',
+    email: verifiedUser.email,
+  });
+  expect(res.clearCookie).toHaveBeenCalledWith('completion_cookie', expect.objectContaining({
+    path: '/api/auth/google/complete',
+  }));
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+    token: 'final-session-token',
+    user: verifiedUser,
+  }));
 });
 
 test('Google completion request only accepts its pending registration and email', () => {

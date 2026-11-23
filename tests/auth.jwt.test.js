@@ -11,7 +11,7 @@ const mockPrisma = {
       userId: 'user-123',
       expiresAt: new Date(Date.now() + 60_000),
       revokedAt: null,
-      user: { isActive: true, role: 'SEEKER' },
+      user: { isActive: true, isVerified: true, role: 'SEEKER' },
     }),
   },
 };
@@ -208,6 +208,23 @@ describe('authenticate', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(next).not.toHaveBeenCalled();
     }
+  });
+
+  test('rejects an unverified account session', async () => {
+    mockPrisma.authSession.findFirst.mockResolvedValueOnce({
+      userId: 'user-123',
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, isVerified: false, role: 'SEEKER' },
+    });
+    const req = createRequest(signToken({ sub: 'user-123', role: 'SEEKER' }));
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
   });
 
   test('rejects a suspended staff account even if its user row remains active', async () => {

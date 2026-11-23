@@ -17,7 +17,7 @@ const getIdentity = (req) => {
     return token;
   }
 
-  const pendingId = req.body?.pendingId;
+  const pendingId = req.body?.pendingId ?? req.query?.pendingId;
   if (typeof pendingId === 'string' && pendingId.trim()) {
     return pendingId.trim();
   }
