@@ -123,6 +123,7 @@ const safeErrorMessage = (error, status) => {
     return 'Your session has expired. Please sign in again.';
   }
   if (status === 403 && [
+    'EMAIL_VERIFICATION_REQUIRED',
     'ROLE_MISMATCH',
     'EMPLOYER_NOT_VERIFIED',
     'SELF_ANONYMIZATION_FORBIDDEN',

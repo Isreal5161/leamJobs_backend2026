@@ -28,6 +28,20 @@ const mockPrisma = {
     update: jest.fn(),
     create: jest.fn(),
   },
+  employerProfile: {
+    create: jest.fn().mockResolvedValue({}),
+  },
+  emailVerificationCode: {
+    findUnique: jest.fn().mockResolvedValue(null),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    create: jest.fn().mockResolvedValue({ id: 'verification-1' }),
+  },
+  emailDelivery: {
+    create: jest.fn().mockResolvedValue({ id: 'email-1' }),
+  },
+  emailTemplate: {
+    findUnique: jest.fn().mockResolvedValue({ isActive: false }),
+  },
   wallet: {
     upsert: jest.fn(),
   },
@@ -67,12 +81,14 @@ describe('Employer authentication and authorization', () => {
       passwordHash: validPasswordHash,
       role: 'SEEKER',
       isActive: true,
+      isVerified: true,
     });
     mockPrisma.user.update.mockResolvedValue({
       id: 'seeker-123',
       email: 'seeker@example.com',
       role: 'SEEKER',
       isActive: true,
+      isVerified: true,
       lastLogin: new Date('2026-09-10T00:00:00.000Z'),
     });
 
@@ -89,12 +105,14 @@ describe('Employer authentication and authorization', () => {
       passwordHash: validPasswordHash,
       role: 'EMPLOYER',
       isActive: true,
+      isVerified: true,
     });
     mockPrisma.user.update.mockResolvedValue({
       id: 'employer-123',
       email: 'employer@example.com',
       role: 'EMPLOYER',
       isActive: true,
+      isVerified: true,
       lastLogin: new Date('2026-09-10T00:00:00.000Z'),
     });
 
@@ -103,6 +121,69 @@ describe('Employer authentication and authorization', () => {
     expect(result.user.role).toBe('EMPLOYER');
     expect(result.token).toBeTruthy();
   });
+
+  test('verified users can restore their session through /auth/me', async () => {
+    const user = {
+      id: 'verified-seeker',
+      firstName: 'Verified',
+      lastName: 'Seeker',
+      email: 'verified@example.com',
+      phone: null,
+      role: 'SEEKER',
+      isActive: true,
+      isVerified: true,
+      createdAt: new Date('2026-09-10T00:00:00.000Z'),
+    };
+    mockPrisma.authSession.findFirst.mockResolvedValueOnce({
+      userId: user.id,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      user: { isActive: true, isVerified: true, role: 'SEEKER', adminAccount: null },
+    });
+    mockPrisma.user.findUnique.mockResolvedValueOnce(user);
+
+    const response = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${createToken('SEEKER', user.id)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: user.id,
+      role: 'SEEKER',
+      isVerified: true,
+    });
+  });
+
+  test.each(['SEEKER', 'EMPLOYER'])('%s unverified login returns a verification-required contract without a token or account details', async (role) => {
+    const userId = `pending-${role.toLowerCase()}`;
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: userId })
+      .mockResolvedValueOnce({
+        id: userId,
+        email: 'pending@example.com',
+        passwordHash: validPasswordHash,
+        role,
+        isActive: false,
+        isVerified: false,
+      });
+
+    const response = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'pending@example.com', password: 'Password1!', role });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'EMAIL_VERIFICATION_REQUIRED',
+        message: 'Please verify your email address before signing in.',
+      },
+    });
+    expect(response.body.token).toBeUndefined();
+    expect(response.body.user).toBeUndefined();
+    expect(response.body.error.role).toBeUndefined();
+    expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+  }, 30_000);
 
   test('login rejects an old password if a reset commits before session creation', async () => {
     const user = {
@@ -219,7 +300,7 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('EMPLOYER registration persists EMPLOYER role in the database record', async () => {
-    mockPrisma.user.create.mockResolvedValue({
+    const createdUser = {
       id: 'employer-created-123',
       email: 'employer-create@example.com',
       firstName: 'Employer',
@@ -227,7 +308,9 @@ describe('Employer authentication and authorization', () => {
       role: 'EMPLOYER',
       isActive: false,
       isVerified: false,
-    });
+    };
+    mockPrisma.user.create.mockResolvedValue(createdUser);
+    mockPrisma.user.findUnique.mockResolvedValue(createdUser);
 
     const response = await request(app)
       .post('/api/auth/register')
@@ -237,6 +320,7 @@ describe('Employer authentication and authorization', () => {
         email: 'employer-create@example.com',
         password: 'Password1!',
         phone: '+2348000000000',
+        companyName: 'Employer Company',
         role: 'EMPLOYER',
         termsAccepted: true,
         privacyAccepted: true,
@@ -268,7 +352,13 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('EMPLOYER token is allowed on the Employer endpoint', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ id: 'employer-123', isActive: true, role: 'EMPLOYER' });
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'employer-123',
+      isActive: true,
+      role: 'EMPLOYER',
+      phone: '+2348000000000',
+      employerProfile: { companyName: 'Employer Company' },
+    });
     const response = await request(app)
       .get('/api/employer/me')
       .set('Authorization', `Bearer ${createToken('EMPLOYER', 'employer-123')}`);
@@ -284,7 +374,13 @@ describe('Employer authentication and authorization', () => {
   });
 
   test('client-supplied userId cannot override the authenticated identity', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ id: 'employer-123', isActive: true, role: 'EMPLOYER' });
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'employer-123',
+      isActive: true,
+      role: 'EMPLOYER',
+      phone: '+2348000000000',
+      employerProfile: { companyName: 'Employer Company' },
+    });
     const response = await request(app)
       .get('/api/employer/me?userId=other-user-456')
       .set('Authorization', `Bearer ${createToken('EMPLOYER', 'employer-123')}`);

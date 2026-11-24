@@ -60,6 +60,16 @@ export class AuthenticationError extends Error {
   }
 }
 
+export class EmailVerificationRequiredError extends Error {
+  constructor() {
+    super('Please verify your email address before signing in.');
+    this.name = 'EmailVerificationRequiredError';
+    this.status = 403;
+    this.publicCode = 'EMAIL_VERIFICATION_REQUIRED';
+    this.publicMessage = this.message;
+  }
+}
+
 export class InactiveAccountError extends Error {
   constructor() {
     super('Your account is inactive');
@@ -183,13 +193,18 @@ export const loginUser = async ({ email, password, role }) => {
       throw new AuthenticationError();
     }
 
-    const legacyUserWithoutVerificationRecord = user.isActive && user.isVerified === false
-      && !(await transaction.emailVerificationCode.findUnique({
-        where: { userId: user.id },
-        select: { id: true },
-      }));
+    if (role && user.role !== role) {
+      throw new AuthenticationError();
+    }
 
-    if ((user.isVerified === false && !legacyUserWithoutVerificationRecord) || user.isActive === false) {
+    if (user.isVerified === false) {
+      if (user.role === 'SEEKER' || user.role === 'EMPLOYER') {
+        throw new EmailVerificationRequiredError();
+      }
+      throw new AuthenticationError();
+    }
+
+    if (user.isActive === false) {
       throw new AuthenticationError();
     }
 
@@ -203,10 +218,6 @@ export const loginUser = async ({ email, password, role }) => {
         || adminAccount.suspendedAt != null) {
         throw new AuthenticationError();
       }
-    }
-
-    if (role && user.role !== role) {
-      throw new AuthenticationError();
     }
 
     const updatedUser = await transaction.user.update({

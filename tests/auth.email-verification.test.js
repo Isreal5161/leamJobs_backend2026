@@ -204,7 +204,7 @@ test('wallet initialization failure rolls seeker registration back before email 
   expect(mockQueueEmail).not.toHaveBeenCalled();
 });
 
-test('newly registered users cannot log in before verification', async () => {
+test('valid credentials for an unverified registration return verification-required without creating a session', async () => {
   mockPrisma.user.findUnique.mockResolvedValue({
     id: 'user-2',
     email: 'pending@example.com',
@@ -216,13 +216,15 @@ test('newly registered users cannot log in before verification', async () => {
   mockPrisma.emailVerificationCode.findUnique.mockResolvedValue({ id: 'verification-pending', userId: 'user-2' });
 
   await expect(loginUser({ email: 'pending@example.com', password: 'ValidPassword1!' })).rejects.toMatchObject({
-    status: 401,
-    name: 'AuthenticationError',
-    message: 'Invalid email or password',
+    status: 403,
+    name: 'EmailVerificationRequiredError',
+    publicCode: 'EMAIL_VERIFICATION_REQUIRED',
   });
+  expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });
 
-test('legacy active users without a verification record can still log in', async () => {
+test('legacy active users without a verification record must verify before receiving a session', async () => {
   mockPrisma.user.findUnique.mockResolvedValue({
     id: 'legacy-user',
     email: 'legacy@example.com',
@@ -232,18 +234,57 @@ test('legacy active users without a verification record can still log in', async
     isVerified: false,
   });
   mockPrisma.emailVerificationCode.findUnique.mockResolvedValue(null);
-  mockPrisma.user.update.mockResolvedValue({
-    id: 'legacy-user',
-    email: 'legacy@example.com',
+  await expect(loginUser({ email: 'legacy@example.com', password: 'ValidPassword1!' })).rejects.toMatchObject({
+    status: 403,
+    name: 'EmailVerificationRequiredError',
+    publicCode: 'EMAIL_VERIFICATION_REQUIRED',
+  });
+  expect(mockPrisma.user.update).not.toHaveBeenCalled();
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+});
+
+test('an unverified account submitted through the wrong role login remains indistinguishable from invalid credentials', async () => {
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: 'unverified-seeker',
+    email: 'pending@example.com',
+    passwordHash: validPasswordHash,
     role: 'SEEKER',
-    isActive: true,
-    lastLogin: new Date('2026-09-10T00:00:00.000Z'),
+    isActive: false,
+    isVerified: false,
   });
 
-  const result = await loginUser({ email: 'legacy@example.com', password: 'ValidPassword1!' });
+  await expect(loginUser({
+    email: 'pending@example.com',
+    password: 'ValidPassword1!',
+    role: 'EMPLOYER',
+  })).rejects.toMatchObject({
+    status: 401,
+    name: 'AuthenticationError',
+    message: 'Invalid email or password',
+  });
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+});
 
-  expect(result.user.id).toBe('legacy-user');
-  expect(result.token).toBeTruthy();
+test('incorrect credentials for an unverified account remain a generic authentication failure', async () => {
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: 'unverified-seeker',
+    email: 'pending@example.com',
+    passwordHash: validPasswordHash,
+    role: 'SEEKER',
+    isActive: false,
+    isVerified: false,
+  });
+
+  await expect(loginUser({
+    email: 'pending@example.com',
+    password: 'WrongPassword1!',
+    role: 'SEEKER',
+  })).rejects.toMatchObject({
+    status: 401,
+    name: 'AuthenticationError',
+    message: 'Invalid email or password',
+  });
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });
 
 test('staff administrators use the existing login flow without a client-selected tier', async () => {
@@ -349,6 +390,9 @@ test('a correct verification code verifies the user and activates the account', 
   expect(value.success).toBe(true);
   expect(value.token).toBeTruthy();
   expect(value.user).toMatchObject({ role: 'SEEKER', isVerified: true, isActive: true });
+  expect(mockPrisma.authSession.create).toHaveBeenCalledWith({
+    data: { id: expect.any(String), userId: 'user-3', expiresAt: expect.any(Date) },
+  });
   expect(mockPrisma.user.update).not.toHaveBeenCalled();
 });
 
@@ -381,6 +425,39 @@ test('resend enforces the cooldown before sending a new code', async () => {
     message: 'If this email needs verification, a code has been sent.',
   });
   expect(mockQueueEmail).not.toHaveBeenCalled();
+});
+
+test('resend creates and queues a verification code when an unverified account has no existing challenge', async () => {
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: 'legacy-user',
+    email: 'legacy@example.com',
+    firstName: 'Legacy',
+    role: 'SEEKER',
+    isVerified: false,
+    isActive: true,
+  });
+  const transaction = {
+    emailVerificationCode: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      create: jest.fn().mockResolvedValue({ id: 'verification-legacy', userId: 'legacy-user' }),
+    },
+  };
+  mockPrisma.$transaction.mockImplementation(async (callback) => callback(transaction));
+
+  const result = await resendEmailVerification({ email: 'legacy@example.com' });
+
+  expect(result).toEqual({
+    success: true,
+    message: 'If this email needs verification, a code has been sent.',
+  });
+  expect(transaction.emailVerificationCode.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ userId: 'legacy-user', attempts: 0, usedAt: null }),
+  }));
+  expect(mockQueueEmail).toHaveBeenCalledWith(expect.objectContaining({
+    recipientUserId: 'legacy-user',
+    recipientEmail: 'legacy@example.com',
+  }));
 });
 
 test('verification resend response is the same for unknown and already verified email addresses', async () => {

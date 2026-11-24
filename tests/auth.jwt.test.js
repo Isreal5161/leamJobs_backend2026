@@ -92,6 +92,23 @@ describe('authenticate', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['missing Authorization header', undefined],
+    ['malformed Authorization header', 'Token invalid-token'],
+  ])('rejects a %s', async (_label, authorization) => {
+    const req = {
+      headers: authorization ? { authorization } : {},
+    };
+    const res = createResponse();
+    const next = jest.fn();
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ message: 'Invalid authentication token' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
   test('rejects a token with the wrong issuer', async () => {
     const token = signToken({ sub: 'user-123', role: 'SEEKER' }, { issuer: 'wrong-issuer' });
     const req = createRequest(token);
