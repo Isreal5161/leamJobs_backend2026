@@ -172,6 +172,20 @@ describe('Employer verification lifecycle', () => {
     }));
   });
 
+  test('preserves a detailed business registration type when creating a verification record', async () => {
+    const registrationType = 'CAC Private Limited Company (Ltd)';
+    mockPrisma.employerVerification.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(fullVerification({ registrationType }));
+    mockPrisma.employerVerification.create.mockResolvedValue({ id: verificationId, userId: employerId, status: 'PENDING', submittedAt: new Date() });
+
+    await submitEmployerVerification(employerId, { registrationNumber: 'RC123456', registrationType });
+
+    expect(mockPrisma.employerVerification.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ registrationType }),
+    }));
+  });
+
   test('submits verification and notifies active admins for review', async () => {
     const submissionDate = new Date('2026-09-18T08:00:00.000Z');
     mockPrisma.employerVerification.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(fullVerification({ status: 'PENDING', submittedAt: submissionDate }));

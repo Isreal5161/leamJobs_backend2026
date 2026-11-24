@@ -281,7 +281,7 @@ export const getEmployerVerification = async (employerId) => {
 
 export const submitEmployerVerification = async (employerId, { registrationNumber, registrationType = 'CAC', company = {} } = {}) => {
   const normalizedRegistrationNumber = String(registrationNumber ?? '').trim();
-  const normalizedRegistrationType = String(registrationType ?? '').trim().toUpperCase();
+  const normalizedRegistrationType = String(registrationType ?? '').trim();
   const normalizedCompany = {
     ...company,
     ...(company.phoneNumber === undefined && company.phone !== undefined ? { phoneNumber: company.phone } : {}),
@@ -291,8 +291,8 @@ export const submitEmployerVerification = async (employerId, { registrationNumbe
     error.status = 400;
     throw error;
   }
-  if (!['CAC', 'BN', 'OTHER'].includes(normalizedRegistrationType)) {
-    const error = new Error('A valid registration type is required');
+  if (!normalizedRegistrationType || normalizedRegistrationType.length > 120) {
+    const error = new Error('A registration type is required');
     error.status = 400;
     throw error;
   }

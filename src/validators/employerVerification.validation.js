@@ -11,7 +11,7 @@ const nullableUrl = (label) => z.preprocess(
 
 const submitVerificationSchema = z.object({
   registrationNumber: z.string().trim().min(1, 'CAC, BN, or business registration number is required').max(120, 'Registration number must be 120 characters or fewer'),
-  registrationType: z.enum(['CAC', 'BN', 'OTHER']).default('CAC'),
+  registrationType: z.string().trim().min(1, 'A registration type is required').max(120, 'Registration type must be 120 characters or fewer').default('CAC'),
   company: z.object({
     companyName: z.string().trim().min(1, 'Company name is required').max(160, 'Company name must be 160 characters or fewer'),
     companyDescription: nullableText('Company description', 5000),
