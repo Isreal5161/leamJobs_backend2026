@@ -11,7 +11,11 @@ const verifyEmailWithCode = jest.fn();
 const registerUser = jest.fn();
 const googleStateCookieName = jest.fn(() => 'state_cookie');
 const googleContinuationCookieName = jest.fn(() => 'completion_cookie');
-class DuplicateEmailError extends Error {}
+class DuplicateEmailError extends Error {
+  constructor() {
+    super('An account with this email already exists');
+  }
+}
 
 jest.unstable_mockModule('../src/services/auth.service.js', () => ({
   getCurrentUser: jest.fn(),
@@ -154,7 +158,7 @@ test('Google callback rejects duplicate query parameters instead of choosing one
   expect(handleGoogleCallback).not.toHaveBeenCalled();
 });
 
-test('Google callback redirects email conflicts to signup with a safe error identifier', async () => {
+test('Google callback redirects email conflicts to the existing role sign-in page', async () => {
   const conflict = Object.assign(new Error('This email is already associated with a LeamJobs account.'), {
     status: 409,
     oauthErrorCode: 'EMAIL_ALREADY_REGISTERED',
@@ -178,12 +182,54 @@ test('Google callback redirects email conflicts to signup with a safe error iden
   expect(res.redirect).toHaveBeenCalledTimes(1);
   const redirectUrl = new URL(res.redirect.mock.calls[0][1]);
   expect(redirectUrl.origin).toBe('https://frontend.example');
-  expect(redirectUrl.pathname).toBe('/register');
+  expect(redirectUrl.pathname).toBe('/login');
   expect([...redirectUrl.searchParams.entries()]).toEqual([
-    ['oauth_error', 'email_already_registered'],
+    ['oauth_error', 'account_exists'],
     ['existing_role', 'SEEKER'],
   ]);
   expect(next).not.toHaveBeenCalled();
+});
+
+test.each([
+  ['SEEKER', '/login'],
+  ['EMPLOYER', '/employers/login'],
+])('Google callback sends a verified %s role conflict to the matching sign-in page', async (existingRole, expectedPath) => {
+  handleGoogleCallback.mockRejectedValueOnce(Object.assign(new Error('Role mismatch'), {
+    status: 409,
+    oauthErrorCode: 'ROLE_MISMATCH',
+    existingRole,
+  }));
+  const res = createResponse();
+
+  await googleCallbackController({
+    originalUrl: '/api/auth/google/callback?code=authorization-code&state=oauth-state',
+    headers: { cookie: 'state_cookie=random-browser-secret' },
+  }, res, jest.fn());
+
+  const redirectUrl = new URL(res.redirect.mock.calls[0][1]);
+  expect(redirectUrl.pathname).toBe(expectedPath);
+  expect(redirectUrl.searchParams.get('oauth_error')).toBe('role_mismatch');
+  expect(redirectUrl.searchParams.get('existing_role')).toBe(existingRole);
+});
+
+test('unverified Google email conflicts redirect to the neutral chooser without account details', async () => {
+  handleGoogleCallback.mockRejectedValueOnce(Object.assign(new Error('Unverified Google email'), {
+    status: 401,
+    oauthErrorCode: 'GOOGLE_EMAIL_UNVERIFIED',
+    existingRole: 'EMPLOYER',
+  }));
+  const res = createResponse();
+
+  await googleCallbackController({
+    originalUrl: '/api/auth/google/callback?code=authorization-code&state=oauth-state',
+    headers: { cookie: 'state_cookie=random-browser-secret' },
+  }, res, jest.fn());
+
+  const redirectUrl = new URL(res.redirect.mock.calls[0][1]);
+  expect(redirectUrl.pathname).toBe('/choose-sign-in');
+  expect([...redirectUrl.searchParams.entries()]).toEqual([
+    ['oauth_error', 'google_email_unverified'],
+  ]);
 });
 
 test('callback URL builder rejects malformed parameters and preserves provider error parameters', () => {
@@ -336,8 +382,8 @@ test('Google completion request only accepts its pending registration and email'
   expect(nextWithProfileData).not.toHaveBeenCalled();
 });
 
-test('new and duplicate registrations receive the same enumeration-safe response', async () => {
-  const expectedBody = {
+test('new and duplicate registrations receive the same neutral response', async () => {
+  const neutralBody = {
     success: true,
     message: 'If registration can be completed for this email, we will send the next steps.',
   };
@@ -350,18 +396,38 @@ test('new and duplicate registrations receive the same enumeration-safe response
     return res;
   };
 
-  registerUser.mockResolvedValue({ id: 'user-1' });
-  const successfulResponse = createRegistrationResponse();
-  await register({ body: {} }, successfulResponse, jest.fn());
+  const timeoutDelays = [];
+  const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1000);
+  const timeoutSpy = jest.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay) => {
+    timeoutDelays.push(delay);
+    callback();
+    return 0;
+  });
 
-  registerUser.mockRejectedValue(new DuplicateEmailError());
-  const duplicateResponse = createRegistrationResponse();
-  await register({ body: {} }, duplicateResponse, jest.fn());
+  let successfulResponse;
+  let duplicateResponse;
+  const next = jest.fn();
+  try {
+    registerUser.mockResolvedValue({ id: 'user-1', email: 'new@example.com', role: 'SEEKER' });
+    successfulResponse = createRegistrationResponse();
+    await register({ body: {} }, successfulResponse, jest.fn());
+
+    registerUser.mockRejectedValue(new DuplicateEmailError());
+    duplicateResponse = createRegistrationResponse();
+    await register({ body: {} }, duplicateResponse, next);
+  } finally {
+    timeoutSpy.mockRestore();
+    nowSpy.mockRestore();
+  }
 
   expect(successfulResponse.status).toHaveBeenCalledWith(202);
   expect(duplicateResponse.status).toHaveBeenCalledWith(202);
-  expect(successfulResponse.json).toHaveBeenCalledWith(expectedBody);
-  expect(duplicateResponse.json).toHaveBeenCalledWith(expectedBody);
+  expect(successfulResponse.json).toHaveBeenCalledWith(neutralBody);
+  expect(duplicateResponse.json).toHaveBeenCalledWith(neutralBody);
+  expect(successfulResponse.json.mock.calls[0][0]).toEqual(duplicateResponse.json.mock.calls[0][0]);
+  expect(next).not.toHaveBeenCalled();
+  expect(timeoutDelays).toHaveLength(2);
+  expect(timeoutDelays.every((delay) => delay >= 500 && delay <= 600)).toBe(true);
 });
 
 test('OAuth credentials use Secure cookies in production', async () => {

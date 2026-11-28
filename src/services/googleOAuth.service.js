@@ -299,11 +299,19 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
     throw invalidAudience;
   }
 
-  if (claims.exp && Number(claims.exp) * 1000 < Date.now()) {
+  if (!Number.isFinite(claims.exp) || claims.exp * 1000 <= Date.now()) {
     const expiredToken = new Error('Google token expired.');
     expiredToken.status = 400;
     expiredToken.publicMessage = 'Google identity verification expired. Please try again.';
     throw expiredToken;
+  }
+
+  if (!googleEmailVerified) {
+    const unverifiedEmail = new Error('Google email address is not verified.');
+    unverifiedEmail.status = 401;
+    unverifiedEmail.publicMessage = 'Google could not verify your email address. Please use a verified Google account or choose an account type to sign in.';
+    unverifiedEmail.oauthErrorCode = 'GOOGLE_EMAIL_UNVERIFIED';
+    throw unverifiedEmail;
   }
 
   const callbackResult = await prisma.$transaction(async (transaction) => {
@@ -354,6 +362,10 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
         const roleMismatch = new Error('This Google account is already linked to a different LeamJobs role.');
         roleMismatch.status = 409;
         roleMismatch.publicMessage = 'This Google account is already linked to a different account role.';
+        if (existingUser.role === 'SEEKER' || existingUser.role === 'EMPLOYER') {
+          roleMismatch.oauthErrorCode = 'ROLE_MISMATCH';
+          roleMismatch.existingRole = existingUser.role;
+        }
         throw roleMismatch;
       }
 
@@ -467,6 +479,10 @@ export const handleGoogleCallback = async ({ callbackUrl, browserBinding }) => {
             const roleMismatch = new Error('This Google account is already linked to a different LeamJobs role.');
             roleMismatch.status = 409;
             roleMismatch.publicMessage = 'This Google account is already linked to a different account role.';
+            if (canonicalAccount.user.role === 'SEEKER' || canonicalAccount.user.role === 'EMPLOYER') {
+              roleMismatch.oauthErrorCode = 'ROLE_MISMATCH';
+              roleMismatch.existingRole = canonicalAccount.user.role;
+            }
             throw roleMismatch;
           }
 

@@ -18,6 +18,9 @@ const mockPrisma = {
     user: {
       create: transactionUserCreate,
     },
+    employerProfile: {
+      create: jest.fn().mockResolvedValue({ userId: user.id }),
+    },
     emailVerificationCode: {
       findUnique: jest.fn().mockResolvedValue(null),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -50,6 +53,7 @@ test('successful employer registration queues the employer welcome after account
     email: 'Ava@Example.com',
     password: 'ValidPassword1!',
     role: 'EMPLOYER',
+    companyName: 'Example Company',
     termsAccepted: true,
     privacyAccepted: true,
     acceptedTermsVersion: '1.0',

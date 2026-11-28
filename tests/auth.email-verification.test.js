@@ -58,7 +58,7 @@ jest.unstable_mockModule('../src/services/email.service.js', () => ({
   verifyUnsubscribeToken: () => true,
 }));
 
-const { registerUser, loginUser } = await import('../src/services/auth.service.js');
+const { DuplicateEmailError, registerUser, loginUser } = await import('../src/services/auth.service.js');
 const { createEmailVerificationChallenge, verifyEmailWithCode, resendEmailVerification } = await import('../src/services/emailVerification.service.js');
 
 beforeEach(() => {
@@ -122,6 +122,36 @@ test('registration creates a pending unverified user and queues an email verific
     emailType: 'EMAIL_VERIFICATION_CODE',
     recipientEmail: 'ada@example.com',
   }));
+});
+
+test.each(['SEEKER', 'EMPLOYER'])('duplicate registration for an existing %s account reveals no account details', async (existingRole) => {
+  mockPrisma.user.create.mockRejectedValue(Object.assign(new Error('Unique constraint failed'), {
+    code: 'P2002',
+    meta: { target: ['email'] },
+  }));
+  mockPrisma.user.findUnique.mockResolvedValue({ role: existingRole });
+
+  await expect(registerUser({
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: 'existing@example.com',
+    password: 'ValidPassword1!',
+    role: existingRole === 'EMPLOYER' ? 'SEEKER' : 'EMPLOYER',
+    ...(existingRole === 'SEEKER' ? { companyName: 'Example Company' } : {}),
+    termsAccepted: true,
+    privacyAccepted: true,
+    acceptedTermsVersion: '1.0',
+    acceptedPrivacyVersion: '1.0',
+  })).rejects.toMatchObject({
+    status: 409,
+    name: 'DuplicateEmailError',
+    message: 'An account with this email already exists',
+  });
+  expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+  expect(mockQueueEmail).not.toHaveBeenCalled();
+  const duplicateError = new DuplicateEmailError();
+  expect(duplicateError).not.toHaveProperty('publicCode');
+  expect(duplicateError).not.toHaveProperty('publicDetails');
 });
 
 test('employer registration stores the company profile without creating a wallet', async () => {
@@ -243,7 +273,7 @@ test('legacy active users without a verification record must verify before recei
   expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });
 
-test('an unverified account submitted through the wrong role login remains indistinguishable from invalid credentials', async () => {
+test('valid credentials for an unverified account submitted through the wrong role login identify the correct portal without creating a session', async () => {
   mockPrisma.user.findUnique.mockResolvedValue({
     id: 'unverified-seeker',
     email: 'pending@example.com',
@@ -258,9 +288,10 @@ test('an unverified account submitted through the wrong role login remains indis
     password: 'ValidPassword1!',
     role: 'EMPLOYER',
   })).rejects.toMatchObject({
-    status: 401,
-    name: 'AuthenticationError',
-    message: 'Invalid email or password',
+    status: 403,
+    name: 'RoleMismatchError',
+    publicCode: 'ROLE_MISMATCH',
+    publicDetails: { role: 'SEEKER' },
   });
   expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });

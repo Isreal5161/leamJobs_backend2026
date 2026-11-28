@@ -212,21 +212,78 @@ describe('Employer authentication and authorization', () => {
   test.each([
     ['SEEKER', 'EMPLOYER'],
     ['EMPLOYER', 'SEEKER'],
-  ])('%s account is rejected by the %s login flow without exposing its role', async (actualRole, expectedRole) => {
+  ])('%s account directs valid credentials to the %s login flow', async (actualRole, expectedRole) => {
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 'role-user-123',
       email: 'role@example.com',
       passwordHash: validPasswordHash,
       role: actualRole,
       isActive: true,
+      isVerified: true,
     });
 
     await expect(loginUser({ email: 'role@example.com', password: 'Password1!', role: expectedRole })).rejects.toMatchObject({
+      status: 403,
+      name: 'RoleMismatchError',
+      publicCode: 'ROLE_MISMATCH',
+      publicDetails: { role: actualRole },
+    });
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['SEEKER', 'EMPLOYER'],
+    ['EMPLOYER', 'SEEKER'],
+  ])('valid %s credentials return a structured role conflict to the %s login page', async (actualRole, expectedRole) => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'role-user-123' })
+      .mockResolvedValueOnce({
+        id: 'role-user-123',
+        email: 'role@example.com',
+        passwordHash: validPasswordHash,
+        role: actualRole,
+        isActive: true,
+        isVerified: true,
+      });
+
+    const response = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'role@example.com', password: 'Password1!', role: expectedRole });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'ROLE_MISMATCH',
+        details: { role: actualRole },
+      },
+    });
+    expect(response.body.token).toBeUndefined();
+    expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+  });
+
+  test('wrong password on the other role login stays generic and does not reveal the account role', async () => {
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'role-user-123' })
+      .mockResolvedValueOnce({
+        id: 'role-user-123',
+        email: 'role@example.com',
+        passwordHash: validPasswordHash,
+        role: 'SEEKER',
+        isActive: true,
+        isVerified: true,
+      });
+
+    await expect(loginUser({
+      email: 'role@example.com',
+      password: 'WrongPassword1!',
+      role: 'EMPLOYER',
+    })).rejects.toMatchObject({
       status: 401,
       name: 'AuthenticationError',
       message: 'Invalid email or password',
     });
-    expect(mockPrisma.user.update).not.toHaveBeenCalled();
   });
 
   test('invalid credentials fail', async () => {
@@ -256,7 +313,7 @@ describe('Employer authentication and authorization', () => {
       });
     const wrongPassword = await request(app)
       .post('/api/auth/login')
-      .send({ email: 'existing@example.com', password: 'WrongPassword1!' });
+      .send({ email: 'existing@example.com', password: 'WrongPassword1!', role: 'EMPLOYER' });
 
     expect(missingAccount.status).toBe(401);
     expect(wrongPassword.status).toBe(401);

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { DuplicateEmailError, getCurrentUser, getLegalAcceptanceStatus, loginUser, recordAccountLegalAcceptance, registerUser } from '../services/auth.service.js';
 import { requestPasswordReset, resetPassword } from '../services/passwordReset.service.js';
 import { resendEmailVerification, verifyEmailWithCode } from '../services/emailVerification.service.js';
@@ -24,9 +25,17 @@ const readCookie = (req, name) => {
   return cookie ? cookie.slice(prefix.length) : '';
 };
 
-const AUTH_ENUMERATION_MIN_MS = 250;
+const AUTH_ENUMERATION_MIN_MS = 500;
+const AUTH_ENUMERATION_JITTER_MS = 100;
+const neutralRegistrationResponse = {
+  success: true,
+  message: 'If registration can be completed for this email, we will send the next steps.',
+};
+
 const padAuthResponseTime = async (startedAt) => {
-  const remaining = AUTH_ENUMERATION_MIN_MS - (Date.now() - startedAt);
+  const targetDuration = AUTH_ENUMERATION_MIN_MS + crypto.randomInt(0, AUTH_ENUMERATION_JITTER_MS + 1);
+  // This common floor and jitter reduce timing signals but cannot equalize slow downstream work.
+  const remaining = targetDuration - (Date.now() - startedAt);
   if (remaining > 0) {
     await new Promise((resolve) => setTimeout(resolve, remaining));
   }
@@ -37,17 +46,11 @@ export const register = async (req, res, next) => {
   try {
     await registerUser(req.body);
     await padAuthResponseTime(startedAt);
-    return res.status(202).json({
-      success: true,
-      message: 'If registration can be completed for this email, we will send the next steps.',
-    });
+    return res.status(202).json(neutralRegistrationResponse);
   } catch (error) {
     if (error instanceof DuplicateEmailError) {
       await padAuthResponseTime(startedAt);
-      return res.status(202).json({
-        success: true,
-        message: 'If registration can be completed for this email, we will send the next steps.',
-      });
+      return res.status(202).json(neutralRegistrationResponse);
     }
     await padAuthResponseTime(startedAt);
     return next(error);
@@ -249,12 +252,23 @@ export const googleCallbackController = async (req, res, next) => {
     return res.redirect(302, target.toString());
   } catch (error) {
     if (stateCookieName) res.clearCookie(stateCookieName, googleCookieOptions('/api/auth/google/callback'));
-    if (error?.oauthErrorCode === 'EMAIL_ALREADY_REGISTERED') {
-      const frontendBase = env.FRONTEND_URL || 'http://localhost:4173';
-      const target = new URL('/register', frontendBase);
-      target.searchParams.set('oauth_error', 'email_already_registered');
-      if (error.existingRole === 'SEEKER' || error.existingRole === 'EMPLOYER') {
-        target.searchParams.set('existing_role', error.existingRole);
+    if (error?.oauthErrorCode === 'GOOGLE_EMAIL_UNVERIFIED'
+      || error?.oauthErrorCode === 'EMAIL_ALREADY_REGISTERED'
+      || error?.oauthErrorCode === 'ROLE_MISMATCH') {
+      const frontendBase = (env.FRONTEND_URL || 'http://localhost:4173').replace(/\/$/, '');
+      const existingRole = error.existingRole;
+      const emailUnverified = error.oauthErrorCode === 'GOOGLE_EMAIL_UNVERIFIED';
+      const targetPath = emailUnverified
+        ? '/choose-sign-in'
+        : existingRole === 'EMPLOYER' ? '/employers/login' : '/login';
+      const target = new URL(targetPath, frontendBase);
+      if (emailUnverified) {
+        target.searchParams.set('oauth_error', 'google_email_unverified');
+      } else {
+        target.searchParams.set('oauth_error', error.oauthErrorCode === 'ROLE_MISMATCH' ? 'role_mismatch' : 'account_exists');
+      }
+      if (!emailUnverified && (existingRole === 'SEEKER' || existingRole === 'EMPLOYER')) {
+        target.searchParams.set('existing_role', existingRole);
       }
       res.set('Cache-Control', 'no-store');
       res.set('Referrer-Policy', 'no-referrer');

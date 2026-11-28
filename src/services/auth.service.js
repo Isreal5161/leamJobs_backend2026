@@ -88,11 +88,14 @@ export class AuthenticationRequiredError extends Error {
 
 export class RoleMismatchError extends Error {
   constructor(expectedRole, actualRole) {
-    const roleLabel = expectedRole === 'SEEKER' ? 'seeker' : 'employer';
-    super(`You are not registered as ${roleLabel === 'employer' ? 'an' : 'a'} ${roleLabel}.`);
+    const actualRoleLabel = actualRole === 'SEEKER' ? 'Seeker' : 'Employer';
+    const article = actualRole === 'EMPLOYER' ? 'an' : 'a';
+    super(`This account is registered as ${article} ${actualRoleLabel}. Continue with ${actualRoleLabel} sign-in.`);
     this.name = 'RoleMismatchError';
     this.status = 403;
     this.publicCode = 'ROLE_MISMATCH';
+    this.publicMessage = this.message;
+    this.publicDetails = { role: actualRole };
     this.actualRole = actualRole;
     this.expectedRole = expectedRole;
   }
@@ -194,6 +197,10 @@ export const loginUser = async ({ email, password, role }) => {
     }
 
     if (role && user.role !== role) {
+      if ((role === 'SEEKER' || role === 'EMPLOYER')
+        && (user.role === 'SEEKER' || user.role === 'EMPLOYER')) {
+        throw new RoleMismatchError(role, user.role);
+      }
       throw new AuthenticationError();
     }
 

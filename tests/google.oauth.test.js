@@ -379,6 +379,42 @@ test('authorization-code grant validates the stored nonce and PKCE verifier with
   });
 });
 
+test.each([
+  ['issuer', { iss: 'https://attacker.example' }, 'Google identity verification failed.'],
+  ['audience', { aud: 'another-client-id' }, 'Google identity verification failed.'],
+  ['expired token', { exp: Math.floor(Date.now() / 1000) - 1 }, 'Google identity verification expired. Please try again.'],
+  ['missing expiration', { exp: undefined }, 'Google identity verification expired. Please try again.'],
+])('Google callback rejects an invalid identity token claim: %s', async (_label, invalidClaim, publicMessage) => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-claims',
+    nonce: 'nonce-valid',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'SEEKER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockAuthorizationCodeGrant.mockResolvedValueOnce({
+    claims: () => ({
+      sub: 'google-subject-123',
+      email: 'alice@example.com',
+      email_verified: true,
+      iss: 'https://accounts.google.com',
+      aud: 'google-client-id',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      ...invalidClaim,
+    }),
+  });
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123' })).rejects.toMatchObject({
+    status: 400,
+    publicMessage,
+  });
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+});
+
 test('new Google registrations cannot proceed without current legal versions saved at OAuth start', async () => {
   mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
     id: 'pending-without-acceptance',
@@ -436,9 +472,11 @@ test('new Google registrations cannot proceed when the saved legal versions are 
 });
 
 test.each([
-  ['false', false],
-  ['missing', undefined],
-])('handleGoogleCallback keeps LeamJobs verification for an unverified or missing Google email claim (%s)', async (_label, emailVerified) => {
+  ['SEEKER', false],
+  ['EMPLOYER', false],
+  ['SEEKER', undefined],
+  ['EMPLOYER', undefined],
+])('unverified or missing Google email verification colliding with an existing %s account reveals no details or links', async (existingRole, emailVerified) => {
   mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
     id: 'pending-1',
     nonce: 'nonce-123',
@@ -460,29 +498,56 @@ test.each([
       exp: Math.floor(Date.now() / 1000) + 3600,
     }),
   });
-
-  mockPrisma.oAuthAccount.findUnique.mockResolvedValue(null);
-  mockPrisma.user.findUnique.mockResolvedValue(null);
-  mockPrisma.user.create.mockResolvedValue({
-    id: 'user-unverified-google',
+  mockPrisma.user.findUnique.mockResolvedValue({
+    id: 'existing-user',
     email: 'alice@example.com',
-    role: 'SEEKER',
-    isActive: false,
-    isVerified: false,
+    role: existingRole,
   });
-  mockPrisma.wallet.upsert.mockResolvedValue({ id: 'wallet-unverified-google' });
-  mockPrisma.oAuthAccount.create.mockResolvedValue({ id: 'oauth-unverified-google' });
-  mockPrisma.pendingOAuthRegistration.update.mockResolvedValue({ id: 'pending-1' });
 
-  await handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' });
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
+    status: 401,
+    oauthErrorCode: 'GOOGLE_EMAIL_UNVERIFIED',
+    publicMessage: 'Google could not verify your email address. Please use a verified Google account or choose an account type to sign in.',
+  });
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  expect(mockPrisma.oAuthAccount.findUnique).not.toHaveBeenCalled();
+  expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+  expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  expect(mockPrisma.oAuthAccount.create).not.toHaveBeenCalled();
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
+  expect(mockRegisterEmailVerificationOnUser).not.toHaveBeenCalled();
+});
 
-  expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
-    data: expect.objectContaining({ isActive: false, isVerified: false }),
-  }));
-  expect(mockRegisterEmailVerificationOnUser).toHaveBeenCalledWith(expect.objectContaining({
-    id: 'user-unverified-google',
-    email: 'alice@example.com',
-  }));
+test('unverified Google email receives the same neutral rejection when no account exists', async () => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-1',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole: 'SEEKER',
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockAuthorizationCodeGrant.mockResolvedValueOnce({
+    claims: () => ({
+      sub: 'google-subject-123',
+      email: 'alice@example.com',
+      email_verified: false,
+      iss: 'https://accounts.google.com',
+      aud: 'google-client-id',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }),
+  });
+
+  await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
+    status: 401,
+    oauthErrorCode: 'GOOGLE_EMAIL_UNVERIFIED',
+  });
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+  expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+  expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  expect(mockPrisma.oAuthAccount.create).not.toHaveBeenCalled();
+  expect(mockPrisma.authSession.create).not.toHaveBeenCalled();
 });
 
 test('handleGoogleCallback marks verified Google email active without sending a verification code', async () => {
@@ -683,6 +748,8 @@ test('existing same-email password accounts are not auto-linked during Google ca
 
   await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
     status: 409,
+    oauthErrorCode: 'EMAIL_ALREADY_REGISTERED',
+    existingRole: 'SEEKER',
   });
 });
 
@@ -761,7 +828,51 @@ test('same-email password account with opposite requested role is rejected witho
 
   await expect(handleGoogleCallback({ code: 'auth-code-123', state: 'state-123', nonce: 'nonce-123' })).rejects.toMatchObject({
     status: 409,
+    oauthErrorCode: 'EMAIL_ALREADY_REGISTERED',
+    existingRole: 'SEEKER',
   });
+});
+
+test.each([
+  ['SEEKER', 'EMPLOYER'],
+  ['EMPLOYER', 'SEEKER'],
+])('verified Google identity for a %s account cannot sign into the %s portal', async (actualRole, intendedRole) => {
+  mockPrisma.pendingOAuthRegistration.findFirst.mockResolvedValue({
+    id: 'pending-role-mismatch',
+    nonce: 'nonce-123',
+    codeVerifier: 'code-verifier-123',
+    intendedRole,
+    acceptedTermsVersion: null,
+    acceptedPrivacyVersion: null,
+    status: 'PENDING',
+    email: '',
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  mockPrisma.oAuthAccount.findUnique.mockResolvedValue({
+    id: 'oauth-account',
+    provider: 'GOOGLE',
+    providerSubject: 'google-subject-123',
+    email: 'alice@example.com',
+    userId: 'existing-user',
+    user: {
+      id: 'existing-user',
+      email: 'alice@example.com',
+      role: actualRole,
+      isActive: true,
+      isVerified: true,
+    },
+  });
+
+  await expect(handleGoogleCallback({
+    code: 'auth-code-123',
+    state: 'state-123',
+    nonce: 'nonce-123',
+  })).rejects.toMatchObject({
+    status: 409,
+    oauthErrorCode: 'ROLE_MISMATCH',
+    existingRole: actualRole,
+  });
+  expect(mockPrisma.user.create).not.toHaveBeenCalled();
 });
 
 test('completeGoogleRegistration requires email verification before JWT issuance', async () => {
